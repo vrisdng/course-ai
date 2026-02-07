@@ -1,0 +1,10 @@
+project_id = "thqidsbqzovdawlibcdj"
+
+[functions.rag-chat]
+verify_jwt = false
+
+[functions.ingest-material]
+verify_jwt = false
+
+[functions.parse-document]
+verify_jwt = false

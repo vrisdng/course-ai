@@ -1,0 +1,225 @@
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
+
+interface Material {
+  id: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number | null;
+  processing_status: string;
+  processing_error: string | null;
+  course_id: string;
+  topic: string | null;
+  week_number: number | null;
+  created_at: string;
+}
+
+interface UploadProgress {
+  fileName: string;
+  stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
+  progress: number; // 0–100
+  error?: string;
+}
+
+const ACCEPTED_TYPES: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'image/png': 'image',
+  'image/jpeg': 'image',
+  'image/webp': 'image',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'other',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+};
+
+const ACCEPTED_EXTENSIONS = '.pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx';
+const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB
+
+export function useMaterials(courseId: string | null) {
+  const { session } = useAuth();
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [uploads, setUploads] = useState<Map<string, UploadProgress>>(new Map());
+
+  const fetchMaterials = useCallback(async () => {
+    if (!courseId) {
+      setMaterials([]);
+      setIsLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('materials')
+      .select('*')
+      .eq('course_id', courseId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching materials:', error);
+      toast.error('Failed to load materials');
+    } else {
+      setMaterials(data || []);
+    }
+    setIsLoading(false);
+  }, [courseId]);
+
+  useEffect(() => {
+    fetchMaterials();
+  }, [fetchMaterials]);
+
+  const updateUpload = (id: string, update: Partial<UploadProgress>) => {
+    setUploads((prev) => {
+      const next = new Map(prev);
+      const current = next.get(id);
+      if (current) {
+        next.set(id, { ...current, ...update });
+      }
+      return next;
+    });
+  };
+
+  const uploadFile = async (file: File) => {
+    if (!courseId || !session) {
+      toast.error('No course selected or not logged in');
+      return;
+    }
+
+    const fileType = ACCEPTED_TYPES[file.type];
+    if (!fileType) {
+      toast.error(`Unsupported file type: ${file.type}`);
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max is 15MB.`);
+      return;
+    }
+
+    const uploadId = `${file.name}-${Date.now()}`;
+    setUploads((prev) => {
+      const next = new Map(prev);
+      next.set(uploadId, { fileName: file.name, stage: 'uploading', progress: 10 });
+      return next;
+    });
+
+    try {
+      // 1. Upload to storage
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
+      const storagePath = `${courseId}/${Date.now()}-${file.name}`;
+
+      const { error: storageError } = await supabase.storage
+        .from('course-materials')
+        .upload(storagePath, file);
+
+      if (storageError) throw new Error(`Upload failed: ${storageError.message}`);
+
+      updateUpload(uploadId, { stage: 'uploading', progress: 40 });
+
+      // 2. Create material record
+      const { data: material, error: materialError } = await supabase
+        .from('materials')
+        .insert({
+          course_id: courseId,
+          file_name: file.name,
+          file_path: storagePath,
+          file_type: fileType as any,
+          file_size: file.size,
+          processing_status: 'pending' as any,
+        })
+        .select()
+        .single();
+
+      if (materialError || !material) {
+        throw new Error(`Failed to create material record: ${materialError?.message}`);
+      }
+
+      updateUpload(uploadId, { stage: 'parsing', progress: 50 });
+
+      // 3. Call parse-document edge function
+      const { data: parseResult, error: parseError } = await supabase.functions.invoke(
+        'parse-document',
+        {
+          body: {
+            materialId: material.id,
+            filePath: storagePath,
+            fileType: ext,
+          },
+        }
+      );
+
+      if (parseError) {
+        throw new Error(`Processing failed: ${parseError.message}`);
+      }
+
+      if (parseResult?.error) {
+        throw new Error(parseResult.error);
+      }
+
+      updateUpload(uploadId, { stage: 'done', progress: 100 });
+      toast.success(`${file.name} processed successfully (${parseResult.chunksInserted} chunks)`);
+
+      // Refresh materials list
+      await fetchMaterials();
+
+      // Remove upload from tracker after a short delay
+      setTimeout(() => {
+        setUploads((prev) => {
+          const next = new Map(prev);
+          next.delete(uploadId);
+          return next;
+        });
+      }, 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Upload failed';
+      console.error('Upload error:', error);
+      updateUpload(uploadId, { stage: 'error', progress: 0, error: message });
+      toast.error(message);
+    }
+  };
+
+  const deleteMaterial = async (materialId: string) => {
+    const material = materials.find((m) => m.id === materialId);
+    if (!material) return;
+
+    try {
+      // Delete chunks first
+      const { error: chunksError } = await supabase
+        .from('chunks')
+        .delete()
+        .eq('material_id', materialId);
+
+      if (chunksError) {
+        console.error('Error deleting chunks:', chunksError);
+      }
+
+      // Delete material record
+      const { error: materialError } = await supabase
+        .from('materials')
+        .delete()
+        .eq('id', materialId);
+
+      if (materialError) throw materialError;
+
+      // Delete from storage
+      await supabase.storage.from('course-materials').remove([material.file_path]);
+
+      toast.success(`${material.file_name} deleted`);
+      await fetchMaterials();
+    } catch (error) {
+      console.error('Delete error:', error);
+      toast.error('Failed to delete material');
+    }
+  };
+
+  return {
+    materials,
+    isLoading,
+    uploads,
+    uploadFile,
+    deleteMaterial,
+    refreshMaterials: fetchMaterials,
+    acceptedExtensions: ACCEPTED_EXTENSIONS,
+  };
+}
