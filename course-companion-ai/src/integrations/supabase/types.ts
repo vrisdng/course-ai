@@ -224,6 +224,7 @@ export type Database = {
           file_size: number | null
           file_type: Database["public"]["Enums"]["document_type"]
           id: string
+          is_public: boolean
           processing_error: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
           topic: string | null
@@ -239,6 +240,7 @@ export type Database = {
           file_size?: number | null
           file_type?: Database["public"]["Enums"]["document_type"]
           id?: string
+          is_public?: boolean
           processing_error?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           topic?: string | null
@@ -254,6 +256,7 @@ export type Database = {
           file_size?: number | null
           file_type?: Database["public"]["Enums"]["document_type"]
           id?: string
+          is_public?: boolean
           processing_error?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           topic?: string | null
@@ -313,6 +316,7 @@ export type Database = {
       profiles: {
         Row: {
           avatar_url: string | null
+          course_enrolled: string[]
           created_at: string
           email: string
           full_name: string | null
@@ -323,6 +327,7 @@ export type Database = {
         }
         Insert: {
           avatar_url?: string | null
+          course_enrolled?: string[]
           created_at?: string
           email: string
           full_name?: string | null
@@ -333,6 +338,7 @@ export type Database = {
         }
         Update: {
           avatar_url?: string | null
+          course_enrolled?: string[]
           created_at?: string
           email?: string
           full_name?: string | null
@@ -430,7 +436,7 @@ export type Database = {
         | "notes"
         | "other"
       processing_status: "pending" | "processing" | "completed" | "failed"
-      user_role: "student" | "lecturer"
+      user_role: "student" | "lecturer" | "admin"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -560,7 +566,7 @@ export const Constants = {
     Enums: {
       document_type: ["pdf", "transcript", "code", "slides", "notes", "other"],
       processing_status: ["pending", "processing", "completed", "failed"],
-      user_role: ["student", "lecturer"],
+      user_role: ["student", "lecturer", "admin"],
     },
   },
 } as const

@@ -9,9 +9,14 @@ interface Profile {
   full_name: string | null;
   role: 'student' | 'lecturer' | 'admin';
   avatar_url: string | null;
+  courseEnrolled: string[];
   created_at: string;
   updated_at: string;
 }
+
+type ProfileRow = Omit<Profile, 'courseEnrolled'> & {
+  course_enrolled: string[] | null;
+};
 
 interface AuthContextType {
   user: User | null;
@@ -45,7 +50,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Error fetching profile:', error);
         return null;
       }
-      return data as Profile;
+      const row = data as ProfileRow;
+      return {
+        id: row.id,
+        user_id: row.user_id,
+        email: row.email,
+        full_name: row.full_name,
+        role: row.role,
+        avatar_url: row.avatar_url,
+        courseEnrolled: row.course_enrolled ?? [],
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      };
     } catch (error) {
       console.error('Error fetching profile:', error);
       return null;

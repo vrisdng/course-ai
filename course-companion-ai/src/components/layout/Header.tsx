@@ -34,7 +34,7 @@ export function Header() {
         <nav className="flex items-center gap-4">
           {user ? (
             <>
-              <Link to={isAdmin ? '/admin' : isLecturer ? '/lecturer' : '/chat'}>
+              <Link to={isAdmin ? '/admin-dashboard' : isLecturer ? '/lecturer' : '/chat'}>
                 <Button variant="ghost" size="sm">
                   {isAdmin ? 'Admin' : isLecturer ? 'Dashboard' : 'Chat'}
                 </Button>

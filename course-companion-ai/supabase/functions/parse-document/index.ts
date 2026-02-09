@@ -9,12 +9,13 @@ const corsHeaders = {
 
 // ─── Gemini Vision API Constraints ───────────────────────────────────────────
 // Model: gemini-2.5-flash (multimodal)
-// Supported input types: PDF, PNG, JPEG, WEBP, GIF, HEIC, HEIF
+// Supported input types: PDF, PNG, JPEG, WEBP, GIF, HEIC, HEIF (DOC is best-effort via Gemini)
 // Max inline data size: ~20MB base64 (before encoding ~15MB raw file)
 // Max pages for PDF: ~100 pages per request (recommended: <50 for reliability)
 // Free tier: 1500 requests/day (RPD), 1M tokens/min (TPM)
 // Rate limits: 15 RPM on free tier, 2000 RPM on pay-as-you-go
 // DOCX/PPTX are NOT natively supported by Gemini Vision — we extract text manually
+// DOC (legacy) is sent to Gemini as application/msword (best-effort, may fail)
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ParseRequest {
@@ -344,15 +345,13 @@ serve(async (req) => {
         extractedText = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey);
         break;
       }
-      case "docx":
-      case "doc": {
-        // DOC (legacy binary format) is not supported — only DOCX
-        if (ext === "doc") {
-          throw new Error(
-            "Legacy .doc format is not supported. Please convert to .docx and re-upload."
-          );
-        }
+      case "docx": {
         extractedText = await extractTextFromDocx(fileBytes);
+        break;
+      }
+      case "doc": {
+        const mimeType = getMimeType(ext, filePath);
+        extractedText = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey);
         break;
       }
       case "pptx": {

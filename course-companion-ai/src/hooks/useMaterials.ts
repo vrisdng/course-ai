@@ -26,15 +26,16 @@ interface UploadProgress {
 
 const ACCEPTED_TYPES: Record<string, string> = {
   'application/pdf': 'pdf',
-  'image/png': 'image',
-  'image/jpeg': 'image',
-  'image/webp': 'image',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/msword': 'other',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'image/png': 'other',
+  'image/jpeg': 'other',
+  'image/webp': 'other',
+  'image/gif': 'other',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'notes',
+  'application/msword': 'notes',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'slides',
 };
 
-const ACCEPTED_EXTENSIONS = '.pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx';
+const ACCEPTED_EXTENSIONS = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.pptx';
 const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB
 
 export function useMaterials(courseId: string | null) {
@@ -86,9 +87,40 @@ export function useMaterials(courseId: string | null) {
       return;
     }
 
-    const fileType = ACCEPTED_TYPES[file.type];
+    const extension = file.name.split('.').pop()?.toLowerCase() || '';
+    const typeFromExtension: Record<string, string> = {
+      pdf: 'pdf',
+      png: 'other',
+      jpg: 'other',
+      jpeg: 'other',
+      webp: 'other',
+      gif: 'other',
+      doc: 'notes',
+      docx: 'notes',
+      pptx: 'slides',
+      md: 'notes',
+      markdown: 'notes',
+      txt: 'notes',
+      csv: 'notes',
+      json: 'notes',
+      ts: 'code',
+      tsx: 'code',
+      js: 'code',
+      jsx: 'code',
+      py: 'code',
+      java: 'code',
+      go: 'code',
+      rb: 'code',
+      rs: 'code',
+      c: 'code',
+      cpp: 'code',
+      sql: 'code',
+    };
+
+    const fileType = ACCEPTED_TYPES[file.type] || typeFromExtension[extension];
     if (!fileType) {
-      toast.error(`Unsupported file type: ${file.type}`);
+      const label = file.type ? file.type : extension || 'unknown';
+      toast.error(`Unsupported file type: ${label}`);
       return;
     }
 

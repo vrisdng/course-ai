@@ -44,7 +44,7 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 
 ## 3. Supported MIME Types
 
-### Gemini Vision (PDF & images)
+### Gemini Vision (PDF, images, and legacy DOC best-effort)
 
 | Extension | MIME Type | Notes |
 |-----------|-----------|-------|
@@ -54,6 +54,7 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 | `.webp` | `image/webp` | Supported |
 | `.gif` | `image/gif` | Supported (first frame for animated) |
 | `.heic` / `.heif` | `image/heic` | Supported by Gemini but not used in our upload UI |
+| `.doc` | `application/msword` | Legacy binary format — best-effort via Gemini, results may vary |
 
 ### Handled via XML parsing (no API call)
 
@@ -66,7 +67,6 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 
 | Extension | Reason |
 |-----------|--------|
-| `.doc` | Legacy binary format — users must convert to `.docx` |
 | `.ppt` | Legacy binary format — not implemented |
 | `.xls` / `.xlsx` | Not implemented (could be added via XML parsing) |
 

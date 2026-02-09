@@ -72,7 +72,7 @@ export default function Landing() {
 
             <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
               {user ? (
-                <Link to={isAdmin ? '/admin' : isLecturer ? '/lecturer' : '/chat'}>
+                <Link to={isAdmin ? '/admin-dashboard' : isLecturer ? '/lecturer' : '/chat'}>
                   <Button size="lg" className="gap-2">
                     Go to {isAdmin ? 'Admin' : isLecturer ? 'Dashboard' : 'Chat'}
                     <ArrowRight className="h-4 w-4" />

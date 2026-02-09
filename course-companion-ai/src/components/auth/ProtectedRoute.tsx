@@ -26,7 +26,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
   if (requiredRole && profile?.role !== requiredRole) {
     // Redirect to appropriate dashboard based on role
     if (profile?.role === 'admin') {
-      return <Navigate to="/admin" replace />;
+      return <Navigate to="/admin-dashboard" replace />;
     }
     if (profile?.role === 'lecturer') {
       return <Navigate to="/lecturer" replace />;

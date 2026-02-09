@@ -14,6 +14,8 @@ const FILE_ICONS: Record<string, React.ReactNode> = {
   jpg: <Image className="h-5 w-5 text-info" />,
   jpeg: <Image className="h-5 w-5 text-info" />,
   webp: <Image className="h-5 w-5 text-info" />,
+  gif: <Image className="h-5 w-5 text-info" />,
+  doc: <FileText className="h-5 w-5 text-primary" />,
   docx: <FileText className="h-5 w-5 text-primary" />,
   pptx: <FileSpreadsheet className="h-5 w-5 text-warning" />,
 };
@@ -84,7 +86,7 @@ export function MaterialUploadZone({
         Drag & drop files here, or click to browse
       </p>
       <p className="text-xs text-muted-foreground">
-        Supported: PDF, PNG, JPG, WEBP, DOCX, PPTX — Max 15MB per file
+        Supported: PDF, DOC/DOCX, PPTX, PNG/JPG/WEBP/GIF — Max 15MB per file
       </p>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">

@@ -50,13 +50,14 @@ const App = () => (
 
             {/* Protected admin routes */}
             <Route
-              path="/admin"
+              path="/admin-dashboard"
               element={
                 <ProtectedRoute requiredRole="admin">
                   <AdminDashboard />
                 </ProtectedRoute>
               }
             />
+            <Route path="/admin" element={<Navigate to="/admin-dashboard" replace />} />
 
             {/* Catch-all */}
             <Route path="*" element={<NotFound />} />
