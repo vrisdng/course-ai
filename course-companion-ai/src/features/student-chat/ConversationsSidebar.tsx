@@ -1,6 +1,13 @@
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { Loader2, MessageSquare, Plus, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
@@ -44,7 +51,7 @@ export function ConversationsSidebar({
                 <div
                   key={conversation.id}
                   className={cn(
-                    'group flex items-center gap-1 rounded-lg pr-1 transition-colors',
+                    'group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-lg pr-1 transition-colors',
                     currentConversationId === conversation.id
                       ? 'bg-accent text-accent-foreground'
                       : 'hover:bg-accent/50'
@@ -53,29 +60,42 @@ export function ConversationsSidebar({
                   <button
                     type="button"
                     onClick={() => onSelectConversation(conversation.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-sm"
+                    className="flex min-w-0 items-center gap-2 px-3 py-2 text-left text-sm"
                   >
                     <MessageSquare className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{conversation.title}</span>
+                    <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
                   </button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDeleteConversation(conversation.id);
-                    }}
-                    disabled={deletingConversationId === conversation.id}
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete ${conversation.title}`}
-                  >
-                    {deletingConversationId === conversation.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
-                    )}
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={deletingConversationId === conversation.id}
+                        className="h-7 w-7 shrink-0 text-muted-foreground"
+                        aria-label={`More actions for ${conversation.title}`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {deletingConversationId === conversation.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <MoreVertIcon sx={{ fontSize: 18 }} />
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-36">
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={(event) => {
+                          event.preventDefault();
+                          onDeleteConversation(conversation.id);
+                        }}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               ))
             )}

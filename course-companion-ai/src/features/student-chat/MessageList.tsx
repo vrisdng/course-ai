@@ -78,19 +78,29 @@ export function MessageList({
                     a: ({ href, children }) => {
                       if (href?.startsWith('citation:')) {
                         const citationNumber = Number(href.split(':')[1]);
+                        const citation = message.citations?.[citationNumber - 1];
 
                         if (Number.isFinite(citationNumber)) {
+                          if (!citation) {
+                            return (
+                              <span className="mx-0.5 inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                                [{citationNumber}]
+                              </span>
+                            );
+                          }
+
                           return (
                             <button
                               type="button"
-                              className="mx-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground focus:outline-none"
+                              title={`Source ${citationNumber}: ${citation.documentName}`}
+                              className="mx-0.5 inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 onCitationClick(message, citationNumber);
                               }}
                             >
-                              {citationNumber}
+                              [{citationNumber}]
                             </button>
                           );
                         }
