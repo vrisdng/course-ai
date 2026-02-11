@@ -32,7 +32,7 @@ const App = () => (
             <Route
               path="/chat"
               element={
-                <ProtectedRoute requiredRole="student">
+                <ProtectedRoute requiredRole={['student', 'admin']}>
                   <StudentChat />
                 </ProtectedRoute>
               }

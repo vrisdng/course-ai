@@ -8,10 +8,13 @@ import {
   Eye,
   FileText,
   Filter,
+  Globe2,
   Loader2,
+  Lock,
   Search,
   Trash2,
   UploadCloud,
+  Users2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -95,6 +98,7 @@ type Course = {
 };
 
 type MaterialStatus = 'pending' | 'processing' | 'completed' | 'failed';
+type AccessScope = 'course' | 'public' | 'private';
 
 type Material = {
   id: string;
@@ -106,6 +110,7 @@ type Material = {
   topic: string | null;
   week_number: number | null;
   processing_status: MaterialStatus;
+  access_scope: AccessScope;
   created_at: string;
 };
 
@@ -141,6 +146,7 @@ export default function AdminDashboard() {
   const [materials, setMaterials] = useState<Material[]>([]);
 
   const [uploadCourseId, setUploadCourseId] = useState<string>('');
+  const [uploadAccessScope, setUploadAccessScope] = useState<AccessScope | ''>('');
   const [newCourseName, setNewCourseName] = useState('');
   const [newCourseCode, setNewCourseCode] = useState('');
   const [newCourseDescription, setNewCourseDescription] = useState('');
@@ -150,7 +156,8 @@ export default function AdminDashboard() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
-  const [showFilters, setShowFilters] = useState(true);
+  const [accessFilter, setAccessFilter] = useState('all');
+  const [showFilters, setShowFilters] = useState(false);
 
   const [file, setFile] = useState<File | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
@@ -196,7 +203,7 @@ export default function AdminDashboard() {
 
     const nextCourses = (data || []) as Course[];
     setCourses(nextCourses);
-    setUploadCourseId((current) => current || nextCourses[0]?.id || '');
+    setUploadCourseId((current) => (current && nextCourses.some((course) => course.id === current) ? current : ''));
     setIsLoadingCourses(false);
   }, []);
 
@@ -205,12 +212,29 @@ export default function AdminDashboard() {
 
     const { data, error } = await supabase
       .from('materials')
-      .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, created_at')
+      .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, access_scope, created_at')
       .order('created_at', { ascending: false })
       .limit(200);
 
     if (error) {
-      toast.error('Failed to load materials');
+      const fallback = await supabase
+        .from('materials')
+        .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, is_public, created_at')
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (fallback.error) {
+        toast.error('Failed to load materials');
+        setIsLoadingMaterials(false);
+        return;
+      }
+
+      const fallbackMaterials = (fallback.data || []).map((material: any) => ({
+        ...material,
+        access_scope: material.is_public ? 'public' : 'course',
+      })) as Material[];
+
+      setMaterials(fallbackMaterials);
       setIsLoadingMaterials(false);
       return;
     }
@@ -240,6 +264,7 @@ export default function AdminDashboard() {
       const courseMatch = courseFilter === 'all' || material.course_id === courseFilter;
       const typeMatch = typeFilter === 'all' || material.file_type === typeFilter;
       const statusMatch = statusFilter === 'all' || material.processing_status === statusFilter;
+      const accessMatch = accessFilter === 'all' || material.access_scope === accessFilter;
 
       let dateMatch = true;
       if (dateFilter !== 'all') {
@@ -255,9 +280,9 @@ export default function AdminDashboard() {
         }
       }
 
-      return searchMatch && courseMatch && typeMatch && statusMatch && dateMatch;
+      return searchMatch && courseMatch && typeMatch && statusMatch && accessMatch && dateMatch;
     });
-  }, [courseFilter, dateFilter, materials, searchQuery, statusFilter, typeFilter]);
+  }, [accessFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter, typeFilter]);
 
   const resetUploadSelection = () => {
     setFile(null);
@@ -269,6 +294,11 @@ export default function AdminDashboard() {
 
   const pickFile = (candidate: File | null) => {
     if (!candidate) {
+      return;
+    }
+
+    if (!uploadCourseId) {
+      toast.error('Select the course for this document first');
       return;
     }
 
@@ -286,7 +316,7 @@ export default function AdminDashboard() {
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    if (!isUploading) {
+    if (!isUploading && uploadCourseId) {
       setIsDragActive(true);
     }
   };
@@ -301,6 +331,11 @@ export default function AdminDashboard() {
     setIsDragActive(false);
 
     if (isUploading) {
+      return;
+    }
+
+    if (!uploadCourseId) {
+      toast.error('Select the course for this document first');
       return;
     }
 
@@ -355,6 +390,10 @@ export default function AdminDashboard() {
       toast.error('Select a course first');
       return;
     }
+    if (!uploadAccessScope) {
+      toast.error('Choose who can access this document');
+      return;
+    }
     if (!file) {
       toast.error('Choose a file to upload');
       return;
@@ -394,12 +433,17 @@ export default function AdminDashboard() {
           topic: null,
           week_number: null,
           processing_status: 'processing',
+          access_scope: uploadAccessScope,
+          is_public: uploadAccessScope === 'public',
           uploaded_by: profile.id,
         })
         .select('id')
         .single();
 
       if (insertError || !material) {
+        if (insertError?.message?.toLowerCase().includes('access_scope')) {
+          throw new Error('Database is missing access scope support. Run the latest migrations.');
+        }
         throw new Error(insertError?.message || 'Failed to create material record');
       }
 
@@ -461,6 +505,33 @@ export default function AdminDashboard() {
       cancelUploadRef.current = false;
       abortControllerRef.current = null;
     }
+  };
+
+  const accessScopeLabel = (scope: AccessScope) => {
+    if (scope === 'course') return 'Course only';
+    if (scope === 'public') return 'Everyone';
+    return 'Private';
+  };
+
+  const renderAccessBadge = (scope: AccessScope) => {
+    const icon = {
+      course: <Users2 className="h-3.5 w-3.5" />,
+      public: <Globe2 className="h-3.5 w-3.5" />,
+      private: <Lock className="h-3.5 w-3.5" />,
+    }[scope];
+
+    const variant: Record<AccessScope, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+      course: 'secondary',
+      public: 'default',
+      private: 'outline',
+    };
+
+    return (
+      <Badge variant={variant[scope]} className="gap-1">
+        {icon}
+        {accessScopeLabel(scope)}
+      </Badge>
+    );
   };
 
   const handleCancelUpload = () => {
@@ -682,11 +753,12 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {showFilters && (
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <div className="grid gap-4 rounded-lg border border-border bg-muted/20 p-4 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="upload-course-select">Course this document belongs to</Label>
                     <Select value={uploadCourseId} onValueChange={setUploadCourseId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Upload Course" />
+                      <SelectTrigger id="upload-course-select">
+                        <SelectValue placeholder="Select course for this upload" />
                       </SelectTrigger>
                       <SelectContent>
                         {courses.map((course) => (
@@ -696,7 +768,50 @@ export default function AdminDashboard() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-muted-foreground">
+                      You must select a course before choosing a file.
+                    </p>
+                  </div>
 
+                  <div className="space-y-2">
+                    <Label>Who can access this document?</Label>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <Button
+                        type="button"
+                        variant={uploadAccessScope === 'course' ? 'default' : 'outline'}
+                        className="justify-start gap-2"
+                        onClick={() => setUploadAccessScope('course')}
+                      >
+                        <Users2 className="h-4 w-4" />
+                        Course only
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={uploadAccessScope === 'public' ? 'default' : 'outline'}
+                        className="justify-start gap-2"
+                        onClick={() => setUploadAccessScope('public')}
+                      >
+                        <Globe2 className="h-4 w-4" />
+                        Everyone
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={uploadAccessScope === 'private' ? 'default' : 'outline'}
+                        className="justify-start gap-2"
+                        onClick={() => setUploadAccessScope('private')}
+                      >
+                        <Lock className="h-4 w-4" />
+                        Private
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Private means only the uploader account can access the file.
+                    </p>
+                  </div>
+                </div>
+
+                {showFilters && (
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <Select value={courseFilter} onValueChange={setCourseFilter}>
                       <SelectTrigger>
                         <SelectValue placeholder="All Courses" />
@@ -708,6 +823,18 @@ export default function AdminDashboard() {
                             {course.name} {course.code ? `(${course.code})` : ''}
                           </SelectItem>
                         ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={accessFilter} onValueChange={setAccessFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Access" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Access</SelectItem>
+                        <SelectItem value="course">Course only</SelectItem>
+                        <SelectItem value="public">Everyone</SelectItem>
+                        <SelectItem value="private">Private</SelectItem>
                       </SelectContent>
                     </Select>
 
@@ -758,19 +885,28 @@ export default function AdminDashboard() {
                   accept={ACCEPTED_FILE_TYPES}
                   className="hidden"
                   onChange={handleFileInputChange}
-                  disabled={isUploading}
+                  disabled={isUploading || !uploadCourseId}
                 />
 
                 <div
                   role="button"
                   tabIndex={0}
                   onClick={() => {
-                    if (!file && !isUploading) {
+                    if (!uploadCourseId && !isUploading) {
+                      toast.error('Select the course for this document first');
+                      return;
+                    }
+                    if (!file && !isUploading && uploadCourseId) {
                       fileInputRef.current?.click();
                     }
                   }}
                   onKeyDown={(event) => {
-                    if (!file && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
+                    if (!uploadCourseId && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
+                      event.preventDefault();
+                      toast.error('Select the course for this document first');
+                      return;
+                    }
+                    if (!file && !isUploading && uploadCourseId && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
                       fileInputRef.current?.click();
                     }
@@ -781,6 +917,7 @@ export default function AdminDashboard() {
                   className={cn(
                     'rounded-lg border-2 border-dashed p-10 text-center transition-colors',
                     isDragActive ? 'border-primary bg-primary/5' : 'border-border bg-muted/20',
+                    !uploadCourseId && 'border-muted-foreground/30 bg-muted/10',
                     isUploading && 'pointer-events-none opacity-70'
                   )}
                 >
@@ -789,8 +926,11 @@ export default function AdminDashboard() {
                     <>
                       <p className="text-sm font-medium text-foreground">{file.name}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access: {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'}
+                      </p>
                       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                        <Button size="sm" onClick={handleUpload} disabled={!uploadCourseId || isUploading}>
+                        <Button size="sm" onClick={handleUpload} disabled={!uploadCourseId || !uploadAccessScope || isUploading}>
                           {isUploading ? (
                             <>
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -807,12 +947,23 @@ export default function AdminDashboard() {
                     </>
                   ) : (
                     <>
-                      <p className="text-sm text-muted-foreground">
-                        Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
-                      </p>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Supports PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
-                      </p>
+                      {uploadCourseId ? (
+                        <>
+                          <p className="text-sm text-muted-foreground">
+                            Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
+                          </p>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Supports PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm font-medium text-foreground">Select a course first</p>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Then you can choose a document to upload.
+                          </p>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -834,6 +985,7 @@ export default function AdminDashboard() {
                       <TableHead>Document Type</TableHead>
                       <TableHead>Document Date</TableHead>
                       <TableHead>Course</TableHead>
+                      <TableHead>Access</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Size</TableHead>
                       <TableHead className="text-right">Operation</TableHead>
@@ -842,7 +994,7 @@ export default function AdminDashboard() {
                   <TableBody>
                     {isLoadingMaterials ? (
                       <TableRow>
-                        <TableCell colSpan={7}>
+                        <TableCell colSpan={8}>
                           <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             Loading documents...
@@ -851,7 +1003,7 @@ export default function AdminDashboard() {
                       </TableRow>
                     ) : filteredMaterials.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7}>
+                        <TableCell colSpan={8}>
                           <div className="flex flex-col items-center justify-center py-6 text-center text-sm text-muted-foreground">
                             <FileText className="mb-2 h-5 w-5" />
                             No documents match your filters.
@@ -865,6 +1017,7 @@ export default function AdminDashboard() {
                           <TableCell className="capitalize">{material.file_type}</TableCell>
                           <TableCell>{new Date(material.created_at).toLocaleDateString()}</TableCell>
                           <TableCell>{courseLabelById[material.course_id] || 'Unknown course'}</TableCell>
+                          <TableCell>{renderAccessBadge(material.access_scope)}</TableCell>
                           <TableCell>{renderStatusBadge(material.processing_status)}</TableCell>
                           <TableCell>{formatBytes(material.file_size)}</TableCell>
                           <TableCell>

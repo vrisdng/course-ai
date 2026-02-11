@@ -25,12 +25,83 @@ interface ParseRequest {
   bucketName?: string;
 }
 
+interface ExtractedSegment {
+  text: string;
+  pageNumber: number | null;
+}
+
 const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB raw (safe limit for base64 encoding)
 
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#10;/g, "\n")
+    .replace(/&#13;/g, "\r");
+}
+
+function extractParagraphText(xml: string, textTagPattern: RegExp): string {
+  const paragraphs = xml.split(/<\/(?:w:p|a:p)>/g);
+  const lines: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const parts: string[] = [];
+    const localRegex = new RegExp(textTagPattern.source, textTagPattern.flags);
+    let match: RegExpExecArray | null;
+
+    while ((match = localRegex.exec(paragraph)) !== null) {
+      parts.push(decodeXmlEntities(match[1]));
+    }
+
+    const line = parts.join("").trim();
+    if (line) lines.push(line);
+  }
+
+  return lines.join("\n").trim();
+}
+
+function parseGeminiPageSegments(rawText: string): ExtractedSegment[] {
+  const markerRegex = /^\s*\[Page\s+(\d+)\]\s*$/gim;
+  const markers = Array.from(rawText.matchAll(markerRegex));
+
+  if (markers.length === 0) {
+    return [];
+  }
+
+  const segments: ExtractedSegment[] = [];
+
+  for (let i = 0; i < markers.length; i++) {
+    const current = markers[i];
+    const next = markers[i + 1];
+    const pageNumber = Number(current[1]);
+
+    if (!Number.isFinite(pageNumber) || pageNumber < 1) {
+      continue;
+    }
+
+    const markerStart = current.index ?? 0;
+    const markerEnd = markerStart + current[0].length;
+    const segmentEnd = next?.index ?? rawText.length;
+    const segmentText = rawText.slice(markerEnd, segmentEnd).trim();
+
+    if (segmentText) {
+      segments.push({
+        text: segmentText,
+        pageNumber,
+      });
+    }
+  }
+
+  return segments;
+}
+
 // ─── DOCX Text Extraction ────────────────────────────────────────────────────
-// DOCX files are ZIP archives containing XML. The main content is in
-// word/document.xml. We extract all <w:t> text nodes from paragraphs.
-async function extractTextFromDocx(fileBytes: Uint8Array): Promise<string> {
+// DOCX files are ZIP archives containing XML. We preserve page boundaries
+// when explicit page-break tags are present.
+async function extractSegmentsFromDocx(fileBytes: Uint8Array): Promise<ExtractedSegment[]> {
   const { ZipReader, BlobReader, TextWriter } = await import(
     "https://deno.land/x/zipjs@v2.7.34/index.js"
   );
@@ -53,33 +124,28 @@ async function extractTextFromDocx(fileBytes: Uint8Array): Promise<string> {
     throw new Error("Could not find word/document.xml in DOCX file");
   }
 
-  // Extract text from XML using regex (Deno edge functions don't have DOMParser)
-  // Match all <w:t ...>text</w:t> tags
-  const textParts: string[] = [];
-  const textRegex = /<w:t[^>]*>([\s\S]*?)<\/w:t>/g;
-  const paraRegex = /<\/w:p>/g;
-  
-  // Process paragraph by paragraph for better structure
-  const paragraphs = documentXml.split(paraRegex);
-  for (const para of paragraphs) {
-    const parts: string[] = [];
-    let match;
-    const localRegex = /<w:t[^>]*>([\s\S]*?)<\/w:t>/g;
-    while ((match = localRegex.exec(para)) !== null) {
-      parts.push(match[1]);
+  const pageBreakRegex = /<w:lastRenderedPageBreak\s*\/>|<w:br[^>]*w:type="page"[^>]*\/>/g;
+  const xmlPages = documentXml.split(pageBreakRegex);
+
+  const segments: ExtractedSegment[] = [];
+  for (let i = 0; i < xmlPages.length; i++) {
+    const text = extractParagraphText(xmlPages[i], /<w:t[^>]*>([\s\S]*?)<\/w:t>/g);
+    if (!text) {
+      continue;
     }
-    if (parts.length > 0) {
-      textParts.push(parts.join(""));
-    }
+    segments.push({
+      text,
+      pageNumber: i + 1,
+    });
   }
 
-  return textParts.join("\n").trim();
+  return segments;
 }
 
 // ─── PPTX Text Extraction ───────────────────────────────────────────────────
 // PPTX files are ZIP archives containing XML slides at ppt/slides/slide*.xml
-// We extract text from <a:t> tags in each slide.
-async function extractTextFromPptx(fileBytes: Uint8Array): Promise<string> {
+// We extract text from <a:t> tags in each slide and map slide number -> page.
+async function extractSegmentsFromPptx(fileBytes: Uint8Array): Promise<ExtractedSegment[]> {
   const { ZipReader, BlobReader, TextWriter } = await import(
     "https://deno.land/x/zipjs@v2.7.34/index.js"
   );
@@ -97,29 +163,25 @@ async function extractTextFromPptx(fileBytes: Uint8Array): Promise<string> {
       return numA - numB;
     });
 
-  const slideTexts: string[] = [];
+  const segments: ExtractedSegment[] = [];
 
   for (const entry of slideEntries) {
     if (!entry.getData) continue;
     const writer = new TextWriter();
     const xml = await entry.getData(writer);
 
-    // Extract all <a:t>text</a:t> tags
-    const parts: string[] = [];
-    const textRegex = /<a:t>([\s\S]*?)<\/a:t>/g;
-    let match;
-    while ((match = textRegex.exec(xml)) !== null) {
-      parts.push(match[1]);
-    }
-
-    const slideNum = entry.filename.match(/slide(\d+)/)?.[1] || "?";
-    if (parts.length > 0) {
-      slideTexts.push(`[Slide ${slideNum}]\n${parts.join(" ")}`);
+    const text = extractParagraphText(xml, /<a:t>([\s\S]*?)<\/a:t>/g);
+    const slideNum = Number(entry.filename.match(/slide(\d+)/)?.[1] || "0");
+    if (text && Number.isFinite(slideNum) && slideNum > 0) {
+      segments.push({
+        text,
+        pageNumber: slideNum,
+      });
     }
   }
 
   await zipReader.close();
-  return slideTexts.join("\n\n").trim();
+  return segments;
 }
 
 // ─── Gemini Vision Text Extraction ──────────────────────────────────────────
@@ -128,8 +190,9 @@ async function extractTextFromPptx(fileBytes: Uint8Array): Promise<string> {
 async function extractTextWithGemini(
   fileBytes: Uint8Array,
   mimeType: string,
-  geminiApiKey: string
-): Promise<string> {
+  geminiApiKey: string,
+  requestPageMarkers: boolean
+): Promise<{ text: string; segments: ExtractedSegment[] }> {
   const base64Data = btoa(
     Array.from(fileBytes)
       .map((b) => String.fromCharCode(b))
@@ -153,7 +216,21 @@ async function extractTextWithGemini(
           {
             parts: [
               {
-                text: `Extract ALL text content from this document verbatim. Preserve the original structure including:
+                text: requestPageMarkers
+                  ? `Extract ALL text content from this document verbatim.
+Return output page-by-page in this exact format:
+[Page 1]
+<text from page 1>
+[Page 2]
+<text from page 2>
+
+Rules:
+- Keep page markers exactly as [Page N].
+- Include every page in order.
+- Do NOT summarize.
+- Do NOT add commentary.
+- Return ONLY extracted text content with these page markers.`
+                  : `Extract ALL text content from this document verbatim. Preserve the original structure including:
 - Headings and subheadings
 - Paragraphs
 - Bullet points and numbered lists
@@ -208,7 +285,27 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
   }
 
   console.log(`Extracted ${text.length} characters from document`);
-  return text;
+
+  if (!requestPageMarkers) {
+    return {
+      text,
+      segments: [{ text, pageNumber: null }],
+    };
+  }
+
+  const parsedSegments = parseGeminiPageSegments(text);
+  if (parsedSegments.length > 0) {
+    return {
+      text: parsedSegments.map((segment) => segment.text).join("\n\n"),
+      segments: parsedSegments,
+    };
+  }
+
+  // Fallback when model does not follow page-marker format.
+  return {
+    text,
+    segments: [{ text, pageNumber: 1 }],
+  };
 }
 
 // ─── MIME Type Mapping ──────────────────────────────────────────────────────
@@ -327,13 +424,16 @@ serve(async (req) => {
     }
 
     // Extract text based on file type
-    let extractedText = "";
+    let extractedSegments: ExtractedSegment[] = [];
+    let extractedTextLength = 0;
     const ext = filePath.split(".").pop()?.toLowerCase() || fileType;
 
     switch (ext) {
       case "pdf": {
         const mimeType = getMimeType(ext, filePath);
-        extractedText = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey);
+        const extraction = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey, true);
+        extractedSegments = extraction.segments;
+        extractedTextLength = extraction.text.length;
         break;
       }
       case "png":
@@ -342,45 +442,61 @@ serve(async (req) => {
       case "webp":
       case "gif": {
         const mimeType = getMimeType(ext, filePath);
-        extractedText = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey);
+        const extraction = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey, false);
+        extractedSegments = extraction.segments;
+        extractedTextLength = extraction.text.length;
         break;
       }
       case "docx": {
-        extractedText = await extractTextFromDocx(fileBytes);
+        extractedSegments = await extractSegmentsFromDocx(fileBytes);
+        extractedTextLength = extractedSegments.reduce((sum, segment) => sum + segment.text.length, 0);
         break;
       }
       case "doc": {
         const mimeType = getMimeType(ext, filePath);
-        extractedText = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey);
+        const extraction = await extractTextWithGemini(fileBytes, mimeType, geminiApiKey, true);
+        extractedSegments = extraction.segments;
+        extractedTextLength = extraction.text.length;
         break;
       }
       case "pptx": {
-        extractedText = await extractTextFromPptx(fileBytes);
+        extractedSegments = await extractSegmentsFromPptx(fileBytes);
+        extractedTextLength = extractedSegments.reduce((sum, segment) => sum + segment.text.length, 0);
         break;
       }
       default:
         throw new Error(`Unsupported file type: ${ext}`);
     }
 
-    if (!extractedText || extractedText.trim().length === 0) {
+    if (extractedSegments.length === 0) {
       throw new Error("No text could be extracted from the document");
     }
 
-    console.log(`Extracted ${extractedText.length} chars, now chunking & embedding...`);
+    console.log(`Extracted ${extractedTextLength} chars across ${extractedSegments.length} segments, now chunking & embedding...`);
 
     // ─── Chunking & Embedding (inline to avoid cross-function calls) ──────
     const CHUNK_SIZE = 1200;
     const OVERLAP = 200;
-
-    const normalized = extractedText.replace(/\r\n/g, "\n").replace(/\t/g, " ");
-    const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
-
     const step = Math.max(1, CHUNK_SIZE - OVERLAP);
-    const chunks: { text: string; start: number; end: number }[] = [];
-    for (let start = 0; start < cleaned.length; start += step) {
-      const end = Math.min(start + CHUNK_SIZE, cleaned.length);
-      const slice = cleaned.slice(start, end).trim();
-      if (slice) chunks.push({ text: slice, start, end });
+    const chunks: { text: string; start: number; end: number; pageNumber: number | null }[] = [];
+
+    for (const segment of extractedSegments) {
+      const normalized = segment.text.replace(/\r\n/g, "\n").replace(/\t/g, " ");
+      const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
+      if (!cleaned) continue;
+
+      for (let start = 0; start < cleaned.length; start += step) {
+        const end = Math.min(start + CHUNK_SIZE, cleaned.length);
+        const slice = cleaned.slice(start, end).trim();
+        if (slice) {
+          chunks.push({
+            text: slice,
+            start,
+            end,
+            pageNumber: segment.pageNumber,
+          });
+        }
+      }
     }
 
     if (chunks.length === 0) {
@@ -397,6 +513,7 @@ serve(async (req) => {
       embedding: number[];
       start_position: number;
       end_position: number;
+      page_number: number | null;
     }[] = [];
 
     for (let i = 0; i < chunks.length; i++) {
@@ -452,6 +569,7 @@ serve(async (req) => {
             embedding: retryData.embedding.values,
             start_position: chunk.start,
             end_position: chunk.end,
+            page_number: chunk.pageNumber,
           });
           continue;
         }
@@ -466,6 +584,7 @@ serve(async (req) => {
         embedding: embData.embedding.values,
         start_position: chunk.start,
         end_position: chunk.end,
+        page_number: chunk.pageNumber,
       });
     }
 
@@ -491,7 +610,12 @@ serve(async (req) => {
       JSON.stringify({
         success: true,
         chunksInserted: rows.length,
-        textLength: extractedText.length,
+        textLength: extractedTextLength,
+        pagesDetected: new Set(
+          extractedSegments
+            .map((segment) => segment.pageNumber)
+            .filter((pageNumber): pageNumber is number => typeof pageNumber === "number" && pageNumber > 0)
+        ).size,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
