@@ -7,6 +7,7 @@ import { getCitationKey } from './citations';
 import type { Citation, Conversation, Message } from './types';
 
 const MAX_CONVERSATIONS = 3;
+const ACTIVE_CONVERSATION_STORAGE_KEY = 'student_chat_active_conversation_id';
 
 export function useStudentChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -18,6 +19,7 @@ export function useStudentChat() {
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
 
   const fetchConversations = useCallback(async (preferredConversationId?: string | null) => {
     const { data, error } = await supabase
@@ -196,8 +198,18 @@ export function useStudentChat() {
   }, []);
 
   useEffect(() => {
-    void fetchConversations();
+    const preferredConversationId = window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+    void fetchConversations(preferredConversationId);
   }, [fetchConversations]);
+
+  useEffect(() => {
+    if (!currentConversationId) {
+      window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, currentConversationId);
+  }, [currentConversationId]);
 
   useEffect(() => {
     if (!currentConversationId) {
@@ -291,6 +303,41 @@ export function useStudentChat() {
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
   }, []);
+
+  const deleteConversation = useCallback(async (conversationId: string) => {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    const conversationTitle = conversation?.title || 'this conversation';
+    const shouldDelete = window.confirm(`Delete "${conversationTitle}"? This cannot be undone.`);
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setDeletingConversationId(conversationId);
+
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .delete()
+        .eq('id', conversationId);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const preferredConversationId = currentConversationId === conversationId ? null : currentConversationId;
+      await fetchConversations(preferredConversationId);
+      setSelectedMessage(null);
+      setHighlightedCitationKey(null);
+      toast.success('Conversation deleted');
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      const message = error instanceof Error ? error.message : 'Failed to delete conversation.';
+      toast.error(message);
+    } finally {
+      setDeletingConversationId(null);
+    }
+  }, [conversations, currentConversationId, fetchConversations]);
 
   const openSourcesForMessage = useCallback((message: Message) => {
     setSelectedMessage(message);
@@ -394,12 +441,14 @@ export function useStudentChat() {
     openingCitationKey,
     conversations,
     currentConversationId,
+    deletingConversationId,
     setInput,
     setShowSidePanel,
     setHighlightedCitationKey,
     handleSend,
     startNewConversation,
     selectConversation,
+    deleteConversation,
     openSourcesForMessage,
     focusCitation,
     openCitationSource,

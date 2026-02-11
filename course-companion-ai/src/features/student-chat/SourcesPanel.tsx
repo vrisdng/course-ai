@@ -78,8 +78,8 @@ export function SourcesPanel({
                           citationRefs.current[citationKey] = element;
                         }}
                         className={cn(
-                          'citation-card transition-colors duration-300',
-                          isHighlighted && 'bg-yellow-100/80 ring-1 ring-yellow-300'
+                          'citation-card transition-all duration-300',
+                          isHighlighted && 'bg-primary/5 ring-2 ring-primary ring-offset-2'
                         )}
                       >
                         <div className="mb-2 flex items-start justify-between gap-2">
@@ -96,13 +96,11 @@ export function SourcesPanel({
 
                         <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                           <FileText className="h-3 w-3" />
-                          <span className="capitalize">{citation.documentType}</span>
-                          {citation.pageNumber && (
-                            <>
-                              <span>•</span>
-                              <span>Page {citation.pageNumber}</span>
-                            </>
-                          )}
+                          <span>
+                            {typeof citation.pageNumber === 'number'
+                              ? `Page ${citation.pageNumber}`
+                              : 'Page not available'}
+                          </span>
                         </div>
 
                         <p
@@ -124,7 +122,7 @@ export function SourcesPanel({
                           ) : (
                             <ExternalLink className="h-3 w-3" />
                           )}
-                          {isOpening ? 'Opening preview...' : 'Preview context'}
+                          {isOpening ? 'Opening file...' : 'View original file'}
                         </button>
                       </div>
                     );

@@ -83,24 +83,38 @@ export function MessageList({
                           return (
                             <button
                               type="button"
-                              className="font-semibold text-primary underline-offset-2 hover:underline"
-                              onClick={() => onCitationClick(message, citationNumber)}
+                              className="mx-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground focus:outline-none"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onCitationClick(message, citationNumber);
+                              }}
                             >
-                              [{citationNumber}]
+                              {citationNumber}
                             </button>
                           );
                         }
                       }
 
+                      if (!href || href === '#' || href === '') {
+                        return <span className="font-semibold">{children}</span>;
+                      }
+
                       return (
-                        <a href={href} target="_blank" rel="noopener noreferrer">
+                        <a 
+                          href={href} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {children}
                         </a>
                       );
                     },
                   }}
                 >
-                  {markdownWithCitationLinks(message.content)}
+                  {markdownWithCitationLinks(message.content, message.citations?.length)}
                 </ReactMarkdown>
               </div>
             )}

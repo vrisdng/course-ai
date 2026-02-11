@@ -22,12 +22,14 @@ export default function StudentChat() {
     openingCitationKey,
     conversations,
     currentConversationId,
+    deletingConversationId,
     setInput,
     setShowSidePanel,
     setHighlightedCitationKey,
     handleSend,
     startNewConversation,
     selectConversation,
+    deleteConversation,
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
@@ -43,8 +45,10 @@ export default function StudentChat() {
         <ConversationsSidebar
           conversations={conversations}
           currentConversationId={currentConversationId}
+          deletingConversationId={deletingConversationId}
           onSelectConversation={selectConversation}
           onStartNewConversation={startNewConversation}
+          onDeleteConversation={deleteConversation}
         />
 
         <div className="flex flex-1 flex-col">

@@ -7,6 +7,9 @@ const corsHeaders = {
 };
 
 const MAX_CONVERSATIONS_PER_USER = 3;
+const EMBEDDING_MODEL = "gemini-embedding-001";
+const CHAT_MODEL = "gemini-3-flash-preview";
+const CITATION_PIPELINE_VERSION = "2026-02-10-reliable-citations-v1";
 
 interface ChatRequest {
   message: string;
@@ -27,6 +30,11 @@ interface RetrievedChunk {
   document_type?: string;
 }
 
+interface CitationSanitizationResult {
+  text: string;
+  citedChunkNumbers: number[];
+}
+
 class HttpError extends Error {
   status: number;
 
@@ -34,6 +42,228 @@ class HttpError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+const NON_CITATION_PREVIOUS_WORDS = new Set([
+  "step",
+  "section",
+  "chapter",
+  "week",
+  "part",
+  "item",
+  "example",
+  "option",
+]);
+
+function stripTrailingSourcesSection(text: string): string {
+  const withoutBlockSources = text.replace(/\n{1,}(?:#{1,6}\s*)?sources\s*:?\s*[\s\S]*$/i, "");
+  const withoutInlineSources = withoutBlockSources.replace(/\s+sources\s*:\s*(?:\[\d+\]|\d+\s+\S)[\s\S]*$/i, "");
+  return withoutInlineSources.trim();
+}
+
+function clipText(value: string, maxLength = 1200): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength).trim()}...`;
+}
+
+function sourceLabel(chunk: RetrievedChunk): string {
+  const name = chunk.material_name || chunk.document_name || "Unknown document";
+  const pageInfo = chunk.page_number ? ` (Page ${chunk.page_number})` : "";
+  return `${name}${pageInfo}`;
+}
+
+function normalizeLegacyCitationMarkers(content: string, maxSourceNumber: number): string {
+  if (maxSourceNumber < 1) {
+    return content;
+  }
+
+  // Convert any existing square brackets to parentheses first to normalize
+  let normalized = content.replace(/\[([1-9]\d*)\]/g, "($1)");
+
+  return normalized.replace(/(\S)\s+([1-9]\d*)([.,;!?])?(?=\s|$)/g, (match, previousChar, rawNumber, punctuation, offset, fullText) => {
+    const citationNumber = Number(rawNumber);
+    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxSourceNumber) {
+      return match;
+    }
+
+    const textBeforeMatch = fullText.slice(0, Number(offset) + 1);
+    const previousWord = textBeforeMatch.match(/([A-Za-z]+)\s*$/)?.[1]?.toLowerCase();
+    if (previousWord && NON_CITATION_PREVIOUS_WORDS.has(previousWord)) {
+      return match;
+    }
+
+    const punc = punctuation || "";
+    return `${previousChar} (${citationNumber})${punc}`;
+  });
+}
+
+function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: number): CitationSanitizationResult {
+  const cleanedAnswer = stripTrailingSourcesSection(rawAnswer.trim());
+  const normalizedAnswer = normalizeLegacyCitationMarkers(cleanedAnswer, maxSourceNumber);
+
+  const orderedOriginalCitationNumbers: number[] = [];
+  const seenOriginalCitationNumbers = new Set<number>();
+
+  for (const match of normalizedAnswer.matchAll(/\((\d+)\)/g)) {
+    const citationNumber = Number(match[1]);
+    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxSourceNumber) {
+      continue;
+    }
+    if (!seenOriginalCitationNumbers.has(citationNumber)) {
+      seenOriginalCitationNumbers.add(citationNumber);
+      orderedOriginalCitationNumbers.push(citationNumber);
+    }
+  }
+
+  const remappedCitationNumbers = new Map<number, number>();
+  orderedOriginalCitationNumbers.forEach((originalCitationNumber, index) => {
+    remappedCitationNumbers.set(originalCitationNumber, index + 1);
+  });
+
+  const remappedAnswer = normalizedAnswer.replace(/\((\d+)\)/g, (_, rawNumber) => {
+    const citationNumber = Number(rawNumber);
+    const mappedCitationNumber = remappedCitationNumbers.get(citationNumber);
+    return mappedCitationNumber ? `(${mappedCitationNumber})` : "";
+  });
+
+  const cleanedRemappedAnswer = remappedAnswer
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ ]{2,}/g, " ")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .trim();
+
+  return {
+    text: cleanedRemappedAnswer,
+    citedChunkNumbers: orderedOriginalCitationNumbers,
+  };
+}
+
+function buildCitationRewriteSourceContext(chunks: RetrievedChunk[]): string {
+  return chunks
+    .map((chunk, index) => {
+      const sourceType = chunk.material_type || chunk.document_type || "document";
+      return [
+        `(${index + 1}) ${sourceLabel(chunk)} (${sourceType})`,
+        clipText(chunk.chunk_text, 900),
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+async function generateGeminiText(options: {
+  geminiApiKey: string;
+  systemPrompt: string;
+  userPrompt: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+}): Promise<string> {
+  const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:generateContent`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": options.geminiApiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      system_instruction: {
+        parts: [{ text: options.systemPrompt }],
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: options.userPrompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: options.temperature ?? 0.4,
+        maxOutputTokens: options.maxOutputTokens ?? 2000,
+      },
+    }),
+  });
+
+  if (!aiResponse.ok) {
+    const errorText = await aiResponse.text();
+    console.error("Gemini Chat API error:", aiResponse.status, errorText);
+
+    if (aiResponse.status === 429) {
+      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
+    }
+
+    throw new Error(`Chat API error: ${aiResponse.status}`);
+  }
+
+  const aiData = await aiResponse.json();
+  return aiData.candidates?.[0]?.content?.parts
+    ?.map((part: { text?: string }) => part.text || "")
+    .join("")
+    .trim() || "I couldn't generate a response.";
+}
+
+async function formatAnswerWithReliableCitations(options: {
+  geminiApiKey: string;
+  question: string;
+  rawAnswer: string;
+  chunks: RetrievedChunk[];
+}): Promise<{ answer: string; citedChunks: RetrievedChunk[] }> {
+  const cleanedAnswer = stripTrailingSourcesSection(options.rawAnswer.trim());
+  if (options.chunks.length === 0) {
+    return {
+      answer: cleanedAnswer,
+      citedChunks: [],
+    };
+  }
+
+  let sanitized = sanitizeAndRemapCitations(cleanedAnswer, options.chunks.length);
+
+  if (sanitized.citedChunkNumbers.length === 0) {
+    const citationRewriteSystemPrompt = `You are a citation editor for a retrieval-augmented generation system.
+Your job is to add reliable inline citations to an existing draft answer.
+
+Rules:
+1. Keep the answer content the same; only add or adjust citation markers.
+2. Use ONLY citation markers in the format (n) (parentheses).
+3. Only use citation numbers that exist in the provided source list.
+4. Place citations immediately after the sentence or claim they support, BEFORE the period.
+5. Do NOT add a sources section.
+6. Return only the revised answer in markdown.`;
+
+    const citationRewriteUserPrompt = `Question:
+${options.question}
+
+Draft answer:
+${cleanedAnswer}
+
+Allowed sources:
+${buildCitationRewriteSourceContext(options.chunks)}`;
+
+    const rewrittenAnswer = await generateGeminiText({
+      geminiApiKey: options.geminiApiKey,
+      systemPrompt: citationRewriteSystemPrompt,
+      userPrompt: citationRewriteUserPrompt,
+      temperature: 0.1,
+      maxOutputTokens: 1800,
+    });
+
+    sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length);
+  }
+
+  const citedChunks = sanitized.citedChunkNumbers
+    .map((citationNumber) => options.chunks[citationNumber - 1])
+    .filter((chunk): chunk is RetrievedChunk => Boolean(chunk));
+
+  if (citedChunks.length === 0) {
+    return {
+      answer: sanitized.text || cleanedAnswer,
+      citedChunks: [],
+    };
+  }
+
+  return {
+    answer: sanitized.text,
+    citedChunks,
+  };
 }
 
 async function hasCourseAccess(
@@ -294,14 +524,14 @@ serve(async (req) => {
           .join("\n")
       : "";
 
-    const embeddingResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent", {
+    const embeddingResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`, {
       method: "POST",
       headers: {
         "x-goog-api-key": geminiApiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "models/gemini-embedding-001",
+        model: `models/${EMBEDDING_MODEL}`,
         content: {
           parts: [{ text: trimmedMessage }],
         },
@@ -356,8 +586,8 @@ serve(async (req) => {
         const sourceType = chunk.material_type || chunk.document_type || "document";
         const pageInfo = chunk.page_number ? ` (Page ${chunk.page_number})` : "";
 
-        ragContext += `### Source ${index + 1}: ${sourceName}${pageInfo} [${sourceType}]\n`;
-        ragContext += `${chunk.chunk_text}\n\n`;
+        ragContext += `### Source [${index + 1}]: ${sourceName}${pageInfo} [${sourceType}]\n`;
+        ragContext += `${clipText(chunk.chunk_text, 1300)}\n\n`;
       });
     }
 
@@ -368,58 +598,35 @@ serve(async (req) => {
     const systemPrompt = `You are EduChat, an AI learning assistant for university students. Your role is to answer questions about course materials accurately and helpfully.
 
 IMPORTANT GUIDELINES:
-1. Base your answers on the provided course materials when available
-2. Always cite your sources using numbered references like [1], [2], etc.
-3. If the information is not in the provided materials, say so clearly
-4. Be educational and explain concepts clearly
-5. Use markdown formatting for better readability
-6. Be concise but thorough
+1. Base your answers on the provided course materials when available.
+2. ALWAYS cite your sources using numbered references in parentheses, e.g., (1), (2).
+3. Place citation markers (n) immediately after the sentence or claim they support, BEFORE the period.
+4. If the information is not in the provided materials, say so clearly.
+5. Use markdown formatting for better readability.
+6. Be concise but thorough.
+7. Do NOT output a "Sources" section. Only use inline citations like (1).
+8. Use only citation numbers that correspond to provided sources.
+
+Citation format examples (follow exactly):
+- "Virtual memory allows for larger address spaces (1)."
+- "The CPU schedules processes based on priority (2). This ensures efficiency (3)."
 
 ${ragContext ? "The following are relevant excerpts from the course materials. Use these to answer the student's question:" : "No specific course materials were found for this query. Provide a helpful general response but note that this isn't from the course materials."}
 ${ragContext}${historySection}`;
 
-    const aiResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent", {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": geminiApiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: systemPrompt }],
-        },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: trimmedMessage }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 2000,
-        },
-      }),
+    const rawAnswer = await generateGeminiText({
+      geminiApiKey,
+      systemPrompt,
+      userPrompt: trimmedMessage,
+      temperature: 0.4,
+      maxOutputTokens: 2000,
     });
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error("Gemini Chat API error:", aiResponse.status, errorText);
-
-      if (aiResponse.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      throw new Error(`Chat API error: ${aiResponse.status}`);
-    }
-
-    const aiData = await aiResponse.json();
-    const answer = aiData.candidates?.[0]?.content?.parts
-      ?.map((part: { text?: string }) => part.text || "")
-      .join("")
-      .trim() || "I couldn't generate a response.";
+    const { answer, citedChunks } = await formatAnswerWithReliableCitations({
+      geminiApiKey,
+      question: trimmedMessage,
+      rawAnswer,
+      chunks: retrievedChunks,
+    });
 
     const { error: userMessageError } = await supabaseClient
       .from("messages")
@@ -447,8 +654,8 @@ ${ragContext}${historySection}`;
       throw new Error(`Failed to save assistant message: ${assistantMessageError?.message || "Unknown error"}`);
     }
 
-    if (retrievedChunks.length > 0) {
-      const citationRows = retrievedChunks.map((chunk) => ({
+    if (citedChunks.length > 0) {
+      const citationRows = citedChunks.map((chunk) => ({
         message_id: assistantMessage.id,
         chunk_id: chunk.id,
         relevance_score: chunk.relevance_score,
@@ -460,7 +667,7 @@ ${ragContext}${historySection}`;
         .insert(citationRows);
 
       if (citationsError) {
-        console.error("Failed to save citations:", citationsError);
+        throw new Error(`Failed to save citations: ${citationsError.message}`);
       }
     }
 
@@ -469,7 +676,7 @@ ${ragContext}${historySection}`;
       .update({ updated_at: new Date().toISOString() })
       .eq("id", activeConversationId);
 
-    const citations = retrievedChunks.map((chunk, index) => ({
+    const citations = citedChunks.map((chunk, index) => ({
       id: `citation-${index + 1}`,
       chunkId: chunk.id,
       excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
@@ -486,6 +693,11 @@ ${ragContext}${historySection}`;
         answer,
         citations,
         conversationId: activeConversationId,
+        meta: {
+          chatModel: CHAT_MODEL,
+          embeddingModel: EMBEDDING_MODEL,
+          citationPipelineVersion: CITATION_PIPELINE_VERSION,
+        },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

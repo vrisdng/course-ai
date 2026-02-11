@@ -1,4 +1,4 @@
-import { MessageSquare, Plus } from 'lucide-react';
+import { Loader2, MessageSquare, Plus, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -9,15 +9,19 @@ import type { Conversation } from './types';
 interface ConversationsSidebarProps {
   conversations: Conversation[];
   currentConversationId: string | null;
+  deletingConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
   onStartNewConversation: () => void;
+  onDeleteConversation: (conversationId: string) => void;
 }
 
 export function ConversationsSidebar({
   conversations,
   currentConversationId,
+  deletingConversationId,
   onSelectConversation,
   onStartNewConversation,
+  onDeleteConversation,
 }: ConversationsSidebarProps) {
   return (
     <aside className="hidden w-64 shrink-0 border-r border-border bg-muted/30 md:block">
@@ -37,19 +41,42 @@ export function ConversationsSidebar({
               </p>
             ) : (
               conversations.map((conversation) => (
-                <button
+                <div
                   key={conversation.id}
-                  onClick={() => onSelectConversation(conversation.id)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
+                    'group flex items-center gap-1 rounded-lg pr-1 transition-colors',
                     currentConversationId === conversation.id
                       ? 'bg-accent text-accent-foreground'
                       : 'hover:bg-accent/50'
                   )}
                 >
-                  <MessageSquare className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{conversation.title}</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectConversation(conversation.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-sm"
+                  >
+                    <MessageSquare className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{conversation.title}</span>
+                  </button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteConversation(conversation.id);
+                    }}
+                    disabled={deletingConversationId === conversation.id}
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${conversation.title}`}
+                  >
+                    {deletingConversationId === conversation.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
               ))
             )}
           </div>

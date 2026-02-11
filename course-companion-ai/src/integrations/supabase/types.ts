@@ -217,6 +217,7 @@ export type Database = {
       }
       materials: {
         Row: {
+          access_scope: Database["public"]["Enums"]["material_access_scope"]
           course_id: string
           created_at: string
           file_name: string
@@ -233,6 +234,7 @@ export type Database = {
           week_number: number | null
         }
         Insert: {
+          access_scope?: Database["public"]["Enums"]["material_access_scope"]
           course_id: string
           created_at?: string
           file_name: string
@@ -249,6 +251,7 @@ export type Database = {
           week_number?: number | null
         }
         Update: {
+          access_scope?: Database["public"]["Enums"]["material_access_scope"]
           course_id?: string
           created_at?: string
           file_name?: string
@@ -435,6 +438,7 @@ export type Database = {
         | "slides"
         | "notes"
         | "other"
+      material_access_scope: "course" | "public" | "private"
       processing_status: "pending" | "processing" | "completed" | "failed"
       user_role: "student" | "lecturer" | "admin"
     }
@@ -565,6 +569,7 @@ export const Constants = {
   public: {
     Enums: {
       document_type: ["pdf", "transcript", "code", "slides", "notes", "other"],
+      material_access_scope: ["course", "public", "private"],
       processing_status: ["pending", "processing", "completed", "failed"],
       user_role: ["student", "lecturer", "admin"],
     },
