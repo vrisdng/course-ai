@@ -17,7 +17,7 @@ function normalizeLegacyCitationMarkers(content: string, maxCitationNumber?: num
   }
 
   // Convert any existing square brackets to parentheses first to normalize
-  let normalized = content.replace(/\[([1-9]\d*)\]/g, '($1)');
+  const normalized = content.replace(/\[([1-9]\d*)\]/g, '($1)');
 
   return normalized.replace(/(\S)\s+([1-9]\d*)([.,;!?])?(?=\s|$)/g, (match, previousChar, rawNumber, punctuation, offset, fullText) => {
     const citationNumber = Number(rawNumber);
@@ -37,4 +37,4 @@ function normalizeLegacyCitationMarkers(content: string, maxCitationNumber?: num
 }
 
 export const markdownWithCitationLinks = (content: string, maxCitationNumber?: number) =>
-  normalizeLegacyCitationMarkers(content, maxCitationNumber).replace(/\((\d+)\)/g, '[($1)](citation:$1)');
+  normalizeLegacyCitationMarkers(content, maxCitationNumber).replace(/\((\d+)\)/g, '[\\[$1\\]](citation:$1)');

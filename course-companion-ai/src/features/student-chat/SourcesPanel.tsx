@@ -65,7 +65,7 @@ export function SourcesPanel({
 
             <ScrollArea className="flex-1 p-4">
               {selectedMessage?.citations && selectedMessage.citations.length > 0 ? (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {selectedMessage.citations.map((citation, index) => {
                     const citationKey = getCitationKey(selectedMessage.id, index + 1);
                     const isHighlighted = highlightedCitationKey === citationKey;
@@ -77,53 +77,57 @@ export function SourcesPanel({
                         ref={(element) => {
                           citationRefs.current[citationKey] = element;
                         }}
-                        className={cn(
-                          'citation-card transition-all duration-300',
-                          isHighlighted && 'bg-primary/5 ring-2 ring-primary ring-offset-2'
-                        )}
+                        className="px-1 py-1"
                       >
-                        <div className="mb-2 flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
-                              {index + 1}
-                            </span>
-                            <span className="text-xs font-medium text-foreground">{citation.documentName}</span>
-                          </div>
-                          <span className="text-xs text-muted-foreground">
-                            {Math.round(citation.relevanceScore * 100)}% match
-                          </span>
-                        </div>
-
-                        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-                          <FileText className="h-3 w-3" />
-                          <span>
-                            {typeof citation.pageNumber === 'number'
-                              ? `Page ${citation.pageNumber}`
-                              : 'Page not available'}
-                          </span>
-                        </div>
-
-                        <p
+                        <div
                           className={cn(
-                            'rounded bg-yellow-100/70 px-1 py-0.5 text-sm text-foreground/80 line-clamp-4',
-                            isHighlighted && 'rounded bg-yellow-200/70 px-1 py-0.5'
+                            'citation-card transition-all duration-300',
+                            isHighlighted && 'bg-primary/5 ring-2 ring-primary ring-offset-2'
                           )}
                         >
-                          "{citation.excerpt}"
-                        </p>
+                          <div className="mb-2 flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
+                                {index + 1}
+                              </span>
+                              <span className="text-xs font-medium text-foreground">{citation.documentName}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {Math.round(citation.relevanceScore * 100)}% match
+                            </span>
+                          </div>
 
-                        <button
-                          className="mt-2 flex items-center gap-1 text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-                          onClick={() => onOpenCitationSource(citation, citationKey)}
-                          disabled={isOpening}
-                        >
-                          {isOpening ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <ExternalLink className="h-3 w-3" />
-                          )}
-                          {isOpening ? 'Opening file...' : 'View original file'}
-                        </button>
+                          <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                            <FileText className="h-3 w-3" />
+                            <span>
+                              {typeof citation.pageNumber === 'number'
+                                ? `Page ${citation.pageNumber}`
+                                : 'Page not available'}
+                            </span>
+                          </div>
+
+                          <p
+                            className={cn(
+                              'rounded bg-yellow-100/70 px-1 py-0.5 text-sm text-foreground/80 line-clamp-4',
+                              isHighlighted && 'rounded bg-yellow-200/70 px-1 py-0.5'
+                            )}
+                          >
+                            "{citation.excerpt}"
+                          </p>
+
+                          <button
+                            className="mt-2 flex items-center gap-1 text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => onOpenCitationSource(citation, citationKey)}
+                            disabled={isOpening}
+                          >
+                            {isOpening ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <ExternalLink className="h-3 w-3" />
+                            )}
+                            {isOpening ? 'Opening file...' : 'View original file'}
+                          </button>
+                        </div>
                       </div>
                     );
                   })}

@@ -374,7 +374,9 @@ Rules:
 3. Only use citation numbers that exist in the provided source list.
 4. Place citations immediately after the sentence or claim they support, BEFORE the period.
 5. Do NOT add a sources section.
-6. Return only the revised answer in markdown.`;
+6. Preserve the original markdown structure and wording as much as possible.
+7. Do not add, remove, or rename headings.
+8. Return only the revised answer in markdown.`;
 
     const citationRewriteUserPrompt = `Question:
 ${options.question}
@@ -753,6 +755,15 @@ IMPORTANT GUIDELINES:
 6. Be concise but thorough.
 7. Do NOT output a "Sources" section. Only use inline citations like (1).
 8. Use only citation numbers that correspond to provided sources.
+9. Keep formatting consistent across answers:
+   - If the response is short (1-2 brief paragraphs), do not use headings.
+   - If headings are needed, use only level-2 markdown headings (##) in Title Case.
+   - Use at most 3 sections and keep heading style consistent throughout.
+   - Do not use bold text as fake headings.
+10. Prefer this structure for multi-part answers:
+    - A brief direct answer first.
+    - Then sections such as "## Key Points" and "## Explanation" when helpful.
+11. Use bullet points for lists/comparisons; avoid mixing list styles in one section.
 
 Citation format examples (follow exactly):
 - "Virtual memory allows for larger address spaces (1)."
