@@ -8,6 +8,58 @@ import type { Citation, Conversation, Message } from './types';
 
 const MAX_CONVERSATIONS = 3;
 const ACTIVE_CONVERSATION_STORAGE_KEY = 'student_chat_active_conversation_id';
+const RAG_CHAT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rag-chat`;
+const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+interface RagChatFinalPayload {
+  answer: string;
+  citations: Citation[];
+  conversationId: string;
+}
+
+interface ParsedSseEvent {
+  event: string;
+  data: string;
+}
+
+function parseSseEventBlock(block: string): ParsedSseEvent | null {
+  const normalized = block.replace(/\r/g, '');
+  const lines = normalized.split('\n');
+  const dataLines: string[] = [];
+  let event = 'message';
+
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) {
+      continue;
+    }
+
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trim();
+      continue;
+    }
+
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return {
+    event,
+    data: dataLines.join('\n'),
+  };
+}
+
+function parseMaybeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
 
 export function useStudentChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -249,18 +301,125 @@ export function useStudentChat() {
         },
       ]);
 
-      const response = await supabase.functions.invoke('rag-chat', {
-        body: {
-          message: userMessage.content,
-          conversationId: currentConversationId,
-        },
-      });
-
-      if (response.error) {
-        throw new Error(response.error.message);
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        throw new Error(sessionError.message);
       }
 
-      const { answer, citations, conversationId } = response.data;
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
+      const response = await fetch(RAG_CHAT_FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: SUPABASE_PUBLISHABLE_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage.content,
+          conversationId: currentConversationId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const parsed = parseMaybeJson(errorText) as { error?: string } | string;
+        if (typeof parsed === 'object' && parsed?.error) {
+          throw new Error(parsed.error);
+        }
+        throw new Error(errorText || 'Failed to get response. Please try again.');
+      }
+
+      const responseContentType = response.headers.get('content-type') || '';
+      let finalPayload: RagChatFinalPayload | null = null;
+
+      if (responseContentType.includes('application/json')) {
+        finalPayload = await response.json() as RagChatFinalPayload;
+      } else {
+        if (!response.body) {
+          throw new Error('No response stream was returned.');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const handleEvent = (event: ParsedSseEvent) => {
+          const parsed = parseMaybeJson(event.data);
+
+          if (event.event === 'token') {
+            const delta = typeof parsed === 'object' && parsed && 'text' in parsed
+              ? String((parsed as { text?: unknown }).text || '')
+              : '';
+
+            if (!delta || finalPayload) {
+              return;
+            }
+
+            setMessages((prev) =>
+              prev.map((message) =>
+                message.id === assistantMessageId
+                  ? { ...message, content: `${message.content}${delta}` }
+                  : message
+              )
+            );
+            return;
+          }
+
+          if (event.event === 'final') {
+            if (typeof parsed === 'object' && parsed) {
+              finalPayload = parsed as RagChatFinalPayload;
+            }
+            return;
+          }
+
+          if (event.event === 'error') {
+            const errorMessage = typeof parsed === 'object' && parsed && 'error' in parsed
+              ? String((parsed as { error?: unknown }).error || '')
+              : '';
+            throw new Error(errorMessage || 'Streaming request failed.');
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+
+          let boundaryIndex = buffer.indexOf('\n\n');
+          while (boundaryIndex !== -1) {
+            const rawBlock = buffer.slice(0, boundaryIndex);
+            buffer = buffer.slice(boundaryIndex + 2);
+
+            const event = parseSseEventBlock(rawBlock);
+            if (event) {
+              handleEvent(event);
+            }
+
+            boundaryIndex = buffer.indexOf('\n\n');
+          }
+        }
+
+        buffer += decoder.decode();
+        if (buffer.trim()) {
+          const trailingEvent = parseSseEventBlock(buffer);
+          if (trailingEvent) {
+            handleEvent(trailingEvent);
+          }
+        }
+      }
+
+      if (!finalPayload) {
+        throw new Error('The response stream ended before completion.');
+      }
+
+      const { answer, citations, conversationId } = finalPayload;
 
       setMessages((prev) =>
         prev.map((message) =>

@@ -35,6 +35,18 @@ interface CitationSanitizationResult {
   citedChunkNumbers: number[];
 }
 
+interface GeminiTextGenerationOptions {
+  geminiApiKey: string;
+  systemPrompt: string;
+  userPrompt: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+}
+
+interface GeminiStreamGenerationOptions extends GeminiTextGenerationOptions {
+  onTextDelta?: (delta: string) => Promise<void> | void;
+}
+
 class HttpError extends Error {
   status: number;
 
@@ -80,7 +92,7 @@ function normalizeLegacyCitationMarkers(content: string, maxSourceNumber: number
   }
 
   // Convert any existing square brackets to parentheses first to normalize
-  let normalized = content.replace(/\[([1-9]\d*)\]/g, "($1)");
+  const normalized = content.replace(/\[([1-9]\d*)\]/g, "($1)");
 
   return normalized.replace(/(\S)\s+([1-9]\d*)([.,;!?])?(?=\s|$)/g, (match, previousChar, rawNumber, punctuation, offset, fullText) => {
     const citationNumber = Number(rawNumber);
@@ -153,13 +165,29 @@ function buildCitationRewriteSourceContext(chunks: RetrievedChunk[]): string {
     .join("\n\n");
 }
 
-async function generateGeminiText(options: {
-  geminiApiKey: string;
-  systemPrompt: string;
-  userPrompt: string;
-  temperature?: number;
-  maxOutputTokens?: number;
-}): Promise<string> {
+function extractGeminiText(aiData: unknown): string {
+  if (!aiData || typeof aiData !== "object") {
+    return "";
+  }
+
+  const candidates = (aiData as { candidates?: unknown[] }).candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return "";
+  }
+
+  const firstCandidate = candidates[0] as { content?: { parts?: Array<{ text?: string }> } };
+  const parts = firstCandidate.content?.parts || [];
+
+  return parts
+    .map((part) => part.text || "")
+    .join("");
+}
+
+function formatSseEvent(event: string, payload: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+async function generateGeminiText(options: GeminiTextGenerationOptions): Promise<string> {
   const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:generateContent`, {
     method: "POST",
     headers: {
@@ -194,11 +222,130 @@ async function generateGeminiText(options: {
     throw new Error(`Chat API error: ${aiResponse.status}`);
   }
 
-  const aiData = await aiResponse.json();
-  return aiData.candidates?.[0]?.content?.parts
-    ?.map((part: { text?: string }) => part.text || "")
-    .join("")
-    .trim() || "I couldn't generate a response.";
+  const aiData = await aiResponse.json() as unknown;
+  return extractGeminiText(aiData).trim() || "I couldn't generate a response.";
+}
+
+async function generateGeminiTextStream(options: GeminiStreamGenerationOptions): Promise<string> {
+  const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": options.geminiApiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      system_instruction: {
+        parts: [{ text: options.systemPrompt }],
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: options.userPrompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: options.temperature ?? 0.4,
+        maxOutputTokens: options.maxOutputTokens ?? 2000,
+      },
+    }),
+  });
+
+  if (!aiResponse.ok) {
+    const errorText = await aiResponse.text();
+    console.error("Gemini Chat Stream API error:", aiResponse.status, errorText);
+
+    if (aiResponse.status === 429) {
+      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
+    }
+
+    throw new Error(`Chat stream API error: ${aiResponse.status}`);
+  }
+
+  if (!aiResponse.body) {
+    throw new Error("Chat stream response did not include a body");
+  }
+
+  const reader = aiResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullText = "";
+  let latestSnapshot = "";
+
+  const processRawSseEvent = async (rawEvent: string) => {
+    if (!rawEvent.trim()) {
+      return;
+    }
+
+    const dataLines = rawEvent
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart());
+
+    if (dataLines.length === 0) {
+      return;
+    }
+
+    const payload = dataLines.join("\n");
+    if (payload === "[DONE]") {
+      return;
+    }
+
+    let parsedPayload: unknown;
+    try {
+      parsedPayload = JSON.parse(payload);
+    } catch {
+      return;
+    }
+
+    const chunkText = extractGeminiText(parsedPayload);
+    if (!chunkText) {
+      return;
+    }
+
+    let delta = chunkText;
+    if (chunkText.startsWith(latestSnapshot)) {
+      delta = chunkText.slice(latestSnapshot.length);
+      latestSnapshot = chunkText;
+    } else if (latestSnapshot.endsWith(chunkText)) {
+      delta = "";
+    } else {
+      latestSnapshot += chunkText;
+    }
+
+    if (!delta) {
+      return;
+    }
+
+    fullText += delta;
+    if (options.onTextDelta) {
+      await options.onTextDelta(delta);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+    let boundaryIndex = buffer.indexOf("\n\n");
+    while (boundaryIndex !== -1) {
+      const rawEvent = buffer.slice(0, boundaryIndex);
+      buffer = buffer.slice(boundaryIndex + 2);
+      await processRawSseEvent(rawEvent);
+      boundaryIndex = buffer.indexOf("\n\n");
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    await processRawSseEvent(buffer);
+  }
+
+  return fullText.trim() || "I couldn't generate a response.";
 }
 
 async function formatAnswerWithReliableCitations(options: {
@@ -280,7 +427,7 @@ async function hasCourseAccess(
     throw new Error(`Failed to verify enrollment: ${enrolledError.message}`);
   }
 
-  if (Boolean(enrolled)) {
+  if (enrolled) {
     return true;
   }
 
@@ -614,93 +761,129 @@ Citation format examples (follow exactly):
 ${ragContext ? "The following are relevant excerpts from the course materials. Use these to answer the student's question:" : "No specific course materials were found for this query. Provide a helpful general response but note that this isn't from the course materials."}
 ${ragContext}${historySection}`;
 
-    const rawAnswer = await generateGeminiText({
-      geminiApiKey,
-      systemPrompt,
-      userPrompt: trimmedMessage,
-      temperature: 0.4,
-      maxOutputTokens: 2000,
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        const sendEvent = (event: string, payload: unknown) => {
+          controller.enqueue(encoder.encode(formatSseEvent(event, payload)));
+        };
+
+        (async () => {
+          try {
+            const rawAnswer = await generateGeminiTextStream({
+              geminiApiKey,
+              systemPrompt,
+              userPrompt: trimmedMessage,
+              temperature: 0.4,
+              maxOutputTokens: 2000,
+              onTextDelta: (delta) => {
+                sendEvent("token", { text: delta });
+              },
+            });
+
+            const { answer, citedChunks } = await formatAnswerWithReliableCitations({
+              geminiApiKey,
+              question: trimmedMessage,
+              rawAnswer,
+              chunks: retrievedChunks,
+            });
+
+            const { error: userMessageError } = await supabaseClient
+              .from("messages")
+              .insert({
+                conversation_id: activeConversationId,
+                role: "user",
+                content: trimmedMessage,
+              });
+
+            if (userMessageError) {
+              throw new Error(`Failed to save user message: ${userMessageError.message}`);
+            }
+
+            const { data: assistantMessage, error: assistantMessageError } = await supabaseClient
+              .from("messages")
+              .insert({
+                conversation_id: activeConversationId,
+                role: "assistant",
+                content: answer,
+              })
+              .select("id")
+              .single();
+
+            if (assistantMessageError || !assistantMessage) {
+              throw new Error(`Failed to save assistant message: ${assistantMessageError?.message || "Unknown error"}`);
+            }
+
+            if (citedChunks.length > 0) {
+              const citationRows = citedChunks.map((chunk) => ({
+                message_id: assistantMessage.id,
+                chunk_id: chunk.id,
+                relevance_score: chunk.relevance_score,
+                excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+              }));
+
+              const { error: citationsError } = await supabaseClient
+                .from("citations")
+                .insert(citationRows);
+
+              if (citationsError) {
+                throw new Error(`Failed to save citations: ${citationsError.message}`);
+              }
+            }
+
+            await supabaseClient
+              .from("conversations")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("id", activeConversationId);
+
+            const citations = citedChunks.map((chunk, index) => ({
+              id: `citation-${index + 1}`,
+              chunkId: chunk.id,
+              excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+              documentName: chunk.material_name || chunk.document_name || "Unknown document",
+              documentType: chunk.material_type || chunk.document_type || "document",
+              pageNumber: chunk.page_number,
+              relevanceScore: chunk.relevance_score,
+            }));
+
+            console.log(`Successfully generated response with ${citations.length} citations`);
+
+            sendEvent("final", {
+              answer,
+              citations,
+              conversationId: activeConversationId,
+              meta: {
+                chatModel: CHAT_MODEL,
+                embeddingModel: EMBEDDING_MODEL,
+                citationPipelineVersion: CITATION_PIPELINE_VERSION,
+              },
+            });
+          } catch (streamError) {
+            console.error("RAG chat stream error:", streamError);
+
+            const status = streamError instanceof HttpError ? streamError.status : 500;
+            const message = streamError instanceof Error ? streamError.message : "An unexpected error occurred";
+
+            sendEvent("error", { error: message, status });
+          } finally {
+            controller.close();
+          }
+        })();
+      },
+      cancel(reason) {
+        console.log("RAG chat stream cancelled", reason);
+      },
     });
-    const { answer, citedChunks } = await formatAnswerWithReliableCitations({
-      geminiApiKey,
-      question: trimmedMessage,
-      rawAnswer,
-      chunks: retrievedChunks,
+
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
     });
-
-    const { error: userMessageError } = await supabaseClient
-      .from("messages")
-      .insert({
-        conversation_id: activeConversationId,
-        role: "user",
-        content: trimmedMessage,
-      });
-
-    if (userMessageError) {
-      throw new Error(`Failed to save user message: ${userMessageError.message}`);
-    }
-
-    const { data: assistantMessage, error: assistantMessageError } = await supabaseClient
-      .from("messages")
-      .insert({
-        conversation_id: activeConversationId,
-        role: "assistant",
-        content: answer,
-      })
-      .select("id")
-      .single();
-
-    if (assistantMessageError || !assistantMessage) {
-      throw new Error(`Failed to save assistant message: ${assistantMessageError?.message || "Unknown error"}`);
-    }
-
-    if (citedChunks.length > 0) {
-      const citationRows = citedChunks.map((chunk) => ({
-        message_id: assistantMessage.id,
-        chunk_id: chunk.id,
-        relevance_score: chunk.relevance_score,
-        excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
-      }));
-
-      const { error: citationsError } = await supabaseClient
-        .from("citations")
-        .insert(citationRows);
-
-      if (citationsError) {
-        throw new Error(`Failed to save citations: ${citationsError.message}`);
-      }
-    }
-
-    await supabaseClient
-      .from("conversations")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", activeConversationId);
-
-    const citations = citedChunks.map((chunk, index) => ({
-      id: `citation-${index + 1}`,
-      chunkId: chunk.id,
-      excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
-      documentName: chunk.material_name || chunk.document_name || "Unknown document",
-      documentType: chunk.material_type || chunk.document_type || "document",
-      pageNumber: chunk.page_number,
-      relevanceScore: chunk.relevance_score,
-    }));
-
-    console.log(`Successfully generated response with ${citations.length} citations`);
-
-    return new Response(
-      JSON.stringify({
-        answer,
-        citations,
-        conversationId: activeConversationId,
-        meta: {
-          chatModel: CHAT_MODEL,
-          embeddingModel: EMBEDDING_MODEL,
-          citationPipelineVersion: CITATION_PIPELINE_VERSION,
-        },
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
 
   } catch (error) {
     console.error("RAG chat error:", error);
