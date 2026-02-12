@@ -34,11 +34,21 @@ export function Header() {
         <nav className="flex items-center gap-4">
           {user ? (
             <>
-              <Link to={isAdmin ? '/admin-dashboard' : isLecturer ? '/lecturer' : '/chat'}>
-                <Button variant="ghost" size="sm">
-                  {isAdmin ? 'Admin' : isLecturer ? 'Dashboard' : 'Chat'}
-                </Button>
-              </Link>
+              {(isAdmin || isLecturer) && (
+                <Link to={isAdmin ? '/admin-dashboard' : '/lecturer'}>
+                  <Button variant="ghost" size="sm">
+                    {isAdmin ? 'Admin' : 'Dashboard'}
+                  </Button>
+                </Link>
+              )}
+
+              {!isLecturer && (
+                <Link to="/chat">
+                  <Button variant="ghost" size="sm">
+                    Chat
+                  </Button>
+                </Link>
+              )}
               
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
