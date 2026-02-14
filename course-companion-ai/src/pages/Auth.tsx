@@ -65,7 +65,7 @@ export default function Auth() {
         navigate(from, { replace: true });
       } else {
         navigate(
-          profile.role === 'admin' ? '/admin-dashboard' : profile.role === 'lecturer' ? '/lecturer' : '/chat',
+          profile.role === 'admin' || profile.role === 'lecturer' ? '/admin-dashboard' : '/chat',
           { replace: true }
         );
       }

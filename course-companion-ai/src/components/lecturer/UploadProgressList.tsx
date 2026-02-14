@@ -6,6 +6,7 @@ interface UploadProgress {
   stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
   progress: number;
   error?: string;
+  statusText?: string;
 }
 
 interface UploadProgressListProps {
@@ -13,11 +14,11 @@ interface UploadProgressListProps {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  uploading: 'Uploading file…',
-  parsing: 'Extracting text…',
-  embedding: 'Generating embeddings…',
-  done: 'Complete',
-  error: 'Failed',
+  uploading: 'Collecting your file...',
+  parsing: 'Processing the material...',
+  embedding: 'Synthesizing key details...',
+  done: 'Ready',
+  error: 'Could not process this file',
 };
 
 export function UploadProgressList({ uploads }: UploadProgressListProps) {
@@ -45,7 +46,7 @@ export function UploadProgressList({ uploads }: UploadProgressListProps) {
               {upload.fileName}
             </p>
             <p className="text-xs text-muted-foreground">
-              {upload.error || STAGE_LABELS[upload.stage]}
+              {upload.error || upload.statusText || STAGE_LABELS[upload.stage]}
             </p>
             {upload.stage !== 'done' && upload.stage !== 'error' && (
               <Progress value={upload.progress} className="mt-1 h-1.5" />

@@ -22,6 +22,7 @@ interface UploadProgress {
   stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
   progress: number; // 0–100
   error?: string;
+  statusText?: string;
 }
 
 const ACCEPTED_TYPES: Record<string, string> = {
@@ -130,9 +131,15 @@ export function useMaterials(courseId: string | null) {
     }
 
     const uploadId = `${file.name}-${Date.now()}`;
+    let processingHintTimeouts: ReturnType<typeof setTimeout>[] = [];
     setUploads((prev) => {
       const next = new Map(prev);
-      next.set(uploadId, { fileName: file.name, stage: 'uploading', progress: 10 });
+      next.set(uploadId, {
+        fileName: file.name,
+        stage: 'uploading',
+        progress: 10,
+        statusText: 'Collecting your file...',
+      });
       return next;
     });
 
@@ -147,7 +154,11 @@ export function useMaterials(courseId: string | null) {
 
       if (storageError) throw new Error(`Upload failed: ${storageError.message}`);
 
-      updateUpload(uploadId, { stage: 'uploading', progress: 40 });
+      updateUpload(uploadId, {
+        stage: 'uploading',
+        progress: 40,
+        statusText: 'Saving your file...',
+      });
 
       // 2. Create material record
       const { data: material, error: materialError } = await supabase
@@ -167,7 +178,35 @@ export function useMaterials(courseId: string | null) {
         throw new Error(`Failed to create material record: ${materialError?.message}`);
       }
 
-      updateUpload(uploadId, { stage: 'parsing', progress: 50 });
+      updateUpload(uploadId, {
+        stage: 'parsing',
+        progress: 50,
+        statusText: 'Reading the material...',
+      });
+
+      processingHintTimeouts = [
+        setTimeout(() => {
+          updateUpload(uploadId, {
+            stage: 'parsing',
+            progress: 62,
+            statusText: 'Organizing the content...',
+          });
+        }, 1200),
+        setTimeout(() => {
+          updateUpload(uploadId, {
+            stage: 'embedding',
+            progress: 78,
+            statusText: 'Synthesizing it for quick answers...',
+          });
+        }, 2800),
+        setTimeout(() => {
+          updateUpload(uploadId, {
+            stage: 'embedding',
+            progress: 90,
+            statusText: 'Finishing up...',
+          });
+        }, 5000),
+      ];
 
       // 3. Call parse-document edge function
       const { data: parseResult, error: parseError } = await supabase.functions.invoke(
@@ -180,6 +219,7 @@ export function useMaterials(courseId: string | null) {
           },
         }
       );
+      processingHintTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
 
       if (parseError) {
         throw new Error(`Processing failed: ${parseError.message}`);
@@ -189,8 +229,12 @@ export function useMaterials(courseId: string | null) {
         throw new Error(parseResult.error);
       }
 
-      updateUpload(uploadId, { stage: 'done', progress: 100 });
-      toast.success(`${file.name} processed successfully (${parseResult.chunksInserted} chunks)`);
+      updateUpload(uploadId, {
+        stage: 'done',
+        progress: 100,
+        statusText: 'Ready for student questions',
+      });
+      toast.success(`${file.name} is ready for questions`);
 
       // Refresh materials list
       await fetchMaterials();
@@ -204,6 +248,7 @@ export function useMaterials(courseId: string | null) {
         });
       }, 3000);
     } catch (error) {
+      processingHintTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
       const message = error instanceof Error ? error.message : 'Upload failed';
       console.error('Upload error:', error);
       updateUpload(uploadId, { stage: 'error', progress: 0, error: message });

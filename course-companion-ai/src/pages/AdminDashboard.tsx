@@ -15,6 +15,7 @@ import {
   Trash2,
   UploadCloud,
   Users2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -159,7 +160,8 @@ export default function AdminDashboard() {
   const [accessFilter, setAccessFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
 
-  const [file, setFile] = useState<File | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [currentUploadFileName, setCurrentUploadFileName] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
   const [isLoadingMaterials, setIsLoadingMaterials] = useState(false);
@@ -284,16 +286,20 @@ export default function AdminDashboard() {
     });
   }, [accessFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter, typeFilter]);
 
+  const getPendingFileKey = (candidate: File) =>
+    `${candidate.name}-${candidate.size}-${candidate.lastModified}`;
+
   const resetUploadSelection = () => {
-    setFile(null);
+    setPendingFiles([]);
+    setCurrentUploadFileName(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  const pickFile = (candidate: File | null) => {
-    if (!candidate) {
+  const addPendingFiles = (candidates: File[]) => {
+    if (!candidates.length) {
       return;
     }
 
@@ -302,16 +308,46 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (!isFileSupported(candidate)) {
-      toast.error('Unsupported file type. Please upload a supported format.');
-      return;
+    const unsupported: string[] = [];
+    let addedCount = 0;
+
+    setPendingFiles((previous) => {
+      const keys = new Set(previous.map((item) => getPendingFileKey(item)));
+      const next = [...previous];
+
+      for (const candidate of candidates) {
+        if (!isFileSupported(candidate)) {
+          unsupported.push(candidate.name);
+          continue;
+        }
+
+        const key = getPendingFileKey(candidate);
+        if (keys.has(key)) {
+          continue;
+        }
+
+        keys.add(key);
+        next.push(candidate);
+        addedCount += 1;
+      }
+
+      return next;
+    });
+
+    if (unsupported.length > 0) {
+      toast.error(`Skipped ${unsupported.length} unsupported file${unsupported.length === 1 ? '' : 's'}.`);
     }
 
-    setFile(candidate);
+    if (addedCount === 0 && unsupported.length === 0) {
+      toast.info('These files are already in your review list.');
+    }
   };
 
   const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    pickFile(event.target.files?.[0] || null);
+    addPendingFiles(Array.from(event.target.files || []));
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
@@ -339,8 +375,17 @@ export default function AdminDashboard() {
       return;
     }
 
-    pickFile(event.dataTransfer.files?.[0] || null);
+    addPendingFiles(Array.from(event.dataTransfer.files || []));
   };
+
+  useEffect(() => {
+    setPendingFiles([]);
+    setCurrentUploadFileName(null);
+    setIsDragActive(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [uploadCourseId]);
 
   const handleCreateCourse = async () => {
     if (!profile) {
@@ -381,6 +426,99 @@ export default function AdminDashboard() {
     toast.success('Course created');
   };
 
+  const uploadSingleFile = async (
+    targetFile: File,
+    courseId: string,
+    accessScope: AccessScope,
+    uploaderId: string
+  ) => {
+    const extension = targetFile.name.split('.').pop()?.toLowerCase() || '';
+    const isSupported = targetFile.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
+    if (!isSupported) {
+      throw new Error('Unsupported file type. Please upload a supported format.');
+    }
+
+    const filePath = `${courseId}/${crypto.randomUUID()}-${targetFile.name}`;
+    const { error: uploadError } = await supabaseAbortable.storage
+      .from('course-materials')
+      .upload(filePath, targetFile, { upsert: false });
+
+    if (cancelUploadRef.current) {
+      throw new Error('Upload cancelled');
+    }
+
+    if (uploadError) {
+      throw new Error(uploadError.message);
+    }
+
+    const { data: material, error: insertError } = await supabaseAbortable
+      .from('materials')
+      .insert({
+        course_id: courseId,
+        file_name: targetFile.name,
+        file_path: filePath,
+        file_type: getFileType(targetFile.name),
+        file_size: targetFile.size,
+        topic: null,
+        week_number: null,
+        processing_status: 'processing',
+        access_scope: accessScope,
+        is_public: accessScope === 'public',
+        uploaded_by: uploaderId,
+      })
+      .select('id')
+      .single();
+
+    if (insertError || !material) {
+      if (insertError?.message?.toLowerCase().includes('access_scope')) {
+        throw new Error('Database is missing access scope support. Run the latest migrations.');
+      }
+      throw new Error(insertError?.message || 'Failed to create material record');
+    }
+
+    if (cancelUploadRef.current) {
+      throw new Error('Upload cancelled');
+    }
+
+    const isTextLike = targetFile.type.startsWith('text/') || TEXT_EXTENSIONS.has(extension);
+    if (isTextLike) {
+      const text = await targetFile.text();
+      const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
+        body: {
+          materialId: material.id,
+          text,
+        },
+        signal: abortControllerRef.current?.signal,
+      });
+
+      if (ingestError) {
+        throw new Error(ingestError.message || 'Failed to ingest material');
+      }
+
+      if (ingestResult?.error) {
+        throw new Error(ingestResult.error);
+      }
+      return;
+    }
+
+    const { data: parseResult, error: parseError } = await supabaseAbortable.functions.invoke('parse-document', {
+      body: {
+        materialId: material.id,
+        filePath,
+        fileType: extension,
+      },
+      signal: abortControllerRef.current?.signal,
+    });
+
+    if (parseError) {
+      throw new Error(parseError.message || 'Failed to parse material');
+    }
+
+    if (parseResult?.error) {
+      throw new Error(parseResult.error);
+    }
+  };
+
   const handleUpload = async () => {
     if (!profile) {
       toast.error('Profile not loaded');
@@ -394,116 +532,75 @@ export default function AdminDashboard() {
       toast.error('Choose who can access this document');
       return;
     }
-    if (!file) {
-      toast.error('Choose a file to upload');
+    if (pendingFiles.length === 0) {
+      toast.error('Choose at least one file to upload');
       return;
     }
 
-    const extension = file.name.split('.').pop()?.toLowerCase() || '';
-    const isSupported = file.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
-    if (!isSupported) {
-      toast.error('Unsupported file type. Please upload a supported format.');
-      return;
-    }
+    const queue = [...pendingFiles];
+    const courseId = uploadCourseId;
+    const accessScope = uploadAccessScope;
+    const uploaderId = profile.id;
+    const failedFiles: File[] = [];
+    let successCount = 0;
+    let index = 0;
 
     setIsUploading(true);
     cancelUploadRef.current = false;
-    abortControllerRef.current = new AbortController();
 
     try {
-      const filePath = `${uploadCourseId}/${crypto.randomUUID()}-${file.name}`;
-      const { error: uploadError } = await supabaseAbortable.storage.from('course-materials').upload(filePath, file, { upsert: false });
-
-      if (cancelUploadRef.current) {
-        throw new Error('Upload cancelled');
-      }
-
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-
-      const { data: material, error: insertError } = await supabaseAbortable
-        .from('materials')
-        .insert({
-          course_id: uploadCourseId,
-          file_name: file.name,
-          file_path: filePath,
-          file_type: getFileType(file.name),
-          file_size: file.size,
-          topic: null,
-          week_number: null,
-          processing_status: 'processing',
-          access_scope: uploadAccessScope,
-          is_public: uploadAccessScope === 'public',
-          uploaded_by: profile.id,
-        })
-        .select('id')
-        .single();
-
-      if (insertError || !material) {
-        if (insertError?.message?.toLowerCase().includes('access_scope')) {
-          throw new Error('Database is missing access scope support. Run the latest migrations.');
+      for (index = 0; index < queue.length; index += 1) {
+        if (cancelUploadRef.current) {
+          break;
         }
-        throw new Error(insertError?.message || 'Failed to create material record');
+
+        const targetFile = queue[index];
+        setCurrentUploadFileName(targetFile.name);
+        abortControllerRef.current = new AbortController();
+
+        try {
+          await uploadSingleFile(targetFile, courseId, accessScope, uploaderId);
+          successCount += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Upload failed';
+          const isAborted = abortControllerRef.current?.signal.aborted;
+          if (message === 'Upload cancelled' || cancelUploadRef.current || isAborted) {
+            break;
+          }
+
+          failedFiles.push(targetFile);
+          toast.error(`${targetFile.name}: ${message}`);
+        } finally {
+          abortControllerRef.current = null;
+        }
       }
 
       if (cancelUploadRef.current) {
-        throw new Error('Upload cancelled');
-      }
-
-      const isTextLike = file.type.startsWith('text/') || TEXT_EXTENSIONS.has(extension);
-      if (isTextLike) {
-        const text = await file.text();
-        const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
-          body: {
-            materialId: material.id,
-            text,
-          },
-          signal: abortControllerRef.current?.signal,
-        });
-
-        if (ingestError) {
-          throw new Error(ingestError.message || 'Failed to ingest material');
-        }
-
-        if (ingestResult?.error) {
-          throw new Error(ingestResult.error);
-        }
-      } else {
-        const { data: parseResult, error: parseError } = await supabaseAbortable.functions.invoke('parse-document', {
-          body: {
-            materialId: material.id,
-            filePath,
-            fileType: extension,
-          },
-          signal: abortControllerRef.current?.signal,
-        });
-
-        if (parseError) {
-          throw new Error(parseError.message || 'Failed to parse material');
-        }
-
-        if (parseResult?.error) {
-          throw new Error(parseResult.error);
-        }
-      }
-
-      toast.success('Document uploaded and indexed');
-      resetUploadSelection();
-      await fetchMaterials();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Upload failed';
-      const isAborted = abortControllerRef.current?.signal.aborted;
-
-      if (message === 'Upload cancelled' || isAborted) {
+        setPendingFiles(queue.slice(index));
         toast.info('Upload cancelled');
-      } else {
-        toast.error(message);
+        return;
+      }
+
+      setPendingFiles(failedFiles);
+
+      if (successCount > 0) {
+        await fetchMaterials();
+      }
+
+      if (successCount > 0 && failedFiles.length === 0) {
+        toast.success(`${successCount} document${successCount === 1 ? '' : 's'} uploaded and indexed`);
+      } else if (successCount > 0) {
+        toast.success(`${successCount} document${successCount === 1 ? '' : 's'} uploaded`);
+      }
+
+      if (failedFiles.length > 0) {
+        toast.error(`${failedFiles.length} document${failedFiles.length === 1 ? '' : 's'} failed. Remove or retry.`);
       }
     } finally {
       setIsUploading(false);
       cancelUploadRef.current = false;
       abortControllerRef.current = null;
+      setCurrentUploadFileName(null);
     }
   };
 
@@ -532,6 +629,13 @@ export default function AdminDashboard() {
         {accessScopeLabel(scope)}
       </Badge>
     );
+  };
+
+  const removePendingFile = (fileKey: string) => {
+    if (isUploading) {
+      return;
+    }
+    setPendingFiles((previous) => previous.filter((candidate) => getPendingFileKey(candidate) !== fileKey));
   };
 
   const handleCancelUpload = () => {
@@ -756,7 +860,7 @@ export default function AdminDashboard() {
                 <div className="grid gap-4 rounded-lg border border-border bg-muted/20 p-4 lg:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="upload-course-select">Course this document belongs to</Label>
-                    <Select value={uploadCourseId} onValueChange={setUploadCourseId}>
+                    <Select value={uploadCourseId} onValueChange={setUploadCourseId} disabled={isUploading}>
                       <SelectTrigger id="upload-course-select">
                         <SelectValue placeholder="Select course for this upload" />
                       </SelectTrigger>
@@ -769,7 +873,7 @@ export default function AdminDashboard() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      You must select a course before choosing a file.
+                      You must select a course before choosing files.
                     </p>
                   </div>
 
@@ -781,6 +885,7 @@ export default function AdminDashboard() {
                         variant={uploadAccessScope === 'course' ? 'default' : 'outline'}
                         className="justify-start gap-2"
                         onClick={() => setUploadAccessScope('course')}
+                        disabled={isUploading}
                       >
                         <Users2 className="h-4 w-4" />
                         Course only
@@ -790,6 +895,7 @@ export default function AdminDashboard() {
                         variant={uploadAccessScope === 'public' ? 'default' : 'outline'}
                         className="justify-start gap-2"
                         onClick={() => setUploadAccessScope('public')}
+                        disabled={isUploading}
                       >
                         <Globe2 className="h-4 w-4" />
                         Everyone
@@ -799,6 +905,7 @@ export default function AdminDashboard() {
                         variant={uploadAccessScope === 'private' ? 'default' : 'outline'}
                         className="justify-start gap-2"
                         onClick={() => setUploadAccessScope('private')}
+                        disabled={isUploading}
                       >
                         <Lock className="h-4 w-4" />
                         Private
@@ -882,6 +989,7 @@ export default function AdminDashboard() {
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   accept={ACCEPTED_FILE_TYPES}
                   className="hidden"
                   onChange={handleFileInputChange}
@@ -896,7 +1004,7 @@ export default function AdminDashboard() {
                       toast.error('Select the course for this document first');
                       return;
                     }
-                    if (!file && !isUploading && uploadCourseId) {
+                    if (!isUploading && uploadCourseId) {
                       fileInputRef.current?.click();
                     }
                   }}
@@ -906,7 +1014,7 @@ export default function AdminDashboard() {
                       toast.error('Select the course for this document first');
                       return;
                     }
-                    if (!file && !isUploading && uploadCourseId && (event.key === 'Enter' || event.key === ' ')) {
+                    if (!isUploading && uploadCourseId && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
                       fileInputRef.current?.click();
                     }
@@ -922,51 +1030,90 @@ export default function AdminDashboard() {
                   )}
                 >
                   <UploadCloud className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-                  {file ? (
+                  {uploadCourseId ? (
                     <>
-                      <p className="text-sm font-medium text-foreground">{file.name}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{formatBytes(file.size)}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access: {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'}
+                      <p className="text-sm text-muted-foreground">
+                        Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
                       </p>
-                      <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                        <Button size="sm" onClick={handleUpload} disabled={!uploadCourseId || !uploadAccessScope || isUploading}>
-                          {isUploading ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Uploading
-                            </>
-                          ) : (
-                            'Upload Document'
-                          )}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={handleCancelUpload}>
-                          {isUploading ? 'Cancel Upload' : 'Clear'}
-                        </Button>
-                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Files are added to a review list first. Supported: PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
+                      </p>
+                      {isUploading && currentUploadFileName && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Uploading: {currentUploadFileName}
+                        </p>
+                      )}
                     </>
                   ) : (
                     <>
-                      {uploadCourseId ? (
-                        <>
-                          <p className="text-sm text-muted-foreground">
-                            Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
-                          </p>
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            Supports PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
-                          </p>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-sm font-medium text-foreground">Select a course first</p>
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            Then you can choose a document to upload.
-                          </p>
-                        </>
-                      )}
+                      <p className="text-sm font-medium text-foreground">Select a course first</p>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Then you can choose documents to upload.
+                      </p>
                     </>
                   )}
                 </div>
+
+                {pendingFiles.length > 0 && (
+                  <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-sm font-medium text-foreground">
+                        {pendingFiles.length} document{pendingFiles.length === 1 ? '' : 's'} ready
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access:{' '}
+                        {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'}
+                      </p>
+                    </div>
+
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                      {pendingFiles.map((candidate) => {
+                        const fileKey = getPendingFileKey(candidate);
+                        return (
+                          <div
+                            key={fileKey}
+                            className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-foreground">{candidate.name}</p>
+                              <p className="text-xs text-muted-foreground">{formatBytes(candidate.size)}</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removePendingFile(fileKey)}
+                              disabled={isUploading}
+                              aria-label={`Remove ${candidate.name}`}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                      <Button size="sm" variant="outline" onClick={handleCancelUpload}>
+                        {isUploading ? 'Cancel Upload' : 'Clear List'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleUpload}
+                        disabled={!uploadCourseId || !uploadAccessScope || isUploading || pendingFiles.length === 0}
+                      >
+                        {isUploading ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          `Upload Selected (${pendingFiles.length})`
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
