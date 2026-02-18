@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -11,6 +12,9 @@ import { useStudentChat } from '@/features/student-chat/useStudentChat';
 
 export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
 
   const {
     messages,
@@ -33,11 +37,28 @@ export default function StudentChat() {
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
-  } = useStudentChat();
+  } = useStudentChat(routeConversationId || null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    const targetPath = currentConversationId ? `/chat/${currentConversationId}` : '/chat';
+
+    if (location.pathname === targetPath) {
+      return;
+    }
+
+    navigate(targetPath, { replace: true });
+  }, [currentConversationId, location.pathname, navigate]);
+
+  const handleStartNewConversation = () => {
+    if (location.pathname !== '/chat') {
+      navigate('/chat', { replace: true });
+    }
+    startNewConversation();
+  };
 
   return (
     <MainLayout showFooter={false}>
@@ -47,7 +68,7 @@ export default function StudentChat() {
           currentConversationId={currentConversationId}
           deletingConversationId={deletingConversationId}
           onSelectConversation={selectConversation}
-          onStartNewConversation={startNewConversation}
+          onStartNewConversation={handleStartNewConversation}
           onDeleteConversation={deleteConversation}
         />
 

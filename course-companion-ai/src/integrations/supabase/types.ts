@@ -14,6 +14,46 @@ export type Database = {
   }
   public: {
     Tables: {
+      academic_terms: {
+        Row: {
+          academic_year_end: number
+          academic_year_start: number
+          created_at: string
+          ends_on: string | null
+          id: string
+          is_active: boolean
+          label: string
+          semester: number
+          sort_key: number
+          starts_on: string | null
+          updated_at: string
+        }
+        Insert: {
+          academic_year_end: number
+          academic_year_start: number
+          created_at?: string
+          ends_on?: string | null
+          id?: string
+          is_active?: boolean
+          label: string
+          semester: number
+          starts_on?: string | null
+          updated_at?: string
+        }
+        Update: {
+          academic_year_end?: number
+          academic_year_start?: number
+          created_at?: string
+          ends_on?: string | null
+          id?: string
+          is_active?: boolean
+          label?: string
+          semester?: number
+          starts_on?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       chunks: {
         Row: {
           chunk_index: number
@@ -218,6 +258,7 @@ export type Database = {
       materials: {
         Row: {
           access_scope: Database["public"]["Enums"]["material_access_scope"]
+          academic_term_id: string
           course_id: string
           created_at: string
           file_name: string
@@ -235,6 +276,7 @@ export type Database = {
         }
         Insert: {
           access_scope?: Database["public"]["Enums"]["material_access_scope"]
+          academic_term_id?: string
           course_id: string
           created_at?: string
           file_name: string
@@ -252,6 +294,7 @@ export type Database = {
         }
         Update: {
           access_scope?: Database["public"]["Enums"]["material_access_scope"]
+          academic_term_id?: string
           course_id?: string
           created_at?: string
           file_name?: string
@@ -268,6 +311,13 @@ export type Database = {
           week_number?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "materials_academic_term_id_fkey"
+            columns: ["academic_term_id"]
+            isOneToOne: false
+            referencedRelation: "academic_terms"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "materials_course_id_fkey"
             columns: ["course_id"]
@@ -352,6 +402,99 @@ export type Database = {
         }
         Relationships: []
       }
+      query_events: {
+        Row: {
+          academic_term_id: string | null
+          assistant_message_id: string | null
+          citation_count: number
+          citation_hit: boolean
+          conversation_id: string | null
+          course_id: string | null
+          created_at: string
+          id: string
+          latency_ms: number | null
+          query_category: string
+          query_text: string
+          retrieved_chunk_count: number
+          unresolved: boolean
+          unresolved_reason: string | null
+          user_id: string
+          user_message_id: string | null
+        }
+        Insert: {
+          academic_term_id?: string | null
+          assistant_message_id?: string | null
+          citation_count?: number
+          citation_hit?: boolean
+          conversation_id?: string | null
+          course_id?: string | null
+          created_at?: string
+          id?: string
+          latency_ms?: number | null
+          query_category?: string
+          query_text: string
+          retrieved_chunk_count?: number
+          unresolved?: boolean
+          unresolved_reason?: string | null
+          user_id: string
+          user_message_id?: string | null
+        }
+        Update: {
+          academic_term_id?: string | null
+          assistant_message_id?: string | null
+          citation_count?: number
+          citation_hit?: boolean
+          conversation_id?: string | null
+          course_id?: string | null
+          created_at?: string
+          id?: string
+          latency_ms?: number | null
+          query_category?: string
+          query_text?: string
+          retrieved_chunk_count?: number
+          unresolved?: boolean
+          unresolved_reason?: string | null
+          user_id?: string
+          user_message_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "query_events_academic_term_id_fkey"
+            columns: ["academic_term_id"]
+            isOneToOne: false
+            referencedRelation: "academic_terms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "query_events_assistant_message_id_fkey"
+            columns: ["assistant_message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "query_events_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "query_events_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "query_events_user_message_id_fkey"
+            columns: ["user_message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       student_documents: {
         Row: {
           created_at: string
@@ -393,13 +536,39 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      analytics_query_category_stats: {
+        Row: {
+          citation_hit_count: number | null
+          citation_hit_rate: number | null
+          query_category: string | null
+          query_count: number | null
+          unresolved_count: number | null
+        }
+        Relationships: []
+      }
+      analytics_recent_unresolved_queries: {
+        Row: {
+          academic_term_id: string | null
+          course_id: string | null
+          created_at: string | null
+          id: string | null
+          query_category: string | null
+          query_text: string | null
+          unresolved_reason: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
+      get_active_academic_term_id: {
+        Args: Record<PropertyKey, never>
+        Returns: string | null
+      }
       get_material_course_id: {
         Args: { check_material_id: string }
         Returns: string
       }
+      is_admin: { Args: { check_user_id: string }; Returns: boolean }
       is_course_lecturer: {
         Args: { check_course_id: string; check_user_id: string }
         Returns: boolean
@@ -411,6 +580,7 @@ export type Database = {
       is_lecturer: { Args: { check_user_id: string }; Returns: boolean }
       match_chunks: {
         Args: {
+          course_id_filter?: string
           match_count?: number
           match_threshold?: number
           query_embedding: string
@@ -418,16 +588,32 @@ export type Database = {
         }
         Returns: {
           chunk_text: string
-          document_name: string
-          document_type: string
+          document_name: string | null
+          document_type: string | null
           id: string
-          material_id: string
-          material_name: string
-          material_type: string
-          page_number: number
+          material_id: string | null
+          material_name: string | null
+          material_type: string | null
+          page_number: number | null
           relevance_score: number
-          student_document_id: string
+          student_document_id: string | null
         }[]
+      }
+      set_active_academic_term: {
+        Args: { target_term_id: string }
+        Returns: {
+          academic_year_end: number
+          academic_year_start: number
+          created_at: string
+          ends_on: string | null
+          id: string
+          is_active: boolean
+          label: string
+          semester: number
+          sort_key: number
+          starts_on: string | null
+          updated_at: string
+        }
       }
     }
     Enums: {

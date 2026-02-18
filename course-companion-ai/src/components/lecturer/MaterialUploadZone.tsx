@@ -86,7 +86,7 @@ export function MaterialUploadZone({
         Drag & drop files here, or click to browse
       </p>
       <p className="text-xs text-muted-foreground">
-        Supported: PDF, DOC/DOCX, PPTX, PNG/JPG/WEBP/GIF — Max 15MB per file
+        Files are added to a review list first. Supported: PDF, DOC/DOCX, PPTX, PNG/JPG/WEBP/GIF — Max 15MB each
       </p>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">

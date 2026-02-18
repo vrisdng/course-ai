@@ -10,8 +10,8 @@ import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import StudentChat from "./pages/StudentChat";
-import LecturerDashboard from "./pages/LecturerDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
+import AdminAnalytics from "./pages/AdminAnalytics";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,7 +30,7 @@ const App = () => (
 
             {/* Protected student routes */}
             <Route
-              path="/chat"
+              path="/chat/:conversationId?"
               element={
                 <ProtectedRoute requiredRole={['student', 'admin']}>
                   <StudentChat />
@@ -38,22 +38,20 @@ const App = () => (
               }
             />
 
-            {/* Protected lecturer routes */}
-            <Route
-              path="/lecturer"
-              element={
-                <ProtectedRoute requiredRole="lecturer">
-                  <LecturerDashboard />
-                </ProtectedRoute>
-              }
-            />
-
-            {/* Protected admin routes */}
+            {/* Protected staff routes */}
             <Route
               path="/admin-dashboard"
               element={
-                <ProtectedRoute requiredRole="admin">
+                <ProtectedRoute requiredRole={['admin', 'lecturer']}>
                   <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin-analytics"
+              element={
+                <ProtectedRoute requiredRole={['admin']}>
+                  <AdminAnalytics />
                 </ProtectedRoute>
               }
             />

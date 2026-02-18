@@ -35,9 +35,16 @@ export function Header() {
           {user ? (
             <>
               {(isAdmin || isLecturer) && (
-                <Link to={isAdmin ? '/admin-dashboard' : '/lecturer'}>
+                <Link to="/admin-dashboard">
                   <Button variant="ghost" size="sm">
                     {isAdmin ? 'Admin' : 'Dashboard'}
+                  </Button>
+                </Link>
+              )}
+              {isAdmin && (
+                <Link to="/admin-analytics">
+                  <Button variant="ghost" size="sm">
+                    Analytics
                   </Button>
                 </Link>
               )}

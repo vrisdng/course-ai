@@ -4,6 +4,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  Copy,
   Ellipsis,
   Eye,
   FileText,
@@ -15,6 +16,7 @@ import {
   Trash2,
   UploadCloud,
   Users2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -31,6 +33,15 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -97,8 +108,19 @@ type Course = {
   code: string | null;
 };
 
+type AcademicTerm = {
+  id: string;
+  label: string;
+  semester: number;
+  academic_year_start: number;
+  academic_year_end: number;
+  sort_key: number;
+  is_active: boolean;
+};
+
 type MaterialStatus = 'pending' | 'processing' | 'completed' | 'failed';
 type AccessScope = 'course' | 'public' | 'private';
+type InviteStatus = 'created' | 'existing_invite' | 'already_enrolled' | 'invalid_email';
 
 type Material = {
   id: string;
@@ -111,7 +133,15 @@ type Material = {
   week_number: number | null;
   processing_status: MaterialStatus;
   access_scope: AccessScope;
+  academic_term_id: string | null;
   created_at: string;
+};
+
+type InviteResult = {
+  email: string;
+  status: InviteStatus;
+  inviteCode: string | null;
+  inviteLink: string | null;
 };
 
 const getFileType = (fileName: string) => {
@@ -143,13 +173,17 @@ export default function AdminDashboard() {
   const { profile } = useAuth();
 
   const [courses, setCourses] = useState<Course[]>([]);
+  const [academicTerms, setAcademicTerms] = useState<AcademicTerm[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
 
   const [uploadCourseId, setUploadCourseId] = useState<string>('');
+  const [uploadAcademicTermId, setUploadAcademicTermId] = useState<string>('');
   const [uploadAccessScope, setUploadAccessScope] = useState<AccessScope | ''>('');
   const [newCourseName, setNewCourseName] = useState('');
   const [newCourseCode, setNewCourseCode] = useState('');
   const [newCourseDescription, setNewCourseDescription] = useState('');
+  const [newTermSemester, setNewTermSemester] = useState<'1' | '2'>('1');
+  const [newTermAyStart, setNewTermAyStart] = useState<string>(String(new Date().getFullYear()));
 
   const [searchQuery, setSearchQuery] = useState('');
   const [courseFilter, setCourseFilter] = useState('all');
@@ -159,12 +193,21 @@ export default function AdminDashboard() {
   const [accessFilter, setAccessFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
 
-  const [file, setFile] = useState<File | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [currentUploadFileName, setCurrentUploadFileName] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
+  const [isLoadingTerms, setIsLoadingTerms] = useState(true);
   const [isLoadingMaterials, setIsLoadingMaterials] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isCreatingCourse, setIsCreatingCourse] = useState(false);
+  const [isCreatingTerm, setIsCreatingTerm] = useState(false);
+  const [activatingTermId, setActivatingTermId] = useState<string | null>(null);
+  const [addStudentsCourse, setAddStudentsCourse] = useState<Course | null>(null);
+  const [inviteEmailsInput, setInviteEmailsInput] = useState('');
+  const [isGeneratingInvites, setIsGeneratingInvites] = useState(false);
+  const [generatedInviteResults, setGeneratedInviteResults] = useState<InviteResult[]>([]);
+  const [inviteExpiresAt, setInviteExpiresAt] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cancelUploadRef = useRef(false);
@@ -207,12 +250,37 @@ export default function AdminDashboard() {
     setIsLoadingCourses(false);
   }, []);
 
+  const fetchAcademicTerms = useCallback(async () => {
+    setIsLoadingTerms(true);
+
+    const { data, error } = await supabase
+      .from('academic_terms')
+      .select('id, label, semester, academic_year_start, academic_year_end, sort_key, is_active')
+      .order('sort_key', { ascending: false });
+
+    if (error) {
+      toast.error('Failed to load academic terms');
+      setIsLoadingTerms(false);
+      return;
+    }
+
+    const nextTerms = (data || []) as AcademicTerm[];
+    setAcademicTerms(nextTerms);
+
+    const activeTermId = nextTerms.find((term) => term.is_active)?.id || nextTerms[0]?.id || '';
+    setUploadAcademicTermId((current) =>
+      current && nextTerms.some((term) => term.id === current) ? current : activeTermId
+    );
+
+    setIsLoadingTerms(false);
+  }, []);
+
   const fetchMaterials = useCallback(async () => {
     setIsLoadingMaterials(true);
 
     const { data, error } = await supabase
       .from('materials')
-      .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, access_scope, created_at')
+      .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, access_scope, academic_term_id, created_at')
       .order('created_at', { ascending: false })
       .limit(200);
 
@@ -232,6 +300,7 @@ export default function AdminDashboard() {
       const fallbackMaterials = (fallback.data || []).map((material: any) => ({
         ...material,
         access_scope: material.is_public ? 'public' : 'course',
+        academic_term_id: null,
       })) as Material[];
 
       setMaterials(fallbackMaterials);
@@ -245,8 +314,9 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     void fetchCourses();
+    void fetchAcademicTerms();
     void fetchMaterials();
-  }, [fetchCourses, fetchMaterials]);
+  }, [fetchAcademicTerms, fetchCourses, fetchMaterials]);
 
   const courseLabelById = useMemo(() => {
     return courses.reduce<Record<string, string>>((acc, course) => {
@@ -254,6 +324,13 @@ export default function AdminDashboard() {
       return acc;
     }, {});
   }, [courses]);
+
+  const termLabelById = useMemo(() => {
+    return academicTerms.reduce<Record<string, string>>((acc, term) => {
+      acc[term.id] = term.label;
+      return acc;
+    }, {});
+  }, [academicTerms]);
 
   const filteredMaterials = useMemo(() => {
     const now = new Date();
@@ -284,16 +361,20 @@ export default function AdminDashboard() {
     });
   }, [accessFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter, typeFilter]);
 
+  const getPendingFileKey = (candidate: File) =>
+    `${candidate.name}-${candidate.size}-${candidate.lastModified}`;
+
   const resetUploadSelection = () => {
-    setFile(null);
+    setPendingFiles([]);
+    setCurrentUploadFileName(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  const pickFile = (candidate: File | null) => {
-    if (!candidate) {
+  const addPendingFiles = (candidates: File[]) => {
+    if (!candidates.length) {
       return;
     }
 
@@ -301,17 +382,51 @@ export default function AdminDashboard() {
       toast.error('Select the course for this document first');
       return;
     }
-
-    if (!isFileSupported(candidate)) {
-      toast.error('Unsupported file type. Please upload a supported format.');
+    if (!uploadAcademicTermId) {
+      toast.error('Select the academic term first');
       return;
     }
 
-    setFile(candidate);
+    const unsupported: string[] = [];
+    let addedCount = 0;
+
+    setPendingFiles((previous) => {
+      const keys = new Set(previous.map((item) => getPendingFileKey(item)));
+      const next = [...previous];
+
+      for (const candidate of candidates) {
+        if (!isFileSupported(candidate)) {
+          unsupported.push(candidate.name);
+          continue;
+        }
+
+        const key = getPendingFileKey(candidate);
+        if (keys.has(key)) {
+          continue;
+        }
+
+        keys.add(key);
+        next.push(candidate);
+        addedCount += 1;
+      }
+
+      return next;
+    });
+
+    if (unsupported.length > 0) {
+      toast.error(`Skipped ${unsupported.length} unsupported file${unsupported.length === 1 ? '' : 's'}.`);
+    }
+
+    if (addedCount === 0 && unsupported.length === 0) {
+      toast.info('These files are already in your review list.');
+    }
   };
 
   const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    pickFile(event.target.files?.[0] || null);
+    addPendingFiles(Array.from(event.target.files || []));
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
@@ -338,9 +453,22 @@ export default function AdminDashboard() {
       toast.error('Select the course for this document first');
       return;
     }
+    if (!uploadAcademicTermId) {
+      toast.error('Select the academic term first');
+      return;
+    }
 
-    pickFile(event.dataTransfer.files?.[0] || null);
+    addPendingFiles(Array.from(event.dataTransfer.files || []));
   };
+
+  useEffect(() => {
+    setPendingFiles([]);
+    setCurrentUploadFileName(null);
+    setIsDragActive(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [uploadAcademicTermId, uploadCourseId]);
 
   const handleCreateCourse = async () => {
     if (!profile) {
@@ -381,6 +509,170 @@ export default function AdminDashboard() {
     toast.success('Course created');
   };
 
+  const formatAcademicTermLabel = (semester: number, ayStart: number) => {
+    const start = String(ayStart).slice(-2);
+    const end = String(ayStart + 1).slice(-2);
+    return `Semester ${semester} AY${start}/${end}`;
+  };
+
+  const handleCreateAcademicTerm = async () => {
+    if (!profile || profile.role !== 'admin') {
+      toast.error('Only admins can create academic terms');
+      return;
+    }
+
+    const ayStart = Number.parseInt(newTermAyStart, 10);
+    if (!Number.isInteger(ayStart) || ayStart < 2000 || ayStart > 2999) {
+      toast.error('Enter a valid academic year start (e.g. 2026)');
+      return;
+    }
+
+    const semester = Number.parseInt(newTermSemester, 10);
+    const label = formatAcademicTermLabel(semester, ayStart);
+
+    setIsCreatingTerm(true);
+    const { data, error } = await supabase
+      .from('academic_terms')
+      .insert({
+        label,
+        semester,
+        academic_year_start: ayStart,
+        academic_year_end: ayStart + 1,
+        is_active: false,
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      setIsCreatingTerm(false);
+      toast.error(error.message.includes('duplicate') ? 'This academic term already exists' : error.message);
+      return;
+    }
+
+    await fetchAcademicTerms();
+    if (data?.id) {
+      setUploadAcademicTermId(data.id);
+    }
+    setIsCreatingTerm(false);
+    toast.success(`${label} created`);
+  };
+
+  const handleSetActiveTerm = async (termId: string) => {
+    if (!profile || profile.role !== 'admin') {
+      toast.error('Only admins can set the active term');
+      return;
+    }
+
+    setActivatingTermId(termId);
+    const { error } = await supabase.rpc('set_active_academic_term', { target_term_id: termId });
+
+    if (error) {
+      setActivatingTermId(null);
+      toast.error(error.message);
+      return;
+    }
+
+    await fetchAcademicTerms();
+    setUploadAcademicTermId(termId);
+    setActivatingTermId(null);
+    toast.success('Active academic term updated');
+  };
+
+  const uploadSingleFile = async (
+    targetFile: File,
+    courseId: string,
+    accessScope: AccessScope,
+    uploaderId: string,
+    academicTermId: string
+  ) => {
+    const extension = targetFile.name.split('.').pop()?.toLowerCase() || '';
+    const isSupported = targetFile.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
+    if (!isSupported) {
+      throw new Error('Unsupported file type. Please upload a supported format.');
+    }
+
+    const filePath = `${courseId}/${crypto.randomUUID()}-${targetFile.name}`;
+    const { error: uploadError } = await supabaseAbortable.storage
+      .from('course-materials')
+      .upload(filePath, targetFile, { upsert: false });
+
+    if (cancelUploadRef.current) {
+      throw new Error('Upload cancelled');
+    }
+
+    if (uploadError) {
+      throw new Error(uploadError.message);
+    }
+
+    const { data: material, error: insertError } = await supabaseAbortable
+      .from('materials')
+      .insert({
+        course_id: courseId,
+        file_name: targetFile.name,
+        file_path: filePath,
+        file_type: getFileType(targetFile.name),
+        file_size: targetFile.size,
+        topic: null,
+        week_number: null,
+        processing_status: 'processing',
+        access_scope: accessScope,
+        is_public: accessScope === 'public',
+        academic_term_id: academicTermId,
+        uploaded_by: uploaderId,
+      })
+      .select('id')
+      .single();
+
+    if (insertError || !material) {
+      if (insertError?.message?.toLowerCase().includes('access_scope')) {
+        throw new Error('Database is missing access scope support. Run the latest migrations.');
+      }
+      throw new Error(insertError?.message || 'Failed to create material record');
+    }
+
+    if (cancelUploadRef.current) {
+      throw new Error('Upload cancelled');
+    }
+
+    const isTextLike = targetFile.type.startsWith('text/') || TEXT_EXTENSIONS.has(extension);
+    if (isTextLike) {
+      const text = await targetFile.text();
+      const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
+        body: {
+          materialId: material.id,
+          text,
+        },
+        signal: abortControllerRef.current?.signal,
+      });
+
+      if (ingestError) {
+        throw new Error(ingestError.message || 'Failed to ingest material');
+      }
+
+      if (ingestResult?.error) {
+        throw new Error(ingestResult.error);
+      }
+      return;
+    }
+
+    const { data: parseResult, error: parseError } = await supabaseAbortable.functions.invoke('parse-document', {
+      body: {
+        materialId: material.id,
+        filePath,
+        fileType: extension,
+      },
+      signal: abortControllerRef.current?.signal,
+    });
+
+    if (parseError) {
+      throw new Error(parseError.message || 'Failed to parse material');
+    }
+
+    if (parseResult?.error) {
+      throw new Error(parseResult.error);
+    }
+  };
+
   const handleUpload = async () => {
     if (!profile) {
       toast.error('Profile not loaded');
@@ -394,116 +686,80 @@ export default function AdminDashboard() {
       toast.error('Choose who can access this document');
       return;
     }
-    if (!file) {
-      toast.error('Choose a file to upload');
+    if (!uploadAcademicTermId) {
+      toast.error('Choose the academic term for this upload');
+      return;
+    }
+    if (pendingFiles.length === 0) {
+      toast.error('Choose at least one file to upload');
       return;
     }
 
-    const extension = file.name.split('.').pop()?.toLowerCase() || '';
-    const isSupported = file.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
-    if (!isSupported) {
-      toast.error('Unsupported file type. Please upload a supported format.');
-      return;
-    }
+    const queue = [...pendingFiles];
+    const courseId = uploadCourseId;
+    const accessScope = uploadAccessScope;
+    const uploaderId = profile.id;
+    const academicTermId = uploadAcademicTermId;
+    const failedFiles: File[] = [];
+    let successCount = 0;
+    let index = 0;
 
     setIsUploading(true);
     cancelUploadRef.current = false;
-    abortControllerRef.current = new AbortController();
 
     try {
-      const filePath = `${uploadCourseId}/${crypto.randomUUID()}-${file.name}`;
-      const { error: uploadError } = await supabaseAbortable.storage.from('course-materials').upload(filePath, file, { upsert: false });
-
-      if (cancelUploadRef.current) {
-        throw new Error('Upload cancelled');
-      }
-
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-
-      const { data: material, error: insertError } = await supabaseAbortable
-        .from('materials')
-        .insert({
-          course_id: uploadCourseId,
-          file_name: file.name,
-          file_path: filePath,
-          file_type: getFileType(file.name),
-          file_size: file.size,
-          topic: null,
-          week_number: null,
-          processing_status: 'processing',
-          access_scope: uploadAccessScope,
-          is_public: uploadAccessScope === 'public',
-          uploaded_by: profile.id,
-        })
-        .select('id')
-        .single();
-
-      if (insertError || !material) {
-        if (insertError?.message?.toLowerCase().includes('access_scope')) {
-          throw new Error('Database is missing access scope support. Run the latest migrations.');
+      for (index = 0; index < queue.length; index += 1) {
+        if (cancelUploadRef.current) {
+          break;
         }
-        throw new Error(insertError?.message || 'Failed to create material record');
+
+        const targetFile = queue[index];
+        setCurrentUploadFileName(targetFile.name);
+        abortControllerRef.current = new AbortController();
+
+        try {
+          await uploadSingleFile(targetFile, courseId, accessScope, uploaderId, academicTermId);
+          successCount += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Upload failed';
+          const isAborted = abortControllerRef.current?.signal.aborted;
+          if (message === 'Upload cancelled' || cancelUploadRef.current || isAborted) {
+            break;
+          }
+
+          failedFiles.push(targetFile);
+          toast.error(`${targetFile.name}: ${message}`);
+        } finally {
+          abortControllerRef.current = null;
+        }
       }
 
       if (cancelUploadRef.current) {
-        throw new Error('Upload cancelled');
-      }
-
-      const isTextLike = file.type.startsWith('text/') || TEXT_EXTENSIONS.has(extension);
-      if (isTextLike) {
-        const text = await file.text();
-        const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
-          body: {
-            materialId: material.id,
-            text,
-          },
-          signal: abortControllerRef.current?.signal,
-        });
-
-        if (ingestError) {
-          throw new Error(ingestError.message || 'Failed to ingest material');
-        }
-
-        if (ingestResult?.error) {
-          throw new Error(ingestResult.error);
-        }
-      } else {
-        const { data: parseResult, error: parseError } = await supabaseAbortable.functions.invoke('parse-document', {
-          body: {
-            materialId: material.id,
-            filePath,
-            fileType: extension,
-          },
-          signal: abortControllerRef.current?.signal,
-        });
-
-        if (parseError) {
-          throw new Error(parseError.message || 'Failed to parse material');
-        }
-
-        if (parseResult?.error) {
-          throw new Error(parseResult.error);
-        }
-      }
-
-      toast.success('Document uploaded and indexed');
-      resetUploadSelection();
-      await fetchMaterials();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Upload failed';
-      const isAborted = abortControllerRef.current?.signal.aborted;
-
-      if (message === 'Upload cancelled' || isAborted) {
+        setPendingFiles(queue.slice(index));
         toast.info('Upload cancelled');
-      } else {
-        toast.error(message);
+        return;
+      }
+
+      setPendingFiles(failedFiles);
+
+      if (successCount > 0) {
+        await fetchMaterials();
+      }
+
+      if (successCount > 0 && failedFiles.length === 0) {
+        toast.success(`${successCount} document${successCount === 1 ? '' : 's'} uploaded and indexed`);
+      } else if (successCount > 0) {
+        toast.success(`${successCount} document${successCount === 1 ? '' : 's'} uploaded`);
+      }
+
+      if (failedFiles.length > 0) {
+        toast.error(`${failedFiles.length} document${failedFiles.length === 1 ? '' : 's'} failed. Remove or retry.`);
       }
     } finally {
       setIsUploading(false);
       cancelUploadRef.current = false;
       abortControllerRef.current = null;
+      setCurrentUploadFileName(null);
     }
   };
 
@@ -532,6 +788,13 @@ export default function AdminDashboard() {
         {accessScopeLabel(scope)}
       </Badge>
     );
+  };
+
+  const removePendingFile = (fileKey: string) => {
+    if (isUploading) {
+      return;
+    }
+    setPendingFiles((previous) => previous.filter((candidate) => getPendingFileKey(candidate) !== fileKey));
   };
 
   const handleCancelUpload = () => {
@@ -605,8 +868,219 @@ export default function AdminDashboard() {
     return Array.from(new Set(materials.map((material) => material.file_type))).sort();
   }, [materials]);
 
+  const parsedInviteEmails = useMemo(() => {
+    return Array.from(
+      new Set(
+        inviteEmailsInput
+          .split(/[\s,;]+/)
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => value.length > 0)
+      )
+    );
+  }, [inviteEmailsInput]);
+
+  const closeAddStudentsDialog = () => {
+    setAddStudentsCourse(null);
+    setInviteEmailsInput('');
+    setGeneratedInviteResults([]);
+    setInviteExpiresAt(null);
+    setIsGeneratingInvites(false);
+  };
+
+  const copyText = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success('Copied');
+    } catch {
+      toast.error('Copy failed');
+    }
+  };
+
+  const inviteStatusLabel = (status: InviteStatus) => {
+    if (status === 'created') return 'Invite ready';
+    if (status === 'existing_invite') return 'Invite already exists';
+    if (status === 'already_enrolled') return 'Already enrolled';
+    return 'Invalid email';
+  };
+
+  const inviteStatusVariant = (status: InviteStatus): 'default' | 'secondary' | 'destructive' | 'outline' => {
+    if (status === 'created') return 'default';
+    if (status === 'existing_invite') return 'secondary';
+    if (status === 'already_enrolled') return 'outline';
+    return 'destructive';
+  };
+
+  const handleGenerateInvites = async () => {
+    if (!addStudentsCourse) {
+      return;
+    }
+    if (parsedInviteEmails.length === 0) {
+      toast.error('Enter at least one email');
+      return;
+    }
+
+    setIsGeneratingInvites(true);
+    setGeneratedInviteResults([]);
+    setInviteExpiresAt(null);
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) {
+      setIsGeneratingInvites(false);
+      toast.error('Please sign in again to generate invite codes');
+      return;
+    }
+
+    const { data, error } = await supabase.functions.invoke('manage-course-invites', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: {
+        courseId: addStudentsCourse.id,
+        emails: parsedInviteEmails,
+      },
+    });
+
+    if (error) {
+      setIsGeneratingInvites(false);
+      toast.error(error.message || 'Failed to create invite codes');
+      return;
+    }
+
+    if (data?.error) {
+      setIsGeneratingInvites(false);
+      toast.error(data.error);
+      return;
+    }
+
+    const expiresAt = typeof data?.expiresAt === 'string' ? data.expiresAt : null;
+    const baseUrl = window.location.origin;
+    const results = (Array.isArray(data?.results) ? data.results : []).map((item: any) => {
+      const inviteCode = typeof item?.inviteCode === 'string' ? item.inviteCode : null;
+      const email = typeof item?.email === 'string' ? item.email : '';
+      const inviteLink = inviteCode
+        ? `${baseUrl}/?invite=${encodeURIComponent(inviteCode)}&email=${encodeURIComponent(email)}`
+        : null;
+
+      return {
+        email,
+        status: item?.status as InviteStatus,
+        inviteCode,
+        inviteLink,
+      };
+    });
+
+    setInviteExpiresAt(expiresAt);
+    setGeneratedInviteResults(results);
+    setIsGeneratingInvites(false);
+
+    const readyCount = results.filter((result) => result.status === 'created' || result.status === 'existing_invite').length;
+    toast.success(`Invite codes ready for ${readyCount} student${readyCount === 1 ? '' : 's'}`);
+  };
+
+  const handleCopyAllInviteLinks = async () => {
+    const lines = generatedInviteResults
+      .filter((item) => item.inviteLink)
+      .map((item) => `${item.email}, ${item.inviteLink}`);
+
+    if (lines.length === 0) {
+      toast.error('No invite links available to copy');
+      return;
+    }
+
+    await copyText(lines.join('\n'));
+  };
+
   return (
     <MainLayout showFooter={false}>
+      <Dialog open={Boolean(addStudentsCourse)} onOpenChange={(open) => (open ? undefined : closeAddStudentsDialog())}>
+        <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Add Students</DialogTitle>
+            <DialogDescription>
+              {addStudentsCourse
+                ? `Generate invite links for ${addStudentsCourse.name}${addStudentsCourse.code ? ` (${addStudentsCourse.code})` : ''}.`
+                : 'Generate invite links for this course.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 overflow-y-auto pr-1">
+            <div className="space-y-2">
+              <Label htmlFor="invite-emails">Student emails</Label>
+              <Textarea
+                id="invite-emails"
+                value={inviteEmailsInput}
+                onChange={(event) => setInviteEmailsInput(event.target.value)}
+                placeholder={'student1@university.edu\nstudent2@university.edu'}
+                rows={6}
+                disabled={isGeneratingInvites}
+              />
+              <p className="text-xs text-muted-foreground">
+                Paste one email per line or separate by comma. {parsedInviteEmails.length} unique email
+                {parsedInviteEmails.length === 1 ? '' : 's'} detected.
+              </p>
+            </div>
+
+            {generatedInviteResults.length > 0 && (
+              <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">Generated invite results</p>
+                  <Button type="button" size="sm" variant="outline" onClick={handleCopyAllInviteLinks}>
+                    <Copy className="mr-2 h-4 w-4" />
+                    Copy All Links
+                  </Button>
+                </div>
+
+                {inviteExpiresAt && (
+                  <p className="text-xs text-muted-foreground">
+                    Expiry: {new Date(inviteExpiresAt).toLocaleString()}
+                  </p>
+                )}
+
+                <div className="max-h-72 space-y-2 overflow-y-auto">
+                  {generatedInviteResults.map((result) => (
+                    <div key={`${result.email}-${result.status}-${result.inviteCode ?? 'none'}`} className="rounded-md border border-border bg-background p-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm font-medium">{result.email}</p>
+                        <Badge variant={inviteStatusVariant(result.status)}>{inviteStatusLabel(result.status)}</Badge>
+                      </div>
+
+                      {result.inviteLink && (
+                        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <Input value={result.inviteLink} readOnly className="font-mono text-xs" />
+                          <Button type="button" size="sm" variant="outline" onClick={() => void copyText(result.inviteLink)}>
+                            <Copy className="mr-2 h-4 w-4" />
+                            Copy
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeAddStudentsDialog} disabled={isGeneratingInvites}>
+              Close
+            </Button>
+            <Button type="button" onClick={() => void handleGenerateInvites()} disabled={isGeneratingInvites || parsedInviteEmails.length === 0}>
+              {isGeneratingInvites ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                'Generate Invite Codes'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="container py-8">
         <div className="mb-6 flex flex-col gap-4 border-b border-border pb-6 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -698,12 +1172,13 @@ export default function AdminDashboard() {
                       <TableHead>Course Name</TableHead>
                       <TableHead>Code</TableHead>
                       <TableHead>Course ID</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {isLoadingCourses ? (
                       <TableRow>
-                        <TableCell colSpan={3}>
+                        <TableCell colSpan={4}>
                           <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             Loading courses...
@@ -712,7 +1187,7 @@ export default function AdminDashboard() {
                       </TableRow>
                     ) : courses.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
+                        <TableCell colSpan={4} className="text-center text-sm text-muted-foreground">
                           No courses created yet.
                         </TableCell>
                       </TableRow>
@@ -722,6 +1197,125 @@ export default function AdminDashboard() {
                           <TableCell className="font-medium">{course.name}</TableCell>
                           <TableCell>{course.code || '-'}</TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">{course.id}</TableCell>
+                          <TableCell>
+                            <div className="flex justify-end">
+                              <Button type="button" size="sm" variant="outline" onClick={() => setAddStudentsCourse(course)}>
+                                Add Students
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Academic Terms</CardTitle>
+                <CardDescription>
+                  The active term is used for retrieval automatically. Assign upload files to the right term.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {profile?.role === 'admin' && (
+                  <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="term-semester">Semester</Label>
+                      <Select value={newTermSemester} onValueChange={(value) => setNewTermSemester(value as '1' | '2')}>
+                        <SelectTrigger id="term-semester">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">Semester 1</SelectItem>
+                          <SelectItem value="2">Semester 2</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="term-ay-start">AY Start Year</Label>
+                      <Input
+                        id="term-ay-start"
+                        inputMode="numeric"
+                        value={newTermAyStart}
+                        onChange={(event) => setNewTermAyStart(event.target.value)}
+                        placeholder="2026"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2 flex items-end">
+                      <Button onClick={handleCreateAcademicTerm} disabled={isCreatingTerm} className="gap-2">
+                        {isCreatingTerm && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Create Academic Term
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Term</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {isLoadingTerms ? (
+                      <TableRow>
+                        <TableCell colSpan={3}>
+                          <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Loading academic terms...
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : academicTerms.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
+                          No academic terms configured.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      academicTerms.map((term) => (
+                        <TableRow key={term.id}>
+                          <TableCell className="font-medium">{term.label}</TableCell>
+                          <TableCell>
+                            {term.is_active ? (
+                              <Badge variant="default">Active</Badge>
+                            ) : (
+                              <Badge variant="outline">Inactive</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end">
+                              {profile?.role === 'admin' ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={term.is_active ? 'secondary' : 'outline'}
+                                  disabled={term.is_active || activatingTermId === term.id}
+                                  onClick={() => void handleSetActiveTerm(term.id)}
+                                >
+                                  {activatingTermId === term.id ? (
+                                    <>
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      Activating...
+                                    </>
+                                  ) : term.is_active ? (
+                                    'Active'
+                                  ) : (
+                                    'Set Active'
+                                  )}
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Admin only</span>
+                              )}
+                            </div>
+                          </TableCell>
                         </TableRow>
                       ))
                     )}
@@ -753,10 +1347,10 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                <div className="grid gap-4 rounded-lg border border-border bg-muted/20 p-4 lg:grid-cols-2">
+                <div className="grid gap-4 rounded-lg border border-border bg-muted/20 p-4 lg:grid-cols-3">
                   <div className="space-y-2">
                     <Label htmlFor="upload-course-select">Course this document belongs to</Label>
-                    <Select value={uploadCourseId} onValueChange={setUploadCourseId}>
+                    <Select value={uploadCourseId} onValueChange={setUploadCourseId} disabled={isUploading}>
                       <SelectTrigger id="upload-course-select">
                         <SelectValue placeholder="Select course for this upload" />
                       </SelectTrigger>
@@ -769,7 +1363,26 @@ export default function AdminDashboard() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      You must select a course before choosing a file.
+                      You must select a course before choosing files.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="upload-term-select">Academic term</Label>
+                    <Select value={uploadAcademicTermId} onValueChange={setUploadAcademicTermId} disabled={isUploading || isLoadingTerms}>
+                      <SelectTrigger id="upload-term-select">
+                        <SelectValue placeholder={isLoadingTerms ? 'Loading terms...' : 'Select academic term'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {academicTerms.map((term) => (
+                          <SelectItem key={term.id} value={term.id}>
+                            {term.label} {term.is_active ? '(Active)' : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      The active term is used in retrieval. You can still upload future-term documents now.
                     </p>
                   </div>
 
@@ -781,6 +1394,7 @@ export default function AdminDashboard() {
                         variant={uploadAccessScope === 'course' ? 'default' : 'outline'}
                         className="justify-start gap-2"
                         onClick={() => setUploadAccessScope('course')}
+                        disabled={isUploading}
                       >
                         <Users2 className="h-4 w-4" />
                         Course only
@@ -790,6 +1404,7 @@ export default function AdminDashboard() {
                         variant={uploadAccessScope === 'public' ? 'default' : 'outline'}
                         className="justify-start gap-2"
                         onClick={() => setUploadAccessScope('public')}
+                        disabled={isUploading}
                       >
                         <Globe2 className="h-4 w-4" />
                         Everyone
@@ -799,6 +1414,7 @@ export default function AdminDashboard() {
                         variant={uploadAccessScope === 'private' ? 'default' : 'outline'}
                         className="justify-start gap-2"
                         onClick={() => setUploadAccessScope('private')}
+                        disabled={isUploading}
                       >
                         <Lock className="h-4 w-4" />
                         Private
@@ -882,31 +1498,32 @@ export default function AdminDashboard() {
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   accept={ACCEPTED_FILE_TYPES}
                   className="hidden"
                   onChange={handleFileInputChange}
-                  disabled={isUploading || !uploadCourseId}
+                  disabled={isUploading || !uploadCourseId || !uploadAcademicTermId}
                 />
 
                 <div
                   role="button"
                   tabIndex={0}
                   onClick={() => {
-                    if (!uploadCourseId && !isUploading) {
-                      toast.error('Select the course for this document first');
+                    if ((!uploadCourseId || !uploadAcademicTermId) && !isUploading) {
+                      toast.error(uploadCourseId ? 'Select the academic term first' : 'Select the course for this document first');
                       return;
                     }
-                    if (!file && !isUploading && uploadCourseId) {
+                    if (!isUploading && uploadCourseId && uploadAcademicTermId) {
                       fileInputRef.current?.click();
                     }
                   }}
                   onKeyDown={(event) => {
-                    if (!uploadCourseId && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
+                    if ((!uploadCourseId || !uploadAcademicTermId) && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
-                      toast.error('Select the course for this document first');
+                      toast.error(uploadCourseId ? 'Select the academic term first' : 'Select the course for this document first');
                       return;
                     }
-                    if (!file && !isUploading && uploadCourseId && (event.key === 'Enter' || event.key === ' ')) {
+                    if (!isUploading && uploadCourseId && uploadAcademicTermId && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
                       fileInputRef.current?.click();
                     }
@@ -917,56 +1534,98 @@ export default function AdminDashboard() {
                   className={cn(
                     'rounded-lg border-2 border-dashed p-10 text-center transition-colors',
                     isDragActive ? 'border-primary bg-primary/5' : 'border-border bg-muted/20',
-                    !uploadCourseId && 'border-muted-foreground/30 bg-muted/10',
+                    (!uploadCourseId || !uploadAcademicTermId) && 'border-muted-foreground/30 bg-muted/10',
                     isUploading && 'pointer-events-none opacity-70'
                   )}
                 >
                   <UploadCloud className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-                  {file ? (
+                  {uploadCourseId && uploadAcademicTermId ? (
                     <>
-                      <p className="text-sm font-medium text-foreground">{file.name}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{formatBytes(file.size)}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access: {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'}
+                      <p className="text-sm text-muted-foreground">
+                        Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
                       </p>
-                      <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                        <Button size="sm" onClick={handleUpload} disabled={!uploadCourseId || !uploadAccessScope || isUploading}>
-                          {isUploading ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Uploading
-                            </>
-                          ) : (
-                            'Upload Document'
-                          )}
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={handleCancelUpload}>
-                          {isUploading ? 'Cancel Upload' : 'Clear'}
-                        </Button>
-                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Files are added to a review list first. Supported: PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
+                      </p>
+                      {isUploading && currentUploadFileName && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Uploading: {currentUploadFileName}
+                        </p>
+                      )}
                     </>
                   ) : (
                     <>
-                      {uploadCourseId ? (
-                        <>
-                          <p className="text-sm text-muted-foreground">
-                            Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
-                          </p>
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            Supports PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
-                          </p>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-sm font-medium text-foreground">Select a course first</p>
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            Then you can choose a document to upload.
-                          </p>
-                        </>
-                      )}
+                      <p className="text-sm font-medium text-foreground">
+                        {!uploadCourseId ? 'Select a course first' : 'Select an academic term first'}
+                      </p>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Then you can choose documents to upload.
+                      </p>
                     </>
                   )}
                 </div>
+
+                {pendingFiles.length > 0 && (
+                  <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-sm font-medium text-foreground">
+                        {pendingFiles.length} document{pendingFiles.length === 1 ? '' : 's'} ready
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access:{' '}
+                        {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'} • Term:{' '}
+                        {termLabelById[uploadAcademicTermId] || 'Not selected'}
+                      </p>
+                    </div>
+
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                      {pendingFiles.map((candidate) => {
+                        const fileKey = getPendingFileKey(candidate);
+                        return (
+                          <div
+                            key={fileKey}
+                            className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-foreground">{candidate.name}</p>
+                              <p className="text-xs text-muted-foreground">{formatBytes(candidate.size)}</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removePendingFile(fileKey)}
+                              disabled={isUploading}
+                              aria-label={`Remove ${candidate.name}`}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                      <Button size="sm" variant="outline" onClick={handleCancelUpload}>
+                        {isUploading ? 'Cancel Upload' : 'Clear List'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleUpload}
+                        disabled={!uploadCourseId || !uploadAccessScope || !uploadAcademicTermId || isUploading || pendingFiles.length === 0}
+                      >
+                        {isUploading ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          `Upload Selected (${pendingFiles.length})`
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -984,6 +1643,7 @@ export default function AdminDashboard() {
                       <TableHead>Document Name</TableHead>
                       <TableHead>Document Type</TableHead>
                       <TableHead>Document Date</TableHead>
+                      <TableHead>Academic Term</TableHead>
                       <TableHead>Course</TableHead>
                       <TableHead>Access</TableHead>
                       <TableHead>Status</TableHead>
@@ -994,7 +1654,7 @@ export default function AdminDashboard() {
                   <TableBody>
                     {isLoadingMaterials ? (
                       <TableRow>
-                        <TableCell colSpan={8}>
+                        <TableCell colSpan={9}>
                           <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             Loading documents...
@@ -1003,7 +1663,7 @@ export default function AdminDashboard() {
                       </TableRow>
                     ) : filteredMaterials.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8}>
+                        <TableCell colSpan={9}>
                           <div className="flex flex-col items-center justify-center py-6 text-center text-sm text-muted-foreground">
                             <FileText className="mb-2 h-5 w-5" />
                             No documents match your filters.
@@ -1016,6 +1676,7 @@ export default function AdminDashboard() {
                           <TableCell className="font-medium">{material.file_name}</TableCell>
                           <TableCell className="capitalize">{material.file_type}</TableCell>
                           <TableCell>{new Date(material.created_at).toLocaleDateString()}</TableCell>
+                          <TableCell>{material.academic_term_id ? termLabelById[material.academic_term_id] || 'Unknown term' : '-'}</TableCell>
                           <TableCell>{courseLabelById[material.course_id] || 'Unknown course'}</TableCell>
                           <TableCell>{renderAccessBadge(material.access_scope)}</TableCell>
                           <TableCell>{renderStatusBadge(material.processing_status)}</TableCell>

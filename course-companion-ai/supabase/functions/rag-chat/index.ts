@@ -9,7 +9,11 @@ const corsHeaders = {
 const MAX_CONVERSATIONS_PER_USER = 3;
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const CHAT_MODEL = "gemini-3-flash-preview";
-const CITATION_PIPELINE_VERSION = "2026-02-10-reliable-citations-v1";
+const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
+const HIGH_RECALL_MATCH_THRESHOLD = 0.35;
+const HIGH_RECALL_MATCH_COUNT = 18;
+const FINAL_MATCH_COUNT = 6;
+const CITATION_TOKEN_PATTERN = "<<cite:(\\d+)>>";
 
 interface ChatRequest {
   message: string;
@@ -28,6 +32,23 @@ interface RetrievedChunk {
   material_type?: string;
   document_name?: string;
   document_type?: string;
+}
+
+interface QueryEventInsert {
+  user_id: string;
+  conversation_id: string;
+  course_id: string;
+  academic_term_id: string | null;
+  user_message_id: string;
+  assistant_message_id: string;
+  query_text: string;
+  query_category: string;
+  retrieved_chunk_count: number;
+  citation_count: number;
+  citation_hit: boolean;
+  unresolved: boolean;
+  unresolved_reason: string | null;
+  latency_ms: number | null;
 }
 
 interface CitationSanitizationResult {
@@ -56,15 +77,52 @@ class HttpError extends Error {
   }
 }
 
-const NON_CITATION_PREVIOUS_WORDS = new Set([
-  "step",
-  "section",
-  "chapter",
-  "week",
-  "part",
-  "item",
-  "example",
-  "option",
+const AMBIGUOUS_QUERY_MARKERS = [
+  /\b(this|that|these|those)\b/i,
+  /\b(it|they|them)\b/i,
+  /\babove|below|earlier|previous|last one\b/i,
+  /\bwhat about\b/i,
+  /\bcan you explain this\b/i,
+  /\bmore on that\b/i,
+];
+
+const LEXICAL_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "for",
+  "from",
+  "if",
+  "in",
+  "into",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "s",
+  "such",
+  "t",
+  "that",
+  "the",
+  "their",
+  "then",
+  "there",
+  "these",
+  "they",
+  "this",
+  "to",
+  "was",
+  "will",
+  "with",
+  "you",
+  "your",
 ]);
 
 function stripTrailingSourcesSection(text: string): string {
@@ -86,39 +144,172 @@ function sourceLabel(chunk: RetrievedChunk): string {
   return `${name}${pageInfo}`;
 }
 
-function normalizeLegacyCitationMarkers(content: string, maxSourceNumber: number): string {
+function isLikelyAmbiguousQuestion(message: string, historyContext: string): boolean {
+  if (!historyContext.trim()) {
+    return false;
+  }
+
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+  const shortQuestion = wordCount <= 9 || trimmed.length <= 60;
+  const hasAmbiguousMarker = AMBIGUOUS_QUERY_MARKERS.some((pattern) => pattern.test(trimmed));
+
+  return shortQuestion || hasAmbiguousMarker;
+}
+
+function tokenizeForLexicalScore(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !LEXICAL_STOP_WORDS.has(token));
+}
+
+function lexicalOverlapScore(query: string, chunkText: string): number {
+  const queryTokens = Array.from(new Set(tokenizeForLexicalScore(query)));
+  if (queryTokens.length === 0) {
+    return 0;
+  }
+
+  const chunkTokens = new Set(tokenizeForLexicalScore(chunkText));
+  let overlap = 0;
+
+  for (const token of queryTokens) {
+    if (chunkTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap / queryTokens.length;
+}
+
+function dedupeRetrievedChunksByBestScore(chunks: RetrievedChunk[]): RetrievedChunk[] {
+  const byChunkId = new Map<string, RetrievedChunk>();
+
+  for (const chunk of chunks) {
+    const existing = byChunkId.get(chunk.id);
+    if (!existing || chunk.relevance_score > existing.relevance_score) {
+      byChunkId.set(chunk.id, chunk);
+    }
+  }
+
+  return Array.from(byChunkId.values());
+}
+
+function rerankRetrievedChunks(chunks: RetrievedChunk[], query: string, topK: number): RetrievedChunk[] {
+  const scored = chunks.map((chunk) => {
+    const semantic = Math.max(0, Math.min(1, chunk.relevance_score));
+    const lexical = lexicalOverlapScore(query, chunk.chunk_text);
+    const combinedScore = semantic * 0.72 + lexical * 0.28;
+    return { chunk, combinedScore };
+  });
+
+  scored.sort((a, b) => b.combinedScore - a.combinedScore);
+  return scored.slice(0, topK).map((entry) => entry.chunk);
+}
+
+function classifyQueryCategory(message: string): string {
+  const text = message.trim().toLowerCase();
+
+  if (!text) {
+    return "other";
+  }
+
+  if (/\b(compare|difference|versus|vs\.?|pros and cons)\b/.test(text)) {
+    return "comparison";
+  }
+
+  if (/\b(how do i|how to|steps|process|procedure|implement|apply)\b/.test(text)) {
+    return "how_to_process";
+  }
+
+  if (/\b(calculate|compute|equation|formula|derive|proof|solve)\b/.test(text)) {
+    return "calculation";
+  }
+
+  if (/\b(error|bug|issue|debug|fix|failing|doesn't work|not working)\b/.test(text)) {
+    return "troubleshooting";
+  }
+
+  if (/\b(what is|define|definition|concept|meaning|explain)\b/.test(text)) {
+    return "definition_concept";
+  }
+
+  if (/\b(when|where|who|which|list|name)\b/.test(text)) {
+    return "factual_lookup";
+  }
+
+  return "other";
+}
+
+function inferUnresolvedReason(options: {
+  retrievedChunkCount: number;
+  citationCount: number;
+  answer: string;
+}): string | null {
+  if (options.retrievedChunkCount === 0) {
+    return "no_retrieval";
+  }
+
+  if (options.citationCount === 0) {
+    return "no_citations";
+  }
+
+  const loweredAnswer = options.answer.toLowerCase();
+  const materialGapPattern = /(not (?:in|from) (?:the )?(?:provided )?(?:course )?materials|not available in (?:the )?(?:provided )?(?:course )?materials|cannot find this in (?:the )?materials)/;
+  if (materialGapPattern.test(loweredAnswer)) {
+    return "insufficient_materials";
+  }
+
+  return null;
+}
+
+function normalizeCitationTokens(content: string, maxSourceNumber: number): string {
   if (maxSourceNumber < 1) {
     return content;
   }
 
-  // Convert any existing square brackets to parentheses first to normalize
-  const normalized = content.replace(/\[([1-9]\d*)\]/g, "($1)");
-
-  return normalized.replace(/(\S)\s+([1-9]\d*)([.,;!?])?(?=\s|$)/g, (match, previousChar, rawNumber, punctuation, offset, fullText) => {
+  let normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
     const citationNumber = Number(rawNumber);
-    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
+    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
+      return "";
     }
-
-    const textBeforeMatch = fullText.slice(0, Number(offset) + 1);
-    const previousWord = textBeforeMatch.match(/([A-Za-z]+)\s*$/)?.[1]?.toLowerCase();
-    if (previousWord && NON_CITATION_PREVIOUS_WORDS.has(previousWord)) {
-      return match;
-    }
-
-    const punc = punctuation || "";
-    return `${previousChar} (${citationNumber})${punc}`;
+    return `<<cite:${citationNumber}>>`;
   });
+
+  // Backward compatibility: convert explicit [n] and (n) markers only.
+  normalized = normalized.replace(/\[([1-9]\d*)\]/g, (match, rawNumber) => {
+    const citationNumber = Number(rawNumber);
+    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
+      return match;
+    }
+    return `<<cite:${citationNumber}>>`;
+  });
+
+  normalized = normalized.replace(/\(([1-9]\d*)\)/g, (match, rawNumber) => {
+    const citationNumber = Number(rawNumber);
+    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
+      return match;
+    }
+    return `<<cite:${citationNumber}>>`;
+  });
+
+  return normalized;
 }
 
 function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: number): CitationSanitizationResult {
   const cleanedAnswer = stripTrailingSourcesSection(rawAnswer.trim());
-  const normalizedAnswer = normalizeLegacyCitationMarkers(cleanedAnswer, maxSourceNumber);
+  const normalizedAnswer = normalizeCitationTokens(cleanedAnswer, maxSourceNumber);
 
   const orderedOriginalCitationNumbers: number[] = [];
   const seenOriginalCitationNumbers = new Set<number>();
 
-  for (const match of normalizedAnswer.matchAll(/\((\d+)\)/g)) {
+  for (const match of normalizedAnswer.matchAll(new RegExp(CITATION_TOKEN_PATTERN, "g"))) {
     const citationNumber = Number(match[1]);
     if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxSourceNumber) {
       continue;
@@ -134,10 +325,10 @@ function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: number): 
     remappedCitationNumbers.set(originalCitationNumber, index + 1);
   });
 
-  const remappedAnswer = normalizedAnswer.replace(/\((\d+)\)/g, (_, rawNumber) => {
+  const remappedAnswer = normalizedAnswer.replace(new RegExp(CITATION_TOKEN_PATTERN, "g"), (_, rawNumber) => {
     const citationNumber = Number(rawNumber);
     const mappedCitationNumber = remappedCitationNumbers.get(citationNumber);
-    return mappedCitationNumber ? `(${mappedCitationNumber})` : "";
+    return mappedCitationNumber ? `<<cite:${mappedCitationNumber}>>` : "";
   });
 
   const cleanedRemappedAnswer = remappedAnswer
@@ -158,7 +349,7 @@ function buildCitationRewriteSourceContext(chunks: RetrievedChunk[]): string {
     .map((chunk, index) => {
       const sourceType = chunk.material_type || chunk.document_type || "document";
       return [
-        `(${index + 1}) ${sourceLabel(chunk)} (${sourceType})`,
+        `Source ${index + 1}: ${sourceLabel(chunk)} (${sourceType})`,
         clipText(chunk.chunk_text, 900),
       ].join("\n");
     })
@@ -348,6 +539,158 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
   return fullText.trim() || "I couldn't generate a response.";
 }
 
+async function rewriteQueryForRetrieval(options: {
+  geminiApiKey: string;
+  studentQuestion: string;
+  historyContext: string;
+}): Promise<string> {
+  if (!isLikelyAmbiguousQuestion(options.studentQuestion, options.historyContext)) {
+    return options.studentQuestion;
+  }
+
+  const rewriteSystemPrompt = `You rewrite vague follow-up student questions into standalone retrieval queries.
+Rules:
+1. Keep the original intent unchanged.
+2. Resolve ambiguous references using the conversation context.
+3. Return one concise standalone query.
+4. Do not answer the question.
+5. Return plain text only.`;
+
+  const rewriteUserPrompt = `Conversation context:
+${options.historyContext}
+
+Student question:
+${options.studentQuestion}
+
+Standalone retrieval query:`;
+
+  try {
+    const rewritten = await generateGeminiText({
+      geminiApiKey: options.geminiApiKey,
+      systemPrompt: rewriteSystemPrompt,
+      userPrompt: rewriteUserPrompt,
+      temperature: 0,
+      maxOutputTokens: 160,
+    });
+
+    const cleaned = rewritten
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!cleaned) {
+      return options.studentQuestion;
+    }
+
+    // Guardrail: avoid runaway rewrite output.
+    if (cleaned.length > 280) {
+      return options.studentQuestion;
+    }
+
+    return cleaned;
+  } catch (rewriteError) {
+    console.warn("Query rewrite failed, falling back to original question", rewriteError);
+    return options.studentQuestion;
+  }
+}
+
+async function embedQuery(geminiApiKey: string, query: string): Promise<number[]> {
+  const embeddingResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": geminiApiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: `models/${EMBEDDING_MODEL}`,
+      content: {
+        parts: [{ text: query }],
+      },
+      taskType: "RETRIEVAL_QUERY",
+      outputDimensionality: 1536,
+    }),
+  });
+
+  if (!embeddingResponse.ok) {
+    const errorText = await embeddingResponse.text();
+    console.error("Gemini Embedding API error:", embeddingResponse.status, errorText);
+
+    if (embeddingResponse.status === 429) {
+      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
+    }
+
+    throw new Error(`Embedding API error: ${embeddingResponse.status} - ${errorText}`);
+  }
+
+  const embeddingData = await embeddingResponse.json();
+  const queryEmbedding = embeddingData.embedding?.values;
+
+  if (!Array.isArray(queryEmbedding)) {
+    throw new Error("Embedding response did not include values");
+  }
+
+  return queryEmbedding as number[];
+}
+
+async function retrieveChunkCandidates(options: {
+  supabaseClient: ReturnType<typeof createClient>;
+  userId: string;
+  courseId: string;
+  embedding: number[];
+  threshold: number;
+  count: number;
+}): Promise<RetrievedChunk[]> {
+  const { data: chunks, error: searchError } = await options.supabaseClient.rpc(
+    "match_chunks",
+    {
+      query_embedding: options.embedding,
+      match_threshold: options.threshold,
+      match_count: options.count,
+      user_id: options.userId,
+      course_id_filter: options.courseId,
+    }
+  );
+
+  if (searchError) {
+    console.error("Vector search error:", searchError);
+    return [];
+  }
+
+  return (chunks || []) as RetrievedChunk[];
+}
+
+async function getActiveAcademicTermId(
+  supabaseClient: ReturnType<typeof createClient>,
+): Promise<string | null> {
+  const { data, error } = await supabaseClient
+    .from("academic_terms")
+    .select("id")
+    .eq("is_active", true)
+    .order("sort_key", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("Failed to load active academic term:", error);
+    return null;
+  }
+
+  return data?.id || null;
+}
+
+async function insertQueryEvent(
+  supabaseClient: ReturnType<typeof createClient>,
+  payload: QueryEventInsert,
+): Promise<void> {
+  const { error } = await supabaseClient
+    .from("query_events")
+    .insert(payload);
+
+  if (error) {
+    console.error("Failed to insert query analytics event:", error);
+  }
+}
+
 async function formatAnswerWithReliableCitations(options: {
   geminiApiKey: string;
   question: string;
@@ -370,9 +713,9 @@ Your job is to add reliable inline citations to an existing draft answer.
 
 Rules:
 1. Keep the answer content the same; only add or adjust citation markers.
-2. Use ONLY citation markers in the format (n) (parentheses).
+2. Use ONLY citation markers in the format <<cite:n>>.
 3. Only use citation numbers that exist in the provided source list.
-4. Place citations immediately after the sentence or claim they support, BEFORE the period.
+4. Place citations immediately after the sentence or claim they support.
 5. Do NOT add a sources section.
 6. Preserve the original markdown structure and wording as much as possible.
 7. Do not add, remove, or rename headings.
@@ -620,6 +963,7 @@ serve(async (req) => {
     const supabaseClient = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: authHeader } },
     });
+    const supabaseAdminClient = createClient(supabaseUrl, supabaseKey);
 
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser(
       authHeader.replace("Bearer ", "")
@@ -643,6 +987,8 @@ serve(async (req) => {
       );
     }
 
+    const requestStartedAt = Date.now();
+
     const resolved = await resolveConversation(
       supabaseClient,
       user.id,
@@ -652,6 +998,8 @@ serve(async (req) => {
     );
 
     const activeConversationId = resolved.conversationId;
+    const activeCourseId = resolved.courseId;
+    const activeAcademicTermId = await getActiveAcademicTermId(supabaseClient);
 
     console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
@@ -673,59 +1021,47 @@ serve(async (req) => {
           .join("\n")
       : "";
 
-    const embeddingResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": geminiApiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: `models/${EMBEDDING_MODEL}`,
-        content: {
-          parts: [{ text: trimmedMessage }],
-        },
-        taskType: "RETRIEVAL_QUERY",
-        outputDimensionality: 1536,
-      }),
+    const rewrittenQuery = await rewriteQueryForRetrieval({
+      geminiApiKey,
+      studentQuestion: trimmedMessage,
+      historyContext,
     });
 
-    if (!embeddingResponse.ok) {
-      const errorText = await embeddingResponse.text();
-      console.error("Gemini Embedding API error:", embeddingResponse.status, errorText);
-
-      if (embeddingResponse.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      throw new Error(`Embedding API error: ${embeddingResponse.status} - ${errorText}`);
-    }
-
-    const embeddingData = await embeddingResponse.json();
-    const queryEmbedding = embeddingData.embedding?.values;
-
-    if (!Array.isArray(queryEmbedding)) {
-      throw new Error("Embedding response did not include values");
-    }
-
-    const { data: chunks, error: searchError } = await supabaseClient.rpc(
-      "match_chunks",
-      {
-        query_embedding: queryEmbedding,
-        match_threshold: 0.5,
-        match_count: 5,
-        user_id: user.id,
-      }
+    const retrievalQueries = Array.from(
+      new Set(
+        [trimmedMessage, rewrittenQuery]
+          .map((query) => query.trim())
+          .filter((query) => query.length > 0)
+      )
     );
 
-    if (searchError) {
-      console.error("Vector search error:", searchError);
-    }
+    const embeddings = await Promise.all(
+      retrievalQueries.map((query) => embedQuery(geminiApiKey, query))
+    );
 
-    const retrievedChunks: RetrievedChunk[] = chunks || [];
-    console.log(`Retrieved ${retrievedChunks.length} relevant chunks`);
+    const retrievedChunkGroups = await Promise.all(
+      embeddings.map((embedding) =>
+        retrieveChunkCandidates({
+          supabaseClient,
+          userId: user.id,
+          courseId: activeCourseId,
+          embedding,
+          threshold: HIGH_RECALL_MATCH_THRESHOLD,
+          count: HIGH_RECALL_MATCH_COUNT,
+        })
+      )
+    );
+
+    const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
+    const retrievedChunks = rerankRetrievedChunks(
+      highRecallChunks,
+      rewrittenQuery || trimmedMessage,
+      FINAL_MATCH_COUNT
+    );
+
+    console.log(
+      `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${retrievedChunks.length}.`
+    );
 
     let ragContext = "";
     if (retrievedChunks.length > 0) {
@@ -748,12 +1084,12 @@ serve(async (req) => {
 
 IMPORTANT GUIDELINES:
 1. Base your answers on the provided course materials when available.
-2. ALWAYS cite your sources using numbered references in parentheses, e.g., (1), (2).
-3. Place citation markers (n) immediately after the sentence or claim they support, BEFORE the period.
+2. ALWAYS cite your sources using numbered tokens in this exact format: <<cite:1>>, <<cite:2>>.
+3. Place citation tokens immediately after the sentence or claim they support.
 4. If the information is not in the provided materials, say so clearly.
 5. Use markdown formatting for better readability.
 6. Be concise but thorough.
-7. Do NOT output a "Sources" section. Only use inline citations like (1).
+7. Do NOT output a "Sources" section. Only use inline citation tokens like <<cite:1>>.
 8. Use only citation numbers that correspond to provided sources.
 9. Keep formatting consistent across answers:
    - If the response is short (1-2 brief paragraphs), do not use headings.
@@ -766,8 +1102,8 @@ IMPORTANT GUIDELINES:
 11. Use bullet points for lists/comparisons; avoid mixing list styles in one section.
 
 Citation format examples (follow exactly):
-- "Virtual memory allows for larger address spaces (1)."
-- "The CPU schedules processes based on priority (2). This ensures efficiency (3)."
+- "Virtual memory allows for larger address spaces <<cite:1>>."
+- "The CPU schedules processes based on priority <<cite:2>>. This ensures efficiency <<cite:3>>."
 
 ${ragContext ? "The following are relevant excerpts from the course materials. Use these to answer the student's question:" : "No specific course materials were found for this query. Provide a helpful general response but note that this isn't from the course materials."}
 ${ragContext}${historySection}`;
@@ -799,16 +1135,18 @@ ${ragContext}${historySection}`;
               chunks: retrievedChunks,
             });
 
-            const { error: userMessageError } = await supabaseClient
+            const { data: userMessage, error: userMessageError } = await supabaseClient
               .from("messages")
               .insert({
                 conversation_id: activeConversationId,
                 role: "user",
                 content: trimmedMessage,
-              });
+              })
+              .select("id")
+              .single();
 
-            if (userMessageError) {
-              throw new Error(`Failed to save user message: ${userMessageError.message}`);
+            if (userMessageError || !userMessage) {
+              throw new Error(`Failed to save user message: ${userMessageError?.message || "Unknown error"}`);
             }
 
             const { data: assistantMessage, error: assistantMessageError } = await supabaseClient
@@ -846,6 +1184,31 @@ ${ragContext}${historySection}`;
               .from("conversations")
               .update({ updated_at: new Date().toISOString() })
               .eq("id", activeConversationId);
+
+            const queryCategory = classifyQueryCategory(trimmedMessage);
+            const unresolvedReason = inferUnresolvedReason({
+              retrievedChunkCount: retrievedChunks.length,
+              citationCount: citedChunks.length,
+              answer,
+            });
+            const unresolved = unresolvedReason !== null;
+
+            await insertQueryEvent(supabaseAdminClient, {
+              user_id: user.id,
+              conversation_id: activeConversationId,
+              course_id: activeCourseId,
+              academic_term_id: activeAcademicTermId,
+              user_message_id: userMessage.id,
+              assistant_message_id: assistantMessage.id,
+              query_text: trimmedMessage,
+              query_category: queryCategory,
+              retrieved_chunk_count: retrievedChunks.length,
+              citation_count: citedChunks.length,
+              citation_hit: citedChunks.length > 0,
+              unresolved,
+              unresolved_reason: unresolvedReason,
+              latency_ms: Date.now() - requestStartedAt,
+            });
 
             const citations = citedChunks.map((chunk, index) => ({
               id: `citation-${index + 1}`,

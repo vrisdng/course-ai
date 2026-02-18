@@ -35,7 +35,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
       return <Navigate to="/admin-dashboard" replace />;
     }
     if (profile?.role === 'lecturer') {
-      return <Navigate to="/lecturer" replace />;
+      return <Navigate to="/admin-dashboard" replace />;
     }
     return <Navigate to="/chat" replace />;
   }

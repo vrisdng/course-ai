@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { supabase } from '@/integrations/supabase/client';
@@ -7,7 +7,6 @@ import { getCitationKey } from './citations';
 import type { Citation, Conversation, Message } from './types';
 
 const MAX_CONVERSATIONS = 3;
-const ACTIVE_CONVERSATION_STORAGE_KEY = 'student_chat_active_conversation_id';
 const RAG_CHAT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rag-chat`;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -61,7 +60,7 @@ function parseMaybeJson(value: string): unknown {
   }
 }
 
-export function useStudentChat() {
+export function useStudentChat(routeConversationId: string | null = null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -70,8 +69,12 @@ export function useStudentChat() {
   const [highlightedCitationKey, setHighlightedCitationKey] = useState<string | null>(null);
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(routeConversationId);
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+  const initialPreferredConversationIdRef = useRef<string | null>(
+    routeConversationId
+  );
+  const previousRouteConversationIdRef = useRef<string | null>(routeConversationId);
 
   const fetchConversations = useCallback(async (preferredConversationId?: string | null) => {
     const { data, error } = await supabase
@@ -102,7 +105,7 @@ export function useStudentChat() {
         return current;
       }
 
-      return nextConversations[0]?.id || null;
+      return null;
     });
   }, []);
 
@@ -250,18 +253,34 @@ export function useStudentChat() {
   }, []);
 
   useEffect(() => {
-    const preferredConversationId = window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
-    void fetchConversations(preferredConversationId);
+    void fetchConversations(initialPreferredConversationIdRef.current);
   }, [fetchConversations]);
 
   useEffect(() => {
-    if (!currentConversationId) {
-      window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+    if (routeConversationId === previousRouteConversationIdRef.current) {
       return;
     }
 
-    window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, currentConversationId);
-  }, [currentConversationId]);
+    previousRouteConversationIdRef.current = routeConversationId;
+
+    if (!routeConversationId) {
+      setCurrentConversationId(null);
+      return;
+    }
+
+    setCurrentConversationId(routeConversationId);
+  }, [routeConversationId]);
+
+  useEffect(() => {
+    if (!routeConversationId || conversations.length === 0) {
+      return;
+    }
+
+    if (!conversations.some((conversation) => conversation.id === routeConversationId)) {
+      toast.error('Conversation not found.');
+      setCurrentConversationId(null);
+    }
+  }, [conversations, routeConversationId]);
 
   useEffect(() => {
     if (!currentConversationId) {
