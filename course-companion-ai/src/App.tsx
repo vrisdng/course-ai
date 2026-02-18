@@ -11,6 +11,7 @@ import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import StudentChat from "./pages/StudentChat";
 import AdminDashboard from "./pages/AdminDashboard";
+import AdminAnalytics from "./pages/AdminAnalytics";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -43,6 +44,14 @@ const App = () => (
               element={
                 <ProtectedRoute requiredRole={['admin', 'lecturer']}>
                   <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin-analytics"
+              element={
+                <ProtectedRoute requiredRole={['admin']}>
+                  <AdminAnalytics />
                 </ProtectedRoute>
               }
             />

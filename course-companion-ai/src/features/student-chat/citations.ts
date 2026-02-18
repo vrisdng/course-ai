@@ -1,40 +1,40 @@
 export const getCitationKey = (messageId: string, citationNumber: number) => `${messageId}-${citationNumber}`;
 
-const NON_CITATION_PREVIOUS_WORDS = new Set([
-  'step',
-  'section',
-  'chapter',
-  'week',
-  'part',
-  'item',
-  'example',
-  'option',
-]);
+function normalizeCitationTokens(content: string, maxCitationNumber?: number): string {
+  let normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
+    const citationNumber = Number(rawNumber);
+    if (!Number.isFinite(citationNumber) || citationNumber < 1) {
+      return '';
+    }
+    if (maxCitationNumber && citationNumber > maxCitationNumber) {
+      return '';
+    }
+    return `<<cite:${citationNumber}>>`;
+  });
 
-function normalizeLegacyCitationMarkers(content: string, maxCitationNumber?: number): string {
   if (!maxCitationNumber || maxCitationNumber < 1) {
-    return content;
+    return normalized;
   }
 
-  // Convert any existing square brackets to parentheses first to normalize
-  const normalized = content.replace(/\[([1-9]\d*)\]/g, '($1)');
-
-  return normalized.replace(/(\S)\s+([1-9]\d*)([.,;!?])?(?=\s|$)/g, (match, previousChar, rawNumber, punctuation, offset, fullText) => {
+  // Backward compatibility for older messages that used [n] or (n).
+  normalized = normalized.replace(/\[([1-9]\d*)\]/g, (match, rawNumber) => {
     const citationNumber = Number(rawNumber);
     if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxCitationNumber) {
       return match;
     }
+    return `<<cite:${citationNumber}>>`;
+  });
 
-    const textBeforeMatch = fullText.slice(0, Number(offset) + 1);
-    const previousWord = textBeforeMatch.match(/([A-Za-z]+)\s*$/)?.[1]?.toLowerCase();
-    if (previousWord && NON_CITATION_PREVIOUS_WORDS.has(previousWord)) {
+  normalized = normalized.replace(/\(([1-9]\d*)\)/g, (match, rawNumber) => {
+    const citationNumber = Number(rawNumber);
+    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxCitationNumber) {
       return match;
     }
-
-    const punc = punctuation || '';
-    return `${previousChar} (${citationNumber})${punc}`;
+    return `<<cite:${citationNumber}>>`;
   });
+
+  return normalized;
 }
 
 export const markdownWithCitationLinks = (content: string, maxCitationNumber?: number) =>
-  normalizeLegacyCitationMarkers(content, maxCitationNumber).replace(/\((\d+)\)/g, '[\\[$1\\]](citation:$1)');
+  normalizeCitationTokens(content, maxCitationNumber).replace(/<<cite:(\d+)>>/g, '[\\[$1\\]](citation:$1)');

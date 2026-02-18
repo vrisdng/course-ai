@@ -41,6 +41,13 @@ export function Header() {
                   </Button>
                 </Link>
               )}
+              {isAdmin && (
+                <Link to="/admin-analytics">
+                  <Button variant="ghost" size="sm">
+                    Analytics
+                  </Button>
+                </Link>
+              )}
 
               {!isLecturer && (
                 <Link to="/chat">
