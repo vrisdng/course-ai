@@ -12,7 +12,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 export function Header() {
-  const { user, profile, signOut, isLecturer, isAdmin } = useAuth();
+  const { user, profile, signOut, isAdmin } = useAuth();
 
   const getInitials = (name: string | null, email: string) => {
     if (name) {
@@ -34,10 +34,10 @@ export function Header() {
         <nav className="flex items-center gap-4">
           {user ? (
             <>
-              {(isAdmin || isLecturer) && (
+              {isAdmin && (
                 <Link to="/admin-dashboard">
                   <Button variant="ghost" size="sm">
-                    {isAdmin ? 'Admin' : 'Dashboard'}
+                    Admin
                   </Button>
                 </Link>
               )}
@@ -49,13 +49,11 @@ export function Header() {
                 </Link>
               )}
 
-              {!isLecturer && (
-                <Link to="/chat">
-                  <Button variant="ghost" size="sm">
-                    Chat
-                  </Button>
-                </Link>
-              )}
+              <Link to="/chat">
+                <Button variant="ghost" size="sm">
+                  Chat
+                </Button>
+              </Link>
               
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

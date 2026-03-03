@@ -7,7 +7,7 @@ interface Profile {
   user_id: string;
   email: string;
   full_name: string | null;
-  role: 'student' | 'lecturer' | 'admin';
+  role: 'student' | 'admin';
   avatar_url: string | null;
   courseEnrolled: string[];
   created_at: string;
@@ -23,7 +23,6 @@ interface AuthContextType {
   session: Session | null;
   profile: Profile | null;
   isLoading: boolean;
-  isLecturer: boolean;
   isAdmin: boolean;
   isStudent: boolean;
   signOut: () => Promise<void>;
@@ -127,7 +126,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     session,
     profile,
     isLoading,
-    isLecturer: profile?.role === 'lecturer',
     isAdmin: profile?.role === 'admin',
     isStudent: profile?.role === 'student',
     signOut,

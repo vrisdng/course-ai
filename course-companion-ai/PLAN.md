@@ -61,7 +61,7 @@ A professional AI-powered chatbot that helps students learn by answering questio
 ### 4. RAG-Powered AI Response System
 
 #### How RAG Works
-1. **Document Ingestion**: When lecturers upload materials, they are:
+1. **Document Ingestion**: When admins upload materials, they are:
    - Parsed (PDFs, transcripts, code files)
    - Split into semantic chunks (paragraphs, sections)
    - Converted to vector embeddings using AI
@@ -121,7 +121,7 @@ A professional AI-powered chatbot that helps students learn by answering questio
 - **Generation**: Lovable AI (Gemini) for answer synthesis
 
 ### Data Schema
-- **Users**: Students and lecturers with roles
+- **Users**: Students and admins with roles
 - **Courses**: Course information and settings
 - **Materials**: Metadata for uploaded documents
 - **Chunks**: Processed document segments with embeddings
@@ -161,4 +161,3 @@ A professional AI-powered chatbot that helps students learn by answering questio
 - Advanced analytics (topic clustering, gap analysis)
 - Video transcript support
 - Documentation for SSO integration
-

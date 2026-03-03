@@ -37,6 +37,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -120,6 +121,8 @@ type Material = {
   topic: string | null;
   week_number: number | null;
   processing_error?: string | null;
+  processing_progress?: number | null;
+  processing_stage?: string | null;
   processing_status: MaterialStatus;
   access_scope: AccessScope;
   academic_term_id: string | null;
@@ -140,6 +143,8 @@ type TranscriptSegment = {
   end_ms: number;
   text: string;
 };
+
+type UploadOutcome = 'indexed' | 'processing';
 
 const getFileType = (fileName: string) => {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -306,25 +311,29 @@ export default function AdminDashboard() {
     setIsLoadingTerms(false);
   }, []);
 
-  const fetchMaterials = useCallback(async () => {
-    setIsLoadingMaterials(true);
+  const fetchMaterials = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsLoadingMaterials(true);
+    }
 
     const { data, error } = await supabase
       .from('materials')
-      .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_status, access_scope, academic_term_id, created_at')
+      .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at')
       .order('created_at', { ascending: false })
       .limit(200);
 
     if (error) {
       const fallback = await supabase
         .from('materials')
-        .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_status, is_public, created_at')
+        .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, is_public, created_at')
         .order('created_at', { ascending: false })
         .limit(200);
 
       if (fallback.error) {
         toast.error('Failed to load materials');
-        setIsLoadingMaterials(false);
+        if (!options?.silent) {
+          setIsLoadingMaterials(false);
+        }
         return;
       }
 
@@ -335,12 +344,16 @@ export default function AdminDashboard() {
       })) as Material[];
 
       setMaterials(fallbackMaterials);
-      setIsLoadingMaterials(false);
+      if (!options?.silent) {
+        setIsLoadingMaterials(false);
+      }
       return;
     }
 
     setMaterials((data || []) as Material[]);
-    setIsLoadingMaterials(false);
+    if (!options?.silent) {
+      setIsLoadingMaterials(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -391,6 +404,23 @@ export default function AdminDashboard() {
       return searchMatch && courseMatch && typeMatch && statusMatch && accessMatch && dateMatch;
     });
   }, [accessFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter, typeFilter]);
+
+  const hasBackgroundProcessing = useMemo(
+    () => materials.some((material) => material.processing_status === 'processing'),
+    [materials]
+  );
+
+  useEffect(() => {
+    if (!hasBackgroundProcessing) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void fetchMaterials({ silent: true });
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [fetchMaterials, hasBackgroundProcessing]);
 
   const getPendingFileKey = (candidate: File) =>
     `${candidate.name}-${candidate.size}-${candidate.lastModified}`;
@@ -628,7 +658,7 @@ export default function AdminDashboard() {
     accessScope: AccessScope,
     uploaderId: string,
     academicTermId: string
-  ) => {
+  ): Promise<UploadOutcome> => {
     const extension = targetFile.name.split('.').pop()?.toLowerCase() || '';
     const isSupported = targetFile.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
     if (!isSupported) {
@@ -702,7 +732,7 @@ export default function AdminDashboard() {
       if (ingestResult?.error) {
         throw new Error(ingestResult.error);
       }
-      return;
+      return 'indexed';
     }
 
     if (isVideo) {
@@ -721,7 +751,7 @@ export default function AdminDashboard() {
       if (transcriptionResult?.error) {
         throw new Error(transcriptionResult.error);
       }
-      return;
+      return 'indexed';
     }
 
     const { data: parseResult, error: parseError } = await supabaseAbortable.functions.invoke('parse-document', {
@@ -740,6 +770,8 @@ export default function AdminDashboard() {
     if (parseResult?.error) {
       throw new Error(parseResult.error);
     }
+
+    return parseResult?.queued ? 'processing' : 'indexed';
   };
 
   const handleUpload = async () => {
@@ -770,7 +802,8 @@ export default function AdminDashboard() {
     const uploaderId = profile.id;
     const academicTermId = uploadAcademicTermId;
     const failedFiles: File[] = [];
-    let successCount = 0;
+    let indexedCount = 0;
+    let processingCount = 0;
     let index = 0;
 
     setIsUploading(true);
@@ -787,8 +820,12 @@ export default function AdminDashboard() {
         abortControllerRef.current = new AbortController();
 
         try {
-          await uploadSingleFile(targetFile, courseId, accessScope, uploaderId, academicTermId);
-          successCount += 1;
+          const outcome = await uploadSingleFile(targetFile, courseId, accessScope, uploaderId, academicTermId);
+          if (outcome === 'processing') {
+            processingCount += 1;
+          } else {
+            indexedCount += 1;
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Upload failed';
           const isAborted = abortControllerRef.current?.signal.aborted;
@@ -811,14 +848,21 @@ export default function AdminDashboard() {
 
       setPendingFiles(failedFiles);
 
-      if (successCount > 0) {
+      if (indexedCount > 0 || processingCount > 0) {
         await fetchMaterials();
       }
 
-      if (successCount > 0 && failedFiles.length === 0) {
-        toast.success(`${successCount} material${successCount === 1 ? '' : 's'} uploaded and indexed`);
-      } else if (successCount > 0) {
-        toast.success(`${successCount} material${successCount === 1 ? '' : 's'} uploaded`);
+      if (indexedCount > 0 && failedFiles.length === 0 && processingCount === 0) {
+        toast.success(`${indexedCount} material${indexedCount === 1 ? '' : 's'} uploaded and indexed`);
+      } else if (processingCount > 0 && indexedCount === 0 && failedFiles.length === 0) {
+        toast.success(`${processingCount} material${processingCount === 1 ? '' : 's'} uploaded and queued for background processing`);
+      } else if (indexedCount > 0 || processingCount > 0) {
+        const totalSuccessCount = indexedCount + processingCount;
+        toast.success(`${totalSuccessCount} material${totalSuccessCount === 1 ? '' : 's'} uploaded`);
+      }
+
+      if (processingCount > 0) {
+        toast.info(`${processingCount} material${processingCount === 1 ? '' : 's'} ${processingCount === 1 ? 'is' : 'are'} still processing in the background. This list refreshes automatically.`);
       }
 
       if (failedFiles.length > 0) {
@@ -937,25 +981,57 @@ export default function AdminDashboard() {
     await fetchMaterials();
   };
 
-  const renderStatusBadge = (status: MaterialStatus) => {
-    const icon = {
-      completed: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />,
-      processing: <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />,
-      pending: <Clock className="h-3.5 w-3.5 text-slate-500" />,
-      failed: <AlertCircle className="h-3.5 w-3.5 text-red-500" />,
-    }[status];
+  const getProcessingStageLabel = (material: Material) => {
+    const stage = material.processing_stage?.toLowerCase();
 
-    const variant: Record<MaterialStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-      completed: 'default',
-      processing: 'secondary',
-      pending: 'outline',
-      failed: 'destructive',
-    };
+    if (material.processing_status === 'failed') {
+      return 'Failed';
+    }
+
+    if (material.processing_status === 'completed') {
+      return 'Completed';
+    }
+
+    if (stage === 'queueing') return 'Queueing';
+    if (stage === 'extracting') return 'Extracting';
+    if (stage === 'chunking') return 'Chunking';
+    if (stage === 'embedding') return 'Embedding';
+    if (stage === 'transcribing') return 'Transcribing';
+    if (stage === 'finalizing') return 'Finalizing';
+
+    if (material.processing_status === 'processing') {
+      return 'Processing';
+    }
+
+    return 'Pending';
+  };
+
+  const renderStatusBadge = (material: Material) => {
+    const stageLabel = getProcessingStageLabel(material);
+    const icon =
+      material.processing_status === 'completed' ? (
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+      ) : material.processing_status === 'failed' ? (
+        <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+      ) : material.processing_status === 'pending' || material.processing_stage === 'queueing' ? (
+        <Clock className="h-3.5 w-3.5 text-slate-500" />
+      ) : (
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />
+      );
+
+    const variant: 'default' | 'secondary' | 'destructive' | 'outline' =
+      material.processing_status === 'completed'
+        ? 'default'
+        : material.processing_status === 'failed'
+          ? 'destructive'
+          : material.processing_status === 'pending'
+            ? 'outline'
+            : 'secondary';
 
     return (
-      <Badge variant={variant[status]} className="capitalize gap-1">
+      <Badge variant={variant} className="gap-1">
         {icon}
-        {status}
+        {stageLabel}
       </Badge>
     );
   };
@@ -1689,7 +1765,7 @@ export default function AdminDashboard() {
                         Drop your course materials here, or <span className="font-medium text-primary underline">click to browse</span>
                       </p>
                       <p className="mt-2 text-xs text-muted-foreground">
-                        Files are added to a review list first. PDF, DOC, and image files must be 15MB or smaller. MP4 and WebM video files must be 25MB or smaller and are transcribed with timestamps. Text and code files must stay under 500,000 characters. DOCX and PPTX are extracted locally.
+                        Files are added to a review list first. PDF, DOC, and image files must be 15MB or smaller. MP4 and WebM video files must be 25MB or smaller and are transcribed with timestamps. Text and code files must stay under 500,000 characters. DOCX and PPTX are extracted locally. Larger document parsing now continues in the background after upload.
                       </p>
                       {isUploading && currentUploadFileName && (
                         <p className="mt-2 text-xs text-muted-foreground">
@@ -1777,7 +1853,11 @@ export default function AdminDashboard() {
               <CardHeader className="pb-3">
                 <CardTitle>Uploaded Materials</CardTitle>
                 <CardDescription>
-                  {isLoadingCourses ? 'Loading courses...' : `${filteredMaterials.length} material${filteredMaterials.length === 1 ? '' : 's'} found`}
+                  {isLoadingCourses
+                    ? 'Loading courses...'
+                    : `${filteredMaterials.length} material${filteredMaterials.length === 1 ? '' : 's'} found${
+                        hasBackgroundProcessing ? ' • processing is active' : ''
+                      }`}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1835,8 +1915,16 @@ export default function AdminDashboard() {
                           <TableCell>{renderAccessBadge(material.access_scope)}</TableCell>
                           <TableCell>
                             <div className="space-y-1">
-                              {renderStatusBadge(material.processing_status)}
-                              {material.processing_status === 'failed' && material.processing_error ? (
+                              {renderStatusBadge(material)}
+                              {material.processing_status === 'processing' ? (
+                                <div className="max-w-56 space-y-1">
+                                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                    {/* <span>{getProcessingStageLabel(material)}</span> */}
+                                    {/* <span>{material.processing_progress ?? 0}%</span> */}
+                                  </div>
+                                  <Progress value={material.processing_progress ?? 0} className="h-2" />
+                                </div>
+                              ) : material.processing_status === 'failed' && material.processing_error ? (
                                 <p className="max-w-56 text-xs text-destructive">{material.processing_error}</p>
                               ) : null}
                             </div>

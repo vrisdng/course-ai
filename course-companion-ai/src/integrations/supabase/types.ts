@@ -276,6 +276,8 @@ export type Database = {
           id: string
           is_public: boolean
           processing_error: string | null
+          processing_progress: number | null
+          processing_stage: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
           thumbnail_path: string | null
           transcription_language: string | null
@@ -298,6 +300,8 @@ export type Database = {
           id?: string
           is_public?: boolean
           processing_error?: string | null
+          processing_progress?: number | null
+          processing_stage?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           thumbnail_path?: string | null
           transcription_language?: string | null
@@ -320,6 +324,8 @@ export type Database = {
           id?: string
           is_public?: boolean
           processing_error?: string | null
+          processing_progress?: number | null
+          processing_stage?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           thumbnail_path?: string | null
           transcription_language?: string | null
@@ -623,6 +629,34 @@ export type Database = {
       }
     }
     Functions: {
+      get_course_document_reference_stats: {
+        Args: { in_course_id: string; in_start_at?: string | null }
+        Returns: {
+          file_name: string
+          file_type: Database["public"]["Enums"]["document_type"]
+          last_referenced_at: string | null
+          material_id: string
+          question_count: number
+          reference_count: number
+          unique_student_count: number
+        }[]
+      }
+      get_course_keyword_stats: {
+        Args: { in_course_id: string; in_limit?: number; in_start_at?: string | null }
+        Returns: {
+          frequency: number
+          keyword: string
+        }[]
+      }
+      get_course_top_questions: {
+        Args: { in_course_id: string; in_limit?: number; in_start_at?: string | null }
+        Returns: {
+          frequency: number
+          last_asked_at: string | null
+          question: string
+          unique_student_count: number
+        }[]
+      }
       get_active_academic_term_id: {
         Args: Record<PropertyKey, never>
         Returns: string | null
@@ -632,15 +666,10 @@ export type Database = {
         Returns: string
       }
       is_admin: { Args: { check_user_id: string }; Returns: boolean }
-      is_course_lecturer: {
-        Args: { check_course_id: string; check_user_id: string }
-        Returns: boolean
-      }
       is_enrolled: {
         Args: { check_course_id: string; check_user_id: string }
         Returns: boolean
       }
-      is_lecturer: { Args: { check_user_id: string }; Returns: boolean }
       list_accessible_courses: {
         Args: Record<PropertyKey, never>
         Returns: {
@@ -701,7 +730,7 @@ export type Database = {
         | "other"
       material_access_scope: "course" | "public" | "private"
       processing_status: "pending" | "processing" | "completed" | "failed"
-      user_role: "student" | "lecturer" | "admin"
+      user_role: "student" | "admin"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -832,7 +861,7 @@ export const Constants = {
       document_type: ["pdf", "transcript", "code", "slides", "notes", "video", "other"],
       material_access_scope: ["course", "public", "private"],
       processing_status: ["pending", "processing", "completed", "failed"],
-      user_role: ["student", "lecturer", "admin"],
+      user_role: ["student", "admin"],
     },
   },
 } as const

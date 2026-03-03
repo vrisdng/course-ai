@@ -2,7 +2,7 @@
 
 ## Summary
 
-Implement a new course-material flow where a lecturer pastes a Panopto session link, your system resolves the session under end-user auth, ingests transcript/captions when available, falls back to your own transcription when captions are unavailable, embeds transcript chunks into `chunks`, and lets students ask questions about the video as if it were any other course material.
+Implement a new course-material flow where an admin pastes a Panopto session link, your system resolves the session under end-user auth, ingests transcript/captions when available, falls back to your own transcription when captions are unavailable, embeds transcript chunks into `chunks`, and lets students ask questions about the video as if it were any other course material.
 
 Default UX and policy locked in for this plan:
 - Playback UX: in-app embedded Panopto player at cited timestamp, with `Open in Panopto` fallback.
@@ -197,7 +197,7 @@ Request body:
 ```
 
 Responsibilities:
-1. Authenticate app user and verify lecturer/admin role.
+1. Authenticate app user and verify admin role.
 2. Resolve linked Panopto account for that user and tenant.
 3. Parse the pasted URL into normalized Panopto identifiers.
 4. Resolve the session via Panopto API.
@@ -296,7 +296,7 @@ No workaround in v1 except:
 ## Frontend Changes
 
 ## 1. New Panopto import form
-In the lecturer/admin materials UI:
+In the admin materials UI:
 - add “Import from Panopto” entry point beside file upload
 - fields:
   - Panopto URL
@@ -418,7 +418,7 @@ This asymmetry is intentional in v1 and must be documented in UX copy.
 ## Security And Permissions
 
 ## App-side authorization
-- Only lecturer/admin can import Panopto sessions into course materials.
+- Only admins can import Panopto sessions into course materials.
 - Imported transcript becomes visible to course-enrolled users in your app.
 - This is independent from Panopto playback permission.
 
@@ -474,7 +474,7 @@ This asymmetry is intentional in v1 and must be documented in UX copy.
 1. Implement Panopto OAuth connection flow.
 2. Add token storage and refresh logic.
 3. Add Panopto URL parsing and session resolution.
-4. Build the lecturer/admin “Import from Panopto” UI.
+4. Build the admin “Import from Panopto” UI.
 
 ## Phase 3: Captions-first transcript ingestion
 1. Implement caption retrieval using Panopto-supported APIs.

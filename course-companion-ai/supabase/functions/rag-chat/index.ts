@@ -907,16 +907,15 @@ async function hasCourseAccess(
     return true;
   }
 
-  const { data: staff, error: staffError } = await supabaseClient.rpc("is_course_lecturer", {
+  const { data: isAdmin, error: adminError } = await supabaseClient.rpc("is_admin", {
     check_user_id: userId,
-    check_course_id: checkCourseId,
   });
 
-  if (staffError) {
-    throw new Error(`Failed to verify staff role: ${staffError.message}`);
+  if (adminError) {
+    throw new Error(`Failed to verify admin role: ${adminError.message}`);
   }
 
-  return Boolean(staff);
+  return Boolean(isAdmin);
 }
 
 async function findDefaultCourseId(
@@ -966,22 +965,6 @@ async function findDefaultCourseId(
     }
 
     return anyCourse?.id || null;
-  }
-
-  if (profileRow.role === "lecturer") {
-    const { data: lecturerCourse, error: lecturerCourseError } = await supabaseClient
-      .from("courses")
-      .select("id")
-      .eq("created_by", profileRow.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (lecturerCourseError) {
-      throw new Error(`Failed to load lecturer course: ${lecturerCourseError.message}`);
-    }
-
-    return lecturerCourse?.id || null;
   }
 
   return null;

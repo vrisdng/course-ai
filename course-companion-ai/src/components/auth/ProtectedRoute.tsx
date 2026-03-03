@@ -4,7 +4,7 @@ import { Loader2 } from 'lucide-react';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  requiredRole?: 'student' | 'lecturer' | 'admin' | Array<'student' | 'lecturer' | 'admin'>;
+  requiredRole?: 'student' | 'admin' | Array<'student' | 'admin'>;
 }
 
 export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
@@ -32,9 +32,6 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
   if (allowedRoles && (!profile?.role || !allowedRoles.includes(profile.role))) {
     // Redirect to appropriate dashboard based on role
     if (profile?.role === 'admin') {
-      return <Navigate to="/admin-dashboard" replace />;
-    }
-    if (profile?.role === 'lecturer') {
       return <Navigate to="/admin-dashboard" replace />;
     }
     return <Navigate to="/chat" replace />;
