@@ -81,9 +81,8 @@ serve(async (req) => {
       new Set(emails.map(normalizeEmail).filter((email) => email.length > 0))
     ).slice(0, MAX_INVITES_PER_REQUEST);
 
-    const { data: canManage, error: canManageError } = await supabaseClient.rpc("is_course_lecturer", {
+    const { data: canManage, error: canManageError } = await supabaseClient.rpc("is_admin", {
       check_user_id: user.id,
-      check_course_id: courseId,
     });
 
     if (canManageError) {

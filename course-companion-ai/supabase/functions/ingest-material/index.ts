@@ -17,6 +17,10 @@ interface IngestRequest {
 const DEFAULT_CHUNK_SIZE = 1200;
 const DEFAULT_OVERLAP = 200;
 const MAX_TEXT_LENGTH = 500_000;
+const MAX_TEXT_CHUNKS = 250;
+const EMBEDDING_CONCURRENCY = 4;
+const EMBEDDING_PROGRESS_START = 70;
+const EMBEDDING_PROGRESS_END = 95;
 
 const chunkText = (text: string, chunkSize: number, overlap: number) => {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\t/g, " ");
@@ -38,35 +42,128 @@ const chunkText = (text: string, chunkSize: number, overlap: number) => {
   return chunks;
 };
 
-const embedText = async (chunk: string, geminiApiKey: string) => {
-  const embeddingResponse = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": geminiApiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "models/gemini-embedding-001",
-        content: { parts: [{ text: chunk }] },
-        taskType: "RETRIEVAL_DOCUMENT",
-        outputDimensionality: 1536,
-      }),
+const embedText = async (chunk: string, geminiApiKey: string, chunkIndex: number) => {
+  let lastStatus: number | null = null;
+  let lastErrorText = "";
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const embeddingResponse = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+      {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": geminiApiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "models/gemini-embedding-001",
+          content: { parts: [{ text: chunk }] },
+          taskType: "RETRIEVAL_DOCUMENT",
+          outputDimensionality: 1536,
+        }),
+      }
+    );
+
+    if (embeddingResponse.ok) {
+      const embeddingData = await embeddingResponse.json();
+      const values = embeddingData.embedding?.values;
+      if (!Array.isArray(values)) {
+        throw new Error(`Embedding response did not include values at chunk ${chunkIndex}`);
+      }
+      return values as number[];
     }
+
+    lastStatus = embeddingResponse.status;
+    lastErrorText = await embeddingResponse.text();
+    const isTransient = embeddingResponse.status === 429 || embeddingResponse.status >= 500;
+
+    if (!isTransient || attempt === 2) {
+      break;
+    }
+
+    const backoffMs = 1500 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
+  }
+
+  throw new Error(`Embedding failed at chunk ${chunkIndex}: ${lastStatus ?? "unknown"} - ${lastErrorText || "No response body"}`);
+};
+
+const embedChunksConcurrently = async (options: {
+  chunks: { text: string; start: number; end: number }[];
+  geminiApiKey: string;
+  materialId: string;
+  supabaseClient: ReturnType<typeof createClient>;
+}) => {
+  const rows: {
+    material_id: string;
+    chunk_index: number;
+    chunk_text: string;
+    embedding: number[];
+    start_position: number;
+    end_position: number;
+  }[] = new Array(options.chunks.length);
+
+  let nextIndex = 0;
+  let completedCount = 0;
+
+  const syncProgress = async () => {
+    const completionRatio =
+      options.chunks.length === 0 ? 1 : completedCount / options.chunks.length;
+    const nextProgress = Math.min(
+      EMBEDDING_PROGRESS_END,
+      Math.round(
+        EMBEDDING_PROGRESS_START +
+          (EMBEDDING_PROGRESS_END - EMBEDDING_PROGRESS_START) * completionRatio,
+      ),
+    );
+
+    await options.supabaseClient
+      .from("materials")
+      .update({
+        processing_status: "processing",
+        processing_stage: "embedding",
+        processing_progress: nextProgress,
+      })
+      .eq("id", options.materialId);
+  };
+
+  const worker = async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= options.chunks.length) {
+        return;
+      }
+
+      const chunk = options.chunks[currentIndex];
+      const embedding = await embedText(chunk.text, options.geminiApiKey, currentIndex);
+      rows[currentIndex] = {
+        material_id: options.materialId,
+        chunk_index: currentIndex,
+        chunk_text: chunk.text,
+        embedding,
+        start_position: chunk.start,
+        end_position: chunk.end,
+      };
+
+      completedCount += 1;
+      if (
+        completedCount === options.chunks.length ||
+        completedCount % EMBEDDING_CONCURRENCY === 0
+      ) {
+        await syncProgress();
+      }
+    }
+  };
+
+  const workers = Array.from(
+    { length: Math.min(EMBEDDING_CONCURRENCY, options.chunks.length) },
+    () => worker(),
   );
+  await Promise.all(workers);
 
-  if (!embeddingResponse.ok) {
-    const errorText = await embeddingResponse.text();
-    throw new Error(`Embedding API error: ${embeddingResponse.status} - ${errorText}`);
-  }
-
-  const embeddingData = await embeddingResponse.json();
-  const values = embeddingData.embedding?.values;
-  if (!Array.isArray(values)) {
-    throw new Error("Embedding response did not include values");
-  }
-  return values as number[];
+  return rows;
 };
 
 serve(async (req) => {
@@ -124,7 +221,7 @@ serve(async (req) => {
       );
     }
 
-    if (!["admin", "lecturer"].includes(profile.role)) {
+    if (profile.role !== "admin") {
       return new Response(
         JSON.stringify({ error: "Forbidden" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -150,7 +247,12 @@ serve(async (req) => {
 
     const { error: materialError } = await supabaseClient
       .from("materials")
-      .update({ processing_status: "processing", processing_error: null })
+      .update({
+        processing_status: "processing",
+        processing_error: null,
+        processing_stage: "chunking",
+        processing_progress: 45,
+      })
       .eq("id", materialId);
 
     if (materialError) {
@@ -167,27 +269,27 @@ serve(async (req) => {
       throw new Error("No text content to process");
     }
 
-    const rows: {
-      material_id: string;
-      chunk_index: number;
-      chunk_text: string;
-      embedding: number[];
-      start_position: number;
-      end_position: number;
-    }[] = [];
-
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunk = chunks[i];
-      const embedding = await embedText(chunk.text, geminiApiKey);
-      rows.push({
-        material_id: materialId,
-        chunk_index: i,
-        chunk_text: chunk.text,
-        embedding,
-        start_position: chunk.start,
-        end_position: chunk.end,
-      });
+    if (chunks.length > MAX_TEXT_CHUNKS) {
+      throw new Error(
+        `Text expands to ${chunks.length} chunks, which exceeds the processing limit of ${MAX_TEXT_CHUNKS}. Split the file into smaller parts.`,
+      );
     }
+
+    await supabaseClient
+      .from("materials")
+      .update({
+        processing_status: "processing",
+        processing_stage: "embedding",
+        processing_progress: EMBEDDING_PROGRESS_START,
+      })
+      .eq("id", materialId);
+
+    const rows = await embedChunksConcurrently({
+      chunks,
+      geminiApiKey,
+      materialId,
+      supabaseClient,
+    });
 
     const batchSize = 100;
     for (let i = 0; i < rows.length; i += batchSize) {
@@ -200,7 +302,12 @@ serve(async (req) => {
 
     await supabaseClient
       .from("materials")
-      .update({ processing_status: "completed", processing_error: null })
+      .update({
+        processing_status: "completed",
+        processing_error: null,
+        processing_stage: "completed",
+        processing_progress: 100,
+      })
       .eq("id", materialId);
 
     return new Response(
@@ -218,7 +325,12 @@ serve(async (req) => {
         const supabaseClient = createClient(supabaseUrl, supabaseKey);
         await supabaseClient
           .from("materials")
-          .update({ processing_status: "failed", processing_error: message })
+          .update({
+            processing_status: "failed",
+            processing_error: message,
+            processing_stage: "failed",
+            processing_progress: null,
+          })
           .eq("id", materialIdForError);
       } catch (updateError) {
         console.error("Failed to update material error status:", updateError);

@@ -47,11 +47,15 @@ export function useMaterials(courseId: string | null) {
   const [isLoading, setIsLoading] = useState(true);
   const [uploads, setUploads] = useState<Map<string, UploadProgress>>(new Map());
 
-  const fetchMaterials = useCallback(async () => {
+  const fetchMaterials = useCallback(async (options?: { silent?: boolean }) => {
     if (!courseId) {
       setMaterials([]);
       setIsLoading(false);
       return;
+    }
+
+    if (!options?.silent) {
+      setIsLoading(true);
     }
 
     const { data, error } = await supabase
@@ -66,12 +70,26 @@ export function useMaterials(courseId: string | null) {
     } else {
       setMaterials(data || []);
     }
-    setIsLoading(false);
+    if (!options?.silent) {
+      setIsLoading(false);
+    }
   }, [courseId]);
 
   useEffect(() => {
     fetchMaterials();
   }, [fetchMaterials]);
+
+  useEffect(() => {
+    if (!materials.some((material) => material.processing_status === 'processing')) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void fetchMaterials({ silent: true });
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [fetchMaterials, materials]);
 
   const updateUpload = (id: string, update: Partial<UploadProgress>) => {
     setUploads((prev) => {
@@ -243,12 +261,21 @@ export function useMaterials(courseId: string | null) {
         throw new Error(parseResult.error);
       }
 
+      const isQueuedForBackgroundProcessing =
+        processingFunction === 'parse-document' && parseResult?.queued;
+
       updateUpload(uploadId, {
-        stage: 'done',
-        progress: 100,
-        statusText: 'Ready for student questions',
+        stage: isQueuedForBackgroundProcessing ? 'parsing' : 'done',
+        progress: isQueuedForBackgroundProcessing ? 70 : 100,
+        statusText: isQueuedForBackgroundProcessing
+          ? 'Queued for background processing...'
+          : 'Ready for student questions',
       });
-      toast.success(`${file.name} is ready for questions`);
+      toast.success(
+        isQueuedForBackgroundProcessing
+          ? `${file.name} was uploaded and queued for background processing`
+          : `${file.name} is ready for questions`
+      );
 
       // Refresh materials list
       await fetchMaterials();

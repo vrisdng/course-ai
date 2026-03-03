@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.transcribe-video]
 verify_jwt = false
+
+[functions.process-material-job]
+verify_jwt = false

@@ -338,7 +338,7 @@ serve(async (req) => {
       .eq("user_id", user.id)
       .single();
 
-    if (profileError || !profile || !["admin", "lecturer"].includes(profile.role)) {
+    if (profileError || !profile || profile.role !== "admin") {
       return new Response(JSON.stringify({ error: "Forbidden" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -366,7 +366,12 @@ serve(async (req) => {
 
     await adminClient
       .from("materials")
-      .update({ processing_status: "processing", processing_error: null })
+      .update({
+        processing_status: "processing",
+        processing_error: null,
+        processing_stage: "transcribing",
+        processing_progress: 25,
+      })
       .eq("id", materialId);
 
     const { data: fileData, error: downloadError } = await adminClient.storage
@@ -401,6 +406,15 @@ serve(async (req) => {
     if (transcriptChunks.length === 0) {
       throw new Error("The transcript did not contain enough text to index");
     }
+
+    await adminClient
+      .from("materials")
+      .update({
+        processing_status: "processing",
+        processing_stage: "chunking",
+        processing_progress: 55,
+      })
+      .eq("id", materialId);
 
     await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
     await adminClient.from("chunks").delete().eq("material_id", materialId);
@@ -438,6 +452,15 @@ serve(async (req) => {
       page_number: null;
     }> = [];
 
+    await adminClient
+      .from("materials")
+      .update({
+        processing_status: "processing",
+        processing_stage: "embedding",
+        processing_progress: 80,
+      })
+      .eq("id", materialId);
+
     for (let i = 0; i < transcriptChunks.length; i += 1) {
       const chunk = transcriptChunks[i];
       const embedding = await embedText(chunk.text, geminiApiKey);
@@ -467,6 +490,8 @@ serve(async (req) => {
       .update({
         processing_status: "completed",
         processing_error: null,
+        processing_stage: "completed",
+        processing_progress: 100,
         duration_ms: transcription.durationMs,
         transcription_provider: transcription.provider,
         transcription_language: transcription.language,
@@ -499,7 +524,12 @@ serve(async (req) => {
         const adminClient = createClient(supabaseUrl, serviceRoleKey);
         await adminClient
           .from("materials")
-          .update({ processing_status: "failed", processing_error: message })
+          .update({
+            processing_status: "failed",
+            processing_error: message,
+            processing_stage: "failed",
+            processing_progress: null,
+          })
           .eq("id", materialIdForError);
       } catch (updateError) {
         console.error("Failed to update material error state:", updateError);
