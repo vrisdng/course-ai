@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import { Upload, FileText, Image, FileSpreadsheet } from 'lucide-react';
+import { Upload, FileText, Image, FileSpreadsheet, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface MaterialUploadZoneProps {
@@ -18,6 +18,8 @@ const FILE_ICONS: Record<string, React.ReactNode> = {
   doc: <FileText className="h-5 w-5 text-primary" />,
   docx: <FileText className="h-5 w-5 text-primary" />,
   pptx: <FileSpreadsheet className="h-5 w-5 text-warning" />,
+  mp4: <Video className="h-5 w-5 text-primary" />,
+  webm: <Video className="h-5 w-5 text-primary" />,
 };
 
 export function MaterialUploadZone({
@@ -86,7 +88,7 @@ export function MaterialUploadZone({
         Drag & drop files here, or click to browse
       </p>
       <p className="text-xs text-muted-foreground">
-        Files are added to a review list first. Supported: PDF, DOC/DOCX, PPTX, PNG/JPG/WEBP/GIF — Max 15MB each
+        Files are added to a review list first. PDF, DOC, and image files must be 15MB or smaller. MP4 and WebM video files must be 25MB or smaller and are transcribed with timestamps. DOCX and PPTX are extracted locally.
       </p>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">

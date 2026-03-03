@@ -5,6 +5,8 @@ export interface Citation {
   documentName: string;
   documentType: string;
   pageNumber?: number;
+  startMs?: number;
+  endMs?: number;
   relevanceScore: number;
 }
 
@@ -19,4 +21,5 @@ export interface Conversation {
   id: string;
   title: string;
   createdAt: string;
+  courseId: string;
 }
