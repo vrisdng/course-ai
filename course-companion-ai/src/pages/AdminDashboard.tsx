@@ -16,6 +16,7 @@ import {
   Trash2,
   UploadCloud,
   Users2,
+  Video,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -24,6 +25,12 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
+import {
+  getDeferredUploadValidationError,
+  getImmediateUploadValidationError,
+  isTextLikeUpload,
+  isVideoUpload,
+} from '@/lib/materialUpload';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -47,7 +54,7 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 const ACCEPTED_FILE_TYPES =
-  '.txt,.md,.markdown,.csv,.json,.ts,.tsx,.js,.jsx,.py,.java,.go,.rb,.rs,.c,.cpp,.html,.css,.sql,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif';
+  '.txt,.md,.markdown,.csv,.json,.ts,.tsx,.js,.jsx,.py,.java,.go,.rb,.rs,.c,.cpp,.html,.css,.sql,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm';
 
 const SUPPORTED_EXTENSIONS = new Set([
   'pdf',
@@ -78,28 +85,8 @@ const SUPPORTED_EXTENSIONS = new Set([
   'html',
   'css',
   'sql',
-]);
-
-const TEXT_EXTENSIONS = new Set([
-  'txt',
-  'md',
-  'markdown',
-  'csv',
-  'json',
-  'ts',
-  'tsx',
-  'js',
-  'jsx',
-  'py',
-  'java',
-  'go',
-  'rb',
-  'rs',
-  'c',
-  'cpp',
-  'html',
-  'css',
-  'sql',
+  'mp4',
+  'webm',
 ]);
 
 type Course = {
@@ -125,12 +112,14 @@ type InviteStatus = 'created' | 'existing_invite' | 'already_enrolled' | 'invali
 type Material = {
   id: string;
   course_id: string;
+  duration_ms?: number | null;
   file_name: string;
   file_path: string;
   file_type: string;
   file_size: number | null;
   topic: string | null;
   week_number: number | null;
+  processing_error?: string | null;
   processing_status: MaterialStatus;
   access_scope: AccessScope;
   academic_term_id: string | null;
@@ -144,12 +133,21 @@ type InviteResult = {
   inviteLink: string | null;
 };
 
+type TranscriptSegment = {
+  id: string;
+  segment_index: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+};
+
 const getFileType = (fileName: string) => {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   if (ext === 'pdf') return 'pdf';
   if (['vtt', 'srt'].includes(ext)) return 'transcript';
   if (['ppt', 'pptx', 'key'].includes(ext)) return 'slides';
   if (['doc', 'docx'].includes(ext)) return 'notes';
+  if (['mp4', 'webm'].includes(ext)) return 'video';
   if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) return 'other';
   if (['ts', 'tsx', 'js', 'jsx', 'py', 'java', 'go', 'rb', 'rs', 'c', 'cpp', 'sql'].includes(ext)) return 'code';
   if (['md', 'markdown', 'txt', 'csv', 'json'].includes(ext)) return 'notes';
@@ -162,6 +160,36 @@ const formatBytes = (bytes: number | null) => {
   const kb = bytes / 1024;
   if (kb < 1024) return `${kb.toFixed(1)} KB`;
   return `${(kb / 1024).toFixed(1)} MB`;
+};
+
+const formatDuration = (durationMs: number | null | undefined) => {
+  if (typeof durationMs !== 'number' || durationMs <= 0) {
+    return null;
+  }
+
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
+const formatTimestamp = (timestampMs: number) => {
+  const totalSeconds = Math.max(0, Math.floor(timestampMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 };
 
 const isFileSupported = (candidate: File) => {
@@ -208,6 +236,9 @@ export default function AdminDashboard() {
   const [isGeneratingInvites, setIsGeneratingInvites] = useState(false);
   const [generatedInviteResults, setGeneratedInviteResults] = useState<InviteResult[]>([]);
   const [inviteExpiresAt, setInviteExpiresAt] = useState<string | null>(null);
+  const [transcriptMaterial, setTranscriptMaterial] = useState<Material | null>(null);
+  const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
+  const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cancelUploadRef = useRef(false);
@@ -280,14 +311,14 @@ export default function AdminDashboard() {
 
     const { data, error } = await supabase
       .from('materials')
-      .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, access_scope, academic_term_id, created_at')
+      .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_status, access_scope, academic_term_id, created_at')
       .order('created_at', { ascending: false })
       .limit(200);
 
     if (error) {
       const fallback = await supabase
         .from('materials')
-        .select('id, course_id, file_name, file_path, file_type, file_size, topic, week_number, processing_status, is_public, created_at')
+        .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_status, is_public, created_at')
         .order('created_at', { ascending: false })
         .limit(200);
 
@@ -388,6 +419,7 @@ export default function AdminDashboard() {
     }
 
     const unsupported: string[] = [];
+    const oversized: string[] = [];
     let addedCount = 0;
 
     setPendingFiles((previous) => {
@@ -397,6 +429,12 @@ export default function AdminDashboard() {
       for (const candidate of candidates) {
         if (!isFileSupported(candidate)) {
           unsupported.push(candidate.name);
+          continue;
+        }
+
+        const sizeValidationError = getImmediateUploadValidationError(candidate);
+        if (sizeValidationError) {
+          oversized.push(candidate.name);
           continue;
         }
 
@@ -417,7 +455,13 @@ export default function AdminDashboard() {
       toast.error(`Skipped ${unsupported.length} unsupported file${unsupported.length === 1 ? '' : 's'}.`);
     }
 
-    if (addedCount === 0 && unsupported.length === 0) {
+    if (oversized.length > 0) {
+      toast.error(
+        `Skipped ${oversized.length} file${oversized.length === 1 ? '' : 's'} that exceed the upload limits for document or video processing.`
+      );
+    }
+
+    if (addedCount === 0 && unsupported.length === 0 && oversized.length === 0) {
       toast.info('These files are already in your review list.');
     }
   };
@@ -591,6 +635,11 @@ export default function AdminDashboard() {
       throw new Error('Unsupported file type. Please upload a supported format.');
     }
 
+    const uploadValidationError = await getDeferredUploadValidationError(targetFile);
+    if (uploadValidationError) {
+      throw new Error(uploadValidationError);
+    }
+
     const filePath = `${courseId}/${crypto.randomUUID()}-${targetFile.name}`;
     const { error: uploadError } = await supabaseAbortable.storage
       .from('course-materials')
@@ -634,7 +683,8 @@ export default function AdminDashboard() {
       throw new Error('Upload cancelled');
     }
 
-    const isTextLike = targetFile.type.startsWith('text/') || TEXT_EXTENSIONS.has(extension);
+    const isTextLike = isTextLikeUpload(targetFile);
+    const isVideo = isVideoUpload(targetFile);
     if (isTextLike) {
       const text = await targetFile.text();
       const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
@@ -651,6 +701,25 @@ export default function AdminDashboard() {
 
       if (ingestResult?.error) {
         throw new Error(ingestResult.error);
+      }
+      return;
+    }
+
+    if (isVideo) {
+      const { data: transcriptionResult, error: transcriptionError } = await supabaseAbortable.functions.invoke('transcribe-video', {
+        body: {
+          materialId: material.id,
+          filePath,
+        },
+        signal: abortControllerRef.current?.signal,
+      });
+
+      if (transcriptionError) {
+        throw new Error(transcriptionError.message || 'Failed to transcribe video');
+      }
+
+      if (transcriptionResult?.error) {
+        throw new Error(transcriptionResult.error);
       }
       return;
     }
@@ -747,13 +816,13 @@ export default function AdminDashboard() {
       }
 
       if (successCount > 0 && failedFiles.length === 0) {
-        toast.success(`${successCount} document${successCount === 1 ? '' : 's'} uploaded and indexed`);
+        toast.success(`${successCount} material${successCount === 1 ? '' : 's'} uploaded and indexed`);
       } else if (successCount > 0) {
-        toast.success(`${successCount} document${successCount === 1 ? '' : 's'} uploaded`);
+        toast.success(`${successCount} material${successCount === 1 ? '' : 's'} uploaded`);
       }
 
       if (failedFiles.length > 0) {
-        toast.error(`${failedFiles.length} document${failedFiles.length === 1 ? '' : 's'} failed. Remove or retry.`);
+        toast.error(`${failedFiles.length} material${failedFiles.length === 1 ? '' : 's'} failed. Remove or retry.`);
       }
     } finally {
       setIsUploading(false);
@@ -816,6 +885,33 @@ export default function AdminDashboard() {
     }
 
     window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleOpenTranscript = async (material: Material) => {
+    setTranscriptMaterial(material);
+    setTranscriptSegments([]);
+    setIsLoadingTranscript(true);
+
+    const { data, error } = await supabase
+      .from('material_transcript_segments')
+      .select('id, segment_index, start_ms, end_ms, text')
+      .eq('material_id', material.id)
+      .order('segment_index', { ascending: true });
+
+    if (error) {
+      toast.error(error.message || 'Failed to load transcript');
+      setIsLoadingTranscript(false);
+      return;
+    }
+
+    setTranscriptSegments((data || []) as TranscriptSegment[]);
+    setIsLoadingTranscript(false);
+  };
+
+  const closeTranscriptDialog = () => {
+    setTranscriptMaterial(null);
+    setTranscriptSegments([]);
+    setIsLoadingTranscript(false);
   };
 
   const handleDeleteMaterial = async (material: Material) => {
@@ -995,6 +1091,54 @@ export default function AdminDashboard() {
 
   return (
     <MainLayout showFooter={false}>
+      <Dialog open={Boolean(transcriptMaterial)} onOpenChange={(open) => (open ? undefined : closeTranscriptDialog())}>
+        <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Video Transcript</DialogTitle>
+            <DialogDescription>
+              {transcriptMaterial
+                ? `Timestamped transcript extracted from ${transcriptMaterial.file_name}.`
+                : 'Timestamped transcript extracted from this video.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="h-[60vh] space-y-3 overflow-y-auto pr-1">
+            {isLoadingTranscript ? (
+              <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading transcript...
+              </div>
+            ) : transcriptSegments.length === 0 ? (
+              <div className="rounded-md border border-border bg-muted/20 px-4 py-6 text-sm text-muted-foreground">
+                No transcript segments were found for this video yet.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {transcriptSegments.map((segment) => (
+                  <div key={segment.id} className="rounded-md border border-border bg-muted/20 px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-primary">
+                        {formatTimestamp(segment.start_ms)}-{formatTimestamp(segment.end_ms)}
+                      </span>
+                      <span className="text-xs text-muted-foreground">Segment {segment.segment_index + 1}</span>
+                    </div>
+                    <p className="text-sm text-foreground">{segment.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeTranscriptDialog}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={Boolean(addStudentsCourse)} onOpenChange={(open) => (open ? undefined : closeAddStudentsDialog())}>
         <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
           <DialogHeader>
@@ -1542,10 +1686,10 @@ export default function AdminDashboard() {
                   {uploadCourseId && uploadAcademicTermId ? (
                     <>
                       <p className="text-sm text-muted-foreground">
-                        Drop your documents here, or <span className="font-medium text-primary underline">click to browse</span>
+                        Drop your course materials here, or <span className="font-medium text-primary underline">click to browse</span>
                       </p>
                       <p className="mt-2 text-xs text-muted-foreground">
-                        Files are added to a review list first. Supported: PDF, DOCX, PPTX, images, markdown, code, CSV, JSON, and plain text.
+                        Files are added to a review list first. PDF, DOC, and image files must be 15MB or smaller. MP4 and WebM video files must be 25MB or smaller and are transcribed with timestamps. Text and code files must stay under 500,000 characters. DOCX and PPTX are extracted locally.
                       </p>
                       {isUploading && currentUploadFileName && (
                         <p className="mt-2 text-xs text-muted-foreground">
@@ -1559,7 +1703,7 @@ export default function AdminDashboard() {
                         {!uploadCourseId ? 'Select a course first' : 'Select an academic term first'}
                       </p>
                       <p className="mt-2 text-xs text-muted-foreground">
-                        Then you can choose documents to upload.
+                        Then you can choose course materials to upload.
                       </p>
                     </>
                   )}
@@ -1569,7 +1713,7 @@ export default function AdminDashboard() {
                   <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                       <p className="text-sm font-medium text-foreground">
-                        {pendingFiles.length} document{pendingFiles.length === 1 ? '' : 's'} ready
+                        {pendingFiles.length} material{pendingFiles.length === 1 ? '' : 's'} ready
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
                         Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access:{' '}
@@ -1631,9 +1775,9 @@ export default function AdminDashboard() {
 
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle>Uploaded Documents</CardTitle>
+                <CardTitle>Uploaded Materials</CardTitle>
                 <CardDescription>
-                  {isLoadingCourses ? 'Loading courses...' : `${filteredMaterials.length} document${filteredMaterials.length === 1 ? '' : 's'} found`}
+                  {isLoadingCourses ? 'Loading courses...' : `${filteredMaterials.length} material${filteredMaterials.length === 1 ? '' : 's'} found`}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1666,23 +1810,51 @@ export default function AdminDashboard() {
                         <TableCell colSpan={9}>
                           <div className="flex flex-col items-center justify-center py-6 text-center text-sm text-muted-foreground">
                             <FileText className="mb-2 h-5 w-5" />
-                            No documents match your filters.
+                            No materials match your filters.
                           </div>
                         </TableCell>
                       </TableRow>
                     ) : (
                       filteredMaterials.map((material) => (
                         <TableRow key={material.id}>
-                          <TableCell className="font-medium">{material.file_name}</TableCell>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              {material.file_type === 'video' ? <Video className="h-4 w-4 text-primary" /> : <FileText className="h-4 w-4 text-muted-foreground" />}
+                              <div className="min-w-0">
+                                <p className="truncate">{material.file_name}</p>
+                                {material.file_type === 'video' && formatDuration(material.duration_ms) ? (
+                                  <p className="text-xs text-muted-foreground">{formatDuration(material.duration_ms)}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                          </TableCell>
                           <TableCell className="capitalize">{material.file_type}</TableCell>
                           <TableCell>{new Date(material.created_at).toLocaleDateString()}</TableCell>
                           <TableCell>{material.academic_term_id ? termLabelById[material.academic_term_id] || 'Unknown term' : '-'}</TableCell>
                           <TableCell>{courseLabelById[material.course_id] || 'Unknown course'}</TableCell>
                           <TableCell>{renderAccessBadge(material.access_scope)}</TableCell>
-                          <TableCell>{renderStatusBadge(material.processing_status)}</TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              {renderStatusBadge(material.processing_status)}
+                              {material.processing_status === 'failed' && material.processing_error ? (
+                                <p className="max-w-56 text-xs text-destructive">{material.processing_error}</p>
+                              ) : null}
+                            </div>
+                          </TableCell>
                           <TableCell>{formatBytes(material.file_size)}</TableCell>
                           <TableCell>
                             <div className="flex justify-end gap-2">
+                              {material.file_type === 'video' ? (
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  onClick={() => handleOpenTranscript(material)}
+                                  disabled={material.processing_status !== 'completed'}
+                                  aria-label={`View transcript for ${material.file_name}`}
+                                >
+                                  <FileText className="h-4 w-4" />
+                                </Button>
+                              ) : null}
                               <Button variant="outline" size="icon" onClick={() => handleOpenMaterial(material)} aria-label="Open document">
                                 <Eye className="h-4 w-4" />
                               </Button>

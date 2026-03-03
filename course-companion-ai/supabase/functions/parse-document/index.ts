@@ -30,7 +30,11 @@ interface ExtractedSegment {
   pageNumber: number | null;
 }
 
-const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB raw (safe limit for base64 encoding)
+const INLINE_GEMINI_MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB raw (safe limit for base64 encoding)
+
+function usesInlineGeminiExtraction(fileExtension: string): boolean {
+  return ["pdf", "png", "jpg", "jpeg", "webp", "gif", "doc"].includes(fileExtension);
+}
 
 function decodeXmlEntities(value: string): string {
   return value
@@ -417,16 +421,16 @@ serve(async (req) => {
     const fileBytes = new Uint8Array(await fileData.arrayBuffer());
     console.log(`Downloaded file: ${(fileBytes.length / 1024).toFixed(1)}KB`);
 
-    if (fileBytes.length > MAX_FILE_SIZE) {
+    const ext = filePath.split(".").pop()?.toLowerCase() || fileType;
+    if (usesInlineGeminiExtraction(ext) && fileBytes.length > INLINE_GEMINI_MAX_FILE_SIZE) {
       throw new Error(
-        `File size (${(fileBytes.length / 1024 / 1024).toFixed(1)}MB) exceeds the 15MB limit for processing. Please split the document into smaller parts.`
+        `File size (${(fileBytes.length / 1024 / 1024).toFixed(1)}MB) exceeds the 15MB processing limit for PDF, DOC, and image files. Please split the document into smaller parts.`
       );
     }
 
     // Extract text based on file type
     let extractedSegments: ExtractedSegment[] = [];
     let extractedTextLength = 0;
-    const ext = filePath.split(".").pop()?.toLowerCase() || fileType;
 
     switch (ext) {
       case "pdf": {

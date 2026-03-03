@@ -1,17 +1,19 @@
 import { useEffect, useRef } from 'react';
-import { Loader2, Send } from 'lucide-react';
+import { Send, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 interface ChatComposerProps {
   input: string;
   isLoading: boolean;
   onInputChange: (nextValue: string) => void;
   onSend: () => void;
+  onStop: () => void;
 }
 
-export function ChatComposer({ input, isLoading, onInputChange, onSend }: ChatComposerProps) {
+export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -44,13 +46,20 @@ export function ChatComposer({ input, isLoading, onInputChange, onSend }: ChatCo
           />
 
           <Button
-            onClick={onSend}
-            disabled={!input.trim() || isLoading}
-            size="icon"
-            className="h-[44px] w-[44px] shrink-0"
+            onClick={isLoading ? onStop : onSend}
+            disabled={!isLoading && !input.trim()}
+            size={isLoading ? 'default' : 'icon'}
+            variant={isLoading ? 'outline' : 'default'}
+            className={cn(
+              'h-[44px] shrink-0',
+              isLoading ? 'gap-2 px-4' : 'w-[44px]'
+            )}
           >
             {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <>
+                <Square className="h-4 w-4 fill-current" />
+                <span>Stop</span>
+              </>
             ) : (
               <Send className="h-4 w-4" />
             )}

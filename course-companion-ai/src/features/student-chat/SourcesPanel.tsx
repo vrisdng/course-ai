@@ -6,6 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import { getCitationKey } from './citations';
+import { formatCitationLocator } from './time';
 import type { Citation, Message } from './types';
 
 interface SourcesPanelProps {
@@ -100,9 +101,11 @@ export function SourcesPanel({
                           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                             <FileText className="h-3 w-3" />
                             <span>
-                              {typeof citation.pageNumber === 'number'
-                                ? `Page ${citation.pageNumber}`
-                                : 'Page not available'}
+                              {formatCitationLocator({
+                                pageNumber: citation.pageNumber,
+                                startMs: citation.startMs,
+                                endMs: citation.endMs,
+                              })}
                             </span>
                           </div>
 
@@ -125,7 +128,11 @@ export function SourcesPanel({
                             ) : (
                               <ExternalLink className="h-3 w-3" />
                             )}
-                            {isOpening ? 'Opening file...' : 'View original file'}
+                            {isOpening
+                              ? 'Opening source...'
+                              : citation.documentType === 'video'
+                                ? 'Play cited segment'
+                                : 'View original file'}
                           </button>
                         </div>
                       </div>

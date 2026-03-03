@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { getDeferredUploadValidationError, isTextLikeUpload, isVideoUpload } from '@/lib/materialUpload';
 
 interface Material {
   id: string;
@@ -34,10 +35,11 @@ const ACCEPTED_TYPES: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'notes',
   'application/msword': 'notes',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'slides',
+  'video/mp4': 'video',
+  'video/webm': 'video',
 };
 
-const ACCEPTED_EXTENSIONS = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.pptx';
-const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15MB
+const ACCEPTED_EXTENSIONS = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.pptx,.mp4,.webm';
 
 export function useMaterials(courseId: string | null) {
   const { session } = useAuth();
@@ -116,6 +118,8 @@ export function useMaterials(courseId: string | null) {
       c: 'code',
       cpp: 'code',
       sql: 'code',
+      mp4: 'video',
+      webm: 'video',
     };
 
     const fileType = ACCEPTED_TYPES[file.type] || typeFromExtension[extension];
@@ -125,8 +129,9 @@ export function useMaterials(courseId: string | null) {
       return;
     }
 
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max is 15MB.`);
+    const uploadValidationError = await getDeferredUploadValidationError(file);
+    if (uploadValidationError) {
+      toast.error(uploadValidationError);
       return;
     }
 
@@ -208,15 +213,24 @@ export function useMaterials(courseId: string | null) {
         }, 5000),
       ];
 
-      // 3. Call parse-document edge function
+      const processingFunction = isTextLikeUpload(file)
+        ? 'ingest-material'
+        : isVideoUpload(file)
+          ? 'transcribe-video'
+          : 'parse-document';
       const { data: parseResult, error: parseError } = await supabase.functions.invoke(
-        'parse-document',
+        processingFunction,
         {
-          body: {
-            materialId: material.id,
-            filePath: storagePath,
-            fileType: ext,
-          },
+          body: isTextLikeUpload(file)
+            ? {
+                materialId: material.id,
+                text: await file.text(),
+              }
+            : {
+                materialId: material.id,
+                filePath: storagePath,
+                ...(isVideoUpload(file) ? {} : { fileType: ext }),
+              },
         }
       );
       processingHintTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));

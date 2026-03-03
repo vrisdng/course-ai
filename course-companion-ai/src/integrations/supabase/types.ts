@@ -61,11 +61,13 @@ export type Database = {
           chunk_text: string
           created_at: string
           embedding: string | null
+          end_ms: number | null
           end_position: number | null
           id: string
           material_id: string | null
           metadata: Json | null
           page_number: number | null
+          start_ms: number | null
           start_position: number | null
           student_document_id: string | null
         }
@@ -74,11 +76,13 @@ export type Database = {
           chunk_text: string
           created_at?: string
           embedding?: string | null
+          end_ms?: number | null
           end_position?: number | null
           id?: string
           material_id?: string | null
           metadata?: Json | null
           page_number?: number | null
+          start_ms?: number | null
           start_position?: number | null
           student_document_id?: string | null
         }
@@ -87,11 +91,13 @@ export type Database = {
           chunk_text?: string
           created_at?: string
           embedding?: string | null
+          end_ms?: number | null
           end_position?: number | null
           id?: string
           material_id?: string | null
           metadata?: Json | null
           page_number?: number | null
+          start_ms?: number | null
           start_position?: number | null
           student_document_id?: string | null
         }
@@ -262,6 +268,7 @@ export type Database = {
           academic_term_id: string
           course_id: string
           created_at: string
+          duration_ms: number | null
           file_name: string
           file_path: string
           file_size: number | null
@@ -270,6 +277,9 @@ export type Database = {
           is_public: boolean
           processing_error: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
+          thumbnail_path: string | null
+          transcription_language: string | null
+          transcription_provider: string | null
           topic: string | null
           updated_at: string
           uploaded_by: string | null
@@ -280,6 +290,7 @@ export type Database = {
           academic_term_id?: string
           course_id: string
           created_at?: string
+          duration_ms?: number | null
           file_name: string
           file_path: string
           file_size?: number | null
@@ -288,6 +299,9 @@ export type Database = {
           is_public?: boolean
           processing_error?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          thumbnail_path?: string | null
+          transcription_language?: string | null
+          transcription_provider?: string | null
           topic?: string | null
           updated_at?: string
           uploaded_by?: string | null
@@ -298,6 +312,7 @@ export type Database = {
           academic_term_id?: string
           course_id?: string
           created_at?: string
+          duration_ms?: number | null
           file_name?: string
           file_path?: string
           file_size?: number | null
@@ -306,6 +321,9 @@ export type Database = {
           is_public?: boolean
           processing_error?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          thumbnail_path?: string | null
+          transcription_language?: string | null
+          transcription_provider?: string | null
           topic?: string | null
           updated_at?: string
           uploaded_by?: string | null
@@ -331,6 +349,50 @@ export type Database = {
             columns: ["uploaded_by"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      material_transcript_segments: {
+        Row: {
+          confidence: number | null
+          created_at: string
+          end_ms: number
+          id: string
+          material_id: string
+          segment_index: number
+          speaker_label: string | null
+          start_ms: number
+          text: string
+        }
+        Insert: {
+          confidence?: number | null
+          created_at?: string
+          end_ms: number
+          id?: string
+          material_id: string
+          segment_index: number
+          speaker_label?: string | null
+          start_ms: number
+          text: string
+        }
+        Update: {
+          confidence?: number | null
+          created_at?: string
+          end_ms?: number
+          id?: string
+          material_id?: string
+          segment_index?: number
+          speaker_label?: string | null
+          start_ms?: number
+          text?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "material_transcript_segments_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "materials"
             referencedColumns: ["id"]
           },
         ]
@@ -579,6 +641,15 @@ export type Database = {
         Returns: boolean
       }
       is_lecturer: { Args: { check_user_id: string }; Returns: boolean }
+      list_accessible_courses: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          access_role: string
+          code: string | null
+          id: string
+          name: string
+        }[]
+      }
       match_chunks: {
         Args: {
           course_id_filter?: string
@@ -591,12 +662,14 @@ export type Database = {
           chunk_text: string
           document_name: string | null
           document_type: string | null
+          end_ms: number | null
           id: string
           material_id: string | null
           material_name: string | null
           material_type: string | null
           page_number: number | null
           relevance_score: number
+          start_ms: number | null
           student_document_id: string | null
         }[]
       }
@@ -624,6 +697,7 @@ export type Database = {
         | "code"
         | "slides"
         | "notes"
+        | "video"
         | "other"
       material_access_scope: "course" | "public" | "private"
       processing_status: "pending" | "processing" | "completed" | "failed"
@@ -755,7 +829,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      document_type: ["pdf", "transcript", "code", "slides", "notes", "other"],
+      document_type: ["pdf", "transcript", "code", "slides", "notes", "video", "other"],
       material_access_scope: ["course", "public", "private"],
       processing_status: ["pending", "processing", "completed", "failed"],
       user_role: ["student", "lecturer", "admin"],

@@ -4,9 +4,9 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
 import { getCitationKey } from './citations';
+import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
 
-const MAX_CONVERSATIONS = 3;
 const RAG_CHAT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rag-chat`;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -14,6 +14,13 @@ interface RagChatFinalPayload {
   answer: string;
   citations: Citation[];
   conversationId: string;
+}
+
+interface AccessibleCourse {
+  id: string;
+  name: string;
+  code: string | null;
+  accessRole: string;
 }
 
 interface ParsedSseEvent {
@@ -68,6 +75,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [showSidePanel, setShowSidePanel] = useState(true);
   const [highlightedCitationKey, setHighlightedCitationKey] = useState<string | null>(null);
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
+  const [activeVideoSource, setActiveVideoSource] = useState<ActiveVideoSource | null>(null);
+  const [availableCourses, setAvailableCourses] = useState<AccessibleCourse[]>([]);
+  const [isLoadingCourses, setIsLoadingCourses] = useState(true);
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(routeConversationId);
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
@@ -75,13 +86,55 @@ export function useStudentChat(routeConversationId: string | null = null) {
     routeConversationId
   );
   const previousRouteConversationIdRef = useRef<string | null>(routeConversationId);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const activeRequestIdRef = useRef(0);
+  const activeAssistantMessageIdRef = useRef<string | null>(null);
 
-  const fetchConversations = useCallback(async (preferredConversationId?: string | null) => {
+  const cancelActiveRequest = useCallback(() => {
+    activeRequestIdRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsLoading(false);
+  }, []);
+
+  const fetchAccessibleCourses = useCallback(async () => {
+    setIsLoadingCourses(true);
+
+    const { data, error } = await supabase.rpc('list_accessible_courses');
+
+    if (error) {
+      console.error('Failed to load accessible courses:', error);
+      toast.error('Failed to load your course list');
+      setIsLoadingCourses(false);
+      return;
+    }
+
+    const nextCourses: AccessibleCourse[] = (data || []).map((course) => ({
+      id: course.id,
+      name: course.name,
+      code: course.code,
+      accessRole: course.access_role,
+    }));
+
+    setAvailableCourses(nextCourses);
+    setSelectedCourseId((current) => {
+      if (current && nextCourses.some((course) => course.id === current)) {
+        return current;
+      }
+
+      return nextCourses[0]?.id || null;
+    });
+    setIsLoadingCourses(false);
+  }, []);
+
+  const fetchConversations = useCallback(async (
+    preferredConversationId?: string | null,
+    options?: { requestId?: number }
+  ) => {
     const { data, error } = await supabase
       .from('conversations')
-      .select('id, title, created_at')
-      .order('updated_at', { ascending: false })
-      .limit(MAX_CONVERSATIONS);
+      .select('id, title, created_at, course_id')
+      .order('updated_at', { ascending: false });
 
     if (error) {
       console.error('Failed to load conversations:', error);
@@ -90,6 +143,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
     const nextConversations: Conversation[] = (data || []).map((conversation) => ({
       id: conversation.id,
+      courseId: conversation.course_id,
       title: conversation.title || 'Untitled conversation',
       createdAt: conversation.created_at,
     }));
@@ -97,6 +151,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setConversations(nextConversations);
 
     setCurrentConversationId((current) => {
+      if (options?.requestId && activeRequestIdRef.current !== options.requestId) {
+        return current;
+      }
+
       if (preferredConversationId && nextConversations.some((conversation) => conversation.id === preferredConversationId)) {
         return preferredConversationId;
       }
@@ -127,6 +185,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
       setMessages([]);
       setSelectedMessage(null);
       setHighlightedCitationKey(null);
+      setActiveVideoSource(null);
       return;
     }
 
@@ -143,14 +202,14 @@ export function useStudentChat(routeConversationId: string | null = null) {
     const citationsSafe = citationRows || [];
     const chunkIds = Array.from(new Set(citationsSafe.map((citation) => citation.chunk_id)));
 
-    const chunkById: Record<string, { pageNumber: number | null; materialId: string | null; studentDocumentId: string | null }> = {};
+    const chunkById: Record<string, { pageNumber: number | null; startMs: number | null; endMs: number | null; materialId: string | null; studentDocumentId: string | null }> = {};
     const materialById: Record<string, { fileName: string; fileType: string }> = {};
     const studentDocumentById: Record<string, { fileName: string; fileType: string }> = {};
 
     if (chunkIds.length > 0) {
       const { data: chunkRows, error: chunksError } = await supabase
         .from('chunks')
-        .select('id, page_number, material_id, student_document_id')
+        .select('id, page_number, start_ms, end_ms, material_id, student_document_id')
         .in('id', chunkIds);
 
       if (chunksError) {
@@ -159,6 +218,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
         for (const chunk of chunkRows || []) {
           chunkById[chunk.id] = {
             pageNumber: chunk.page_number,
+            startMs: chunk.start_ms,
+            endMs: chunk.end_ms,
             materialId: chunk.material_id,
             studentDocumentId: chunk.student_document_id,
           };
@@ -230,7 +291,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
         excerpt: citation.excerpt || '',
         documentName: material?.fileName || studentDocument?.fileName || 'Unknown document',
         documentType: material?.fileType || studentDocument?.fileType || 'document',
-        pageNumber: chunk?.pageNumber || undefined,
+        pageNumber: chunk?.pageNumber ?? undefined,
+        startMs: chunk?.startMs ?? undefined,
+        endMs: chunk?.endMs ?? undefined,
         relevanceScore: citation.relevance_score ?? 0,
       };
 
@@ -250,7 +313,12 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setMessages(hydratedMessages);
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
+    setActiveVideoSource(null);
   }, []);
+
+  useEffect(() => {
+    void fetchAccessibleCourses();
+  }, [fetchAccessibleCourses]);
 
   useEffect(() => {
     void fetchConversations(initialPreferredConversationIdRef.current);
@@ -284,6 +352,20 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   useEffect(() => {
     if (!currentConversationId) {
+      if (!selectedCourseId && availableCourses.length > 0) {
+        setSelectedCourseId(availableCourses[0].id);
+      }
+      return;
+    }
+
+    const activeConversation = conversations.find((conversation) => conversation.id === currentConversationId);
+    if (activeConversation && activeConversation.courseId !== selectedCourseId) {
+      setSelectedCourseId(activeConversation.courseId);
+    }
+  }, [availableCourses, conversations, currentConversationId, selectedCourseId]);
+
+  useEffect(() => {
+    if (!currentConversationId) {
       setMessages([]);
       return;
     }
@@ -293,9 +375,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return;
-
-    if (!currentConversationId && conversations.length >= MAX_CONVERSATIONS) {
-      toast.error(`Conversation limit reached (max ${MAX_CONVERSATIONS}). Continue an existing conversation.`);
+    if (!currentConversationId && !selectedCourseId) {
+      toast.error('Select a course before starting a new chat');
       return;
     }
 
@@ -309,6 +390,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+
+    const requestId = activeRequestIdRef.current + 1;
+    activeRequestIdRef.current = requestId;
+    abortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    activeAssistantMessageIdRef.current = assistantMessageId;
 
     try {
       setMessages((prev) => [
@@ -337,9 +425,11 @@ export function useStudentChat(routeConversationId: string | null = null) {
           apikey: SUPABASE_PUBLISHABLE_KEY,
           'Content-Type': 'application/json',
         },
+        signal: abortController.signal,
         body: JSON.stringify({
           message: userMessage.content,
           conversationId: currentConversationId,
+          courseId: selectedCourseId,
         }),
       });
 
@@ -374,7 +464,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
               ? String((parsed as { text?: unknown }).text || '')
               : '';
 
-            if (!delta || finalPayload) {
+            if (!delta || finalPayload || activeRequestIdRef.current !== requestId) {
               return;
             }
 
@@ -409,6 +499,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
             break;
           }
 
+          if (activeRequestIdRef.current !== requestId) {
+            throw new DOMException('Request aborted', 'AbortError');
+          }
+
           buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
 
           let boundaryIndex = buffer.indexOf('\n\n');
@@ -438,6 +532,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
         throw new Error('The response stream ended before completion.');
       }
 
+      if (activeRequestIdRef.current !== requestId) {
+        return;
+      }
+
       const { answer, citations, conversationId } = finalPayload;
 
       setMessages((prev) =>
@@ -448,39 +546,81 @@ export function useStudentChat(routeConversationId: string | null = null) {
         )
       );
 
-      if (conversationId && !currentConversationId) {
-        setCurrentConversationId(conversationId);
+      await fetchConversations(conversationId || currentConversationId, { requestId });
+    } catch (error) {
+      if (
+        error instanceof DOMException &&
+        error.name === 'AbortError'
+      ) {
+        return;
       }
 
-      await fetchConversations(conversationId || currentConversationId);
-    } catch (error) {
       console.error('Chat error:', error);
       const message = error instanceof Error ? error.message : 'Failed to get response. Please try again.';
       toast.error(message);
 
       setMessages((prev) => prev.filter((messageItem) => messageItem.id !== assistantMessageId && messageItem.id !== userMessage.id));
     } finally {
-      setIsLoading(false);
+      if (activeRequestIdRef.current === requestId) {
+        abortControllerRef.current = null;
+        activeAssistantMessageIdRef.current = null;
+        setIsLoading(false);
+      }
     }
-  }, [conversations.length, currentConversationId, fetchConversations, input, isLoading]);
+  }, [currentConversationId, fetchConversations, input, isLoading, selectedCourseId]);
 
-  const startNewConversation = useCallback(() => {
-    if (conversations.length >= MAX_CONVERSATIONS) {
-      toast.error(`Conversation limit reached (max ${MAX_CONVERSATIONS}). Continue an existing conversation.`);
+  const stopGenerating = useCallback(() => {
+    const activeAssistantMessageId = activeAssistantMessageIdRef.current;
+
+    cancelActiveRequest();
+    activeAssistantMessageIdRef.current = null;
+
+    if (!activeAssistantMessageId) {
       return;
     }
 
+    setMessages((prev) =>
+      prev.filter((message) => message.id !== activeAssistantMessageId || message.content !== '')
+    );
+  }, [cancelActiveRequest]);
+
+  const startNewConversation = useCallback(() => {
+    cancelActiveRequest();
     setCurrentConversationId(null);
     setMessages([]);
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
-  }, [conversations.length]);
+    setOpeningCitationKey(null);
+    setActiveVideoSource(null);
+  }, [cancelActiveRequest]);
 
   const selectConversation = useCallback((conversationId: string) => {
+    cancelActiveRequest();
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (conversation) {
+      setSelectedCourseId(conversation.courseId);
+    }
     setCurrentConversationId(conversationId);
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
-  }, []);
+    setOpeningCitationKey(null);
+    setActiveVideoSource(null);
+  }, [cancelActiveRequest, conversations]);
+
+  const changeSelectedCourse = useCallback((courseId: string) => {
+    if (courseId === selectedCourseId) {
+      return;
+    }
+
+    cancelActiveRequest();
+    setSelectedCourseId(courseId);
+    setCurrentConversationId(null);
+    setMessages([]);
+    setSelectedMessage(null);
+    setHighlightedCitationKey(null);
+    setOpeningCitationKey(null);
+    setActiveVideoSource(null);
+  }, [cancelActiveRequest, selectedCourseId]);
 
   const deleteConversation = useCallback(async (conversationId: string) => {
     const conversation = conversations.find((item) => item.id === conversationId);
@@ -523,6 +663,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(null);
   }, []);
 
+  useEffect(() => () => {
+    abortControllerRef.current?.abort();
+  }, []);
+
   const focusCitation = useCallback((message: Message, citationNumber: number) => {
     if (!message.citations || message.citations.length === 0) return;
 
@@ -534,13 +678,15 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(getCitationKey(message.id, citationNumber));
   }, []);
 
+  const closeActiveVideoSource = useCallback(() => {
+    setActiveVideoSource(null);
+  }, []);
+
   const openCitationSource = useCallback(async (citation: Citation, citationKey: string) => {
     setOpeningCitationKey(citationKey);
     let previewWindow: Window | null = null;
 
     try {
-      previewWindow = window.open('', '_blank');
-
       const { data: chunkRow, error: chunkError } = await supabase
         .from('chunks')
         .select('material_id, student_document_id')
@@ -553,11 +699,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       let bucket = '';
       let filePath = '';
+      let fileType = citation.documentType;
+      let fileName = citation.documentName;
 
       if (chunkRow.material_id) {
         const { data: materialRow, error: materialError } = await supabase
           .from('materials')
-          .select('file_path')
+          .select('file_path, file_type, file_name')
           .eq('id', chunkRow.material_id)
           .maybeSingle();
 
@@ -567,10 +715,12 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
         bucket = 'course-materials';
         filePath = materialRow.file_path;
+        fileType = materialRow.file_type;
+        fileName = materialRow.file_name;
       } else if (chunkRow.student_document_id) {
         const { data: documentRow, error: documentError } = await supabase
           .from('student_documents')
-          .select('file_path')
+          .select('file_path, file_type, file_name')
           .eq('id', chunkRow.student_document_id)
           .maybeSingle();
 
@@ -580,6 +730,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
         bucket = 'student-documents';
         filePath = documentRow.file_path;
+        fileType = documentRow.file_type;
+        fileName = documentRow.file_name;
       } else {
         throw new Error('Citation source has no linked document');
       }
@@ -592,10 +744,21 @@ export function useStudentChat(routeConversationId: string | null = null) {
         throw new Error(signedUrlError?.message || 'Unable to generate source preview URL');
       }
 
-      if (previewWindow) {
-        previewWindow.location.href = signedUrlData.signedUrl;
+      if (fileType === 'video') {
+        setActiveVideoSource({
+          title: fileName,
+          signedUrl: signedUrlData.signedUrl,
+          startMs: citation.startMs ?? 0,
+          endMs: citation.endMs,
+          excerpt: citation.excerpt,
+        });
       } else {
-        window.open(signedUrlData.signedUrl, '_blank', 'noopener,noreferrer');
+        previewWindow = window.open('', '_blank');
+        if (previewWindow) {
+          previewWindow.location.href = signedUrlData.signedUrl;
+        } else {
+          window.open(signedUrlData.signedUrl, '_blank', 'noopener,noreferrer');
+        }
       }
     } catch (error) {
       if (previewWindow) {
@@ -610,6 +773,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
   }, []);
 
   return {
+    activeVideoSource,
+    availableCourses,
+    isLoadingCourses,
     messages,
     input,
     isLoading,
@@ -619,16 +785,20 @@ export function useStudentChat(routeConversationId: string | null = null) {
     openingCitationKey,
     conversations,
     currentConversationId,
+    selectedCourseId,
     deletingConversationId,
+    changeSelectedCourse,
     setInput,
     setShowSidePanel,
     setHighlightedCitationKey,
     handleSend,
+    stopGenerating,
     startNewConversation,
     selectConversation,
     deleteConversation,
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
+    closeActiveVideoSource,
   };
 }

@@ -6,7 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const MAX_CONVERSATIONS_PER_USER = 3;
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const CHAT_MODEL = "gemini-3-flash-preview";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
@@ -14,6 +13,11 @@ const HIGH_RECALL_MATCH_THRESHOLD = 0.35;
 const HIGH_RECALL_MATCH_COUNT = 18;
 const FINAL_MATCH_COUNT = 6;
 const CITATION_TOKEN_PATTERN = "<<cite:(\\d+)>>";
+const CONVERSATION_HISTORY_FETCH_LIMIT = 24;
+const CONVERSATION_HISTORY_PROMPT_LIMIT = 14;
+const CONVERSATION_HISTORY_CHAR_BUDGET = 9000;
+const CONVERSATION_HISTORY_MESSAGE_CLIP = 850;
+const MEMORY_CITATION_TOKEN_PATTERN = /<<\s*cite\s*:\s*[1-9]\d*\s*>>/gi;
 
 interface ChatRequest {
   message: string;
@@ -27,6 +31,8 @@ interface RetrievedChunk {
   material_id: string | null;
   student_document_id: string | null;
   page_number: number | null;
+  start_ms: number | null;
+  end_ms: number | null;
   relevance_score: number;
   material_name?: string;
   material_type?: string;
@@ -56,12 +62,24 @@ interface CitationSanitizationResult {
   citedChunkNumbers: number[];
 }
 
+interface ConversationHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface GeminiContentTurn {
+  role: "user" | "model";
+  parts: Array<{ text: string }>;
+}
+
 interface GeminiTextGenerationOptions {
   geminiApiKey: string;
   systemPrompt: string;
   userPrompt: string;
+  historyTurns?: ConversationHistoryTurn[];
   temperature?: number;
   maxOutputTokens?: number;
+  signal?: AbortSignal;
 }
 
 interface GeminiStreamGenerationOptions extends GeminiTextGenerationOptions {
@@ -74,6 +92,19 @@ class HttpError extends Error {
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
   }
 }
 
@@ -138,10 +169,110 @@ function clipText(value: string, maxLength = 1200): string {
   return `${value.slice(0, maxLength).trim()}...`;
 }
 
+function sanitizeMessageForMemory(content: string): string {
+  const withoutCitationTokens = content.replace(MEMORY_CITATION_TOKEN_PATTERN, "");
+  const withoutTrailingSources = stripTrailingSourcesSection(withoutCitationTokens);
+
+  return withoutTrailingSources
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function buildConversationHistoryTurns(
+  rawMessages: Array<{ role: string; content: string }>
+): ConversationHistoryTurn[] {
+  const normalized = rawMessages
+    .map((message): ConversationHistoryTurn | null => {
+      const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
+      if (!role || typeof message.content !== "string") {
+        return null;
+      }
+
+      const cleaned = role === "assistant"
+        ? sanitizeMessageForMemory(message.content)
+        : message.content
+            .replace(/[ \t]+\n/g, "\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+
+      if (!cleaned) {
+        return null;
+      }
+
+      return {
+        role,
+        content: clipText(cleaned, CONVERSATION_HISTORY_MESSAGE_CLIP),
+      };
+    })
+    .filter((message): message is ConversationHistoryTurn => Boolean(message));
+
+  const tailLimited = normalized.slice(-CONVERSATION_HISTORY_PROMPT_LIMIT);
+
+  let totalChars = 0;
+  const budgeted: ConversationHistoryTurn[] = [];
+  for (let index = tailLimited.length - 1; index >= 0; index -= 1) {
+    const message = tailLimited[index];
+    const projectedSize = message.content.length + 24;
+
+    if (budgeted.length > 0 && totalChars + projectedSize > CONVERSATION_HISTORY_CHAR_BUDGET) {
+      break;
+    }
+
+    budgeted.push(message);
+    totalChars += projectedSize;
+  }
+
+  return budgeted.reverse();
+}
+
+function buildHistoryContext(historyTurns: ConversationHistoryTurn[]): string {
+  return historyTurns
+    .map((turn) => `${turn.role === "assistant" ? "Assistant" : "Student"}: ${turn.content}`)
+    .join("\n");
+}
+
+function buildGeminiConversationContents(
+  userPrompt: string,
+  historyTurns: ConversationHistoryTurn[] = []
+): GeminiContentTurn[] {
+  const contents = historyTurns.map((turn) => ({
+    role: turn.role === "assistant" ? "model" : "user",
+    parts: [{ text: turn.content }],
+  }));
+
+  contents.push({
+    role: "user",
+    parts: [{ text: userPrompt }],
+  });
+
+  return contents;
+}
+
 function sourceLabel(chunk: RetrievedChunk): string {
   const name = chunk.material_name || chunk.document_name || "Unknown document";
+  if (typeof chunk.start_ms === "number") {
+    const start = formatTimestamp(chunk.start_ms);
+    const end =
+      typeof chunk.end_ms === "number" ? `-${formatTimestamp(chunk.end_ms)}` : "";
+    return `${name} (${start}${end})`;
+  }
+
   const pageInfo = chunk.page_number ? ` (Page ${chunk.page_number})` : "";
   return `${name}${pageInfo}`;
+}
+
+function formatTimestamp(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function isLikelyAmbiguousQuestion(message: string, historyContext: string): boolean {
@@ -381,6 +512,7 @@ function formatSseEvent(event: string, payload: unknown): string {
 async function generateGeminiText(options: GeminiTextGenerationOptions): Promise<string> {
   const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:generateContent`, {
     method: "POST",
+    signal: options.signal,
     headers: {
       "x-goog-api-key": options.geminiApiKey,
       "Content-Type": "application/json",
@@ -389,12 +521,7 @@ async function generateGeminiText(options: GeminiTextGenerationOptions): Promise
       system_instruction: {
         parts: [{ text: options.systemPrompt }],
       },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: options.userPrompt }],
-        },
-      ],
+      contents: buildGeminiConversationContents(options.userPrompt, options.historyTurns),
       generationConfig: {
         temperature: options.temperature ?? 0.4,
         maxOutputTokens: options.maxOutputTokens ?? 2000,
@@ -420,6 +547,7 @@ async function generateGeminiText(options: GeminiTextGenerationOptions): Promise
 async function generateGeminiTextStream(options: GeminiStreamGenerationOptions): Promise<string> {
   const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`, {
     method: "POST",
+    signal: options.signal,
     headers: {
       "x-goog-api-key": options.geminiApiKey,
       "Content-Type": "application/json",
@@ -428,12 +556,7 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
       system_instruction: {
         parts: [{ text: options.systemPrompt }],
       },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: options.userPrompt }],
-        },
-      ],
+      contents: buildGeminiConversationContents(options.userPrompt, options.historyTurns),
       generationConfig: {
         temperature: options.temperature ?? 0.4,
         maxOutputTokens: options.maxOutputTokens ?? 2000,
@@ -463,6 +586,8 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
   let latestSnapshot = "";
 
   const processRawSseEvent = async (rawEvent: string) => {
+    throwIfAborted(options.signal);
+
     if (!rawEvent.trim()) {
       return;
     }
@@ -515,6 +640,7 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
   };
 
   while (true) {
+    throwIfAborted(options.signal);
     const { done, value } = await reader.read();
     if (done) {
       break;
@@ -543,6 +669,7 @@ async function rewriteQueryForRetrieval(options: {
   geminiApiKey: string;
   studentQuestion: string;
   historyContext: string;
+  signal?: AbortSignal;
 }): Promise<string> {
   if (!isLikelyAmbiguousQuestion(options.studentQuestion, options.historyContext)) {
     return options.studentQuestion;
@@ -571,6 +698,7 @@ Standalone retrieval query:`;
       userPrompt: rewriteUserPrompt,
       temperature: 0,
       maxOutputTokens: 160,
+      signal: options.signal,
     });
 
     const cleaned = rewritten
@@ -594,9 +722,10 @@ Standalone retrieval query:`;
   }
 }
 
-async function embedQuery(geminiApiKey: string, query: string): Promise<number[]> {
+async function embedQuery(geminiApiKey: string, query: string, signal?: AbortSignal): Promise<number[]> {
   const embeddingResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`, {
     method: "POST",
+    signal,
     headers: {
       "x-goog-api-key": geminiApiKey,
       "Content-Type": "application/json",
@@ -696,6 +825,7 @@ async function formatAnswerWithReliableCitations(options: {
   question: string;
   rawAnswer: string;
   chunks: RetrievedChunk[];
+  signal?: AbortSignal;
 }): Promise<{ answer: string; citedChunks: RetrievedChunk[] }> {
   const cleanedAnswer = stripTrailingSourcesSection(options.rawAnswer.trim());
   if (options.chunks.length === 0) {
@@ -736,6 +866,7 @@ ${buildCitationRewriteSourceContext(options.chunks)}`;
       userPrompt: citationRewriteUserPrompt,
       temperature: 0.1,
       maxOutputTokens: 1800,
+      signal: options.signal,
     });
 
     sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length);
@@ -878,6 +1009,13 @@ async function resolveConversation(
       throw new HttpError(403, "Conversation not found or access denied");
     }
 
+    if (requestedCourseId && requestedCourseId !== existingConversation.course_id) {
+      throw new HttpError(
+        400,
+        "Selected course does not match this conversation. Start a new chat to switch courses.",
+      );
+    }
+
     return {
       conversationId: existingConversation.id,
       courseId: existingConversation.course_id,
@@ -898,20 +1036,6 @@ async function resolveConversation(
   if (!resolvedCourseId) {
     throw new HttpError(400, "No accessible course found for this account");
   }
-
-  const { count, error: countError } = await supabaseClient
-    .from("conversations")
-    .select("id", { head: true, count: "exact" })
-    .eq("user_id", userId);
-
-  if (countError) {
-    throw new Error(`Failed to check conversation limit: ${countError.message}`);
-  }
-
-  if ((count || 0) >= MAX_CONVERSATIONS_PER_USER) {
-    throw new HttpError(400, `Conversation limit reached (max ${MAX_CONVERSATIONS_PER_USER})`);
-  }
-
   const title = message.length > 80 ? `${message.slice(0, 77)}...` : message;
 
   const { data: newConversation, error: createConversationError } = await supabaseClient
@@ -938,6 +1062,22 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+
+  const requestAbortController = new AbortController();
+  const abortRequestWork = (reason?: unknown) => {
+    if (!requestAbortController.signal.aborted) {
+      requestAbortController.abort(reason);
+    }
+  };
+
+  req.signal.addEventListener(
+    "abort",
+    () => {
+      console.log("RAG chat request aborted by client");
+      abortRequestWork("client disconnected");
+    },
+    { once: true },
+  );
 
   try {
     const authHeader = req.headers.get("Authorization");
@@ -988,6 +1128,7 @@ serve(async (req) => {
     }
 
     const requestStartedAt = Date.now();
+    throwIfAborted(requestAbortController.signal);
 
     const resolved = await resolveConversation(
       supabaseClient,
@@ -996,6 +1137,8 @@ serve(async (req) => {
       conversationId,
       courseId,
     );
+
+    throwIfAborted(requestAbortController.signal);
 
     const activeConversationId = resolved.conversationId;
     const activeCourseId = resolved.courseId;
@@ -1008,23 +1151,21 @@ serve(async (req) => {
       .select("role, content")
       .eq("conversation_id", activeConversationId)
       .order("created_at", { ascending: false })
-      .limit(8);
+      .limit(CONVERSATION_HISTORY_FETCH_LIMIT);
 
     if (historyError) {
       console.error("Failed to load conversation history:", historyError);
     }
 
     const priorMessages = [...(recentMessages || [])].reverse();
-    const historyContext = priorMessages.length > 0
-      ? priorMessages
-          .map((item) => `${item.role === "assistant" ? "Assistant" : "Student"}: ${item.content}`)
-          .join("\n")
-      : "";
+    const historyTurns = buildConversationHistoryTurns(priorMessages);
+    const historyContext = buildHistoryContext(historyTurns);
 
     const rewrittenQuery = await rewriteQueryForRetrieval({
       geminiApiKey,
       studentQuestion: trimmedMessage,
       historyContext,
+      signal: requestAbortController.signal,
     });
 
     const retrievalQueries = Array.from(
@@ -1036,8 +1177,10 @@ serve(async (req) => {
     );
 
     const embeddings = await Promise.all(
-      retrievalQueries.map((query) => embedQuery(geminiApiKey, query))
+      retrievalQueries.map((query) => embedQuery(geminiApiKey, query, requestAbortController.signal))
     );
+
+    throwIfAborted(requestAbortController.signal);
 
     const retrievedChunkGroups = await Promise.all(
       embeddings.map((embedding) =>
@@ -1051,6 +1194,8 @@ serve(async (req) => {
         })
       )
     );
+
+    throwIfAborted(requestAbortController.signal);
 
     const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
     const retrievedChunks = rerankRetrievedChunks(
@@ -1069,16 +1214,19 @@ serve(async (req) => {
       retrievedChunks.forEach((chunk, index) => {
         const sourceName = chunk.material_name || chunk.document_name || "Unknown document";
         const sourceType = chunk.material_type || chunk.document_type || "document";
-        const pageInfo = chunk.page_number ? ` (Page ${chunk.page_number})` : "";
+        const locator =
+          typeof chunk.start_ms === "number"
+            ? ` (${formatTimestamp(chunk.start_ms)}${
+                typeof chunk.end_ms === "number" ? `-${formatTimestamp(chunk.end_ms)}` : ""
+              })`
+            : chunk.page_number
+              ? ` (Page ${chunk.page_number})`
+              : "";
 
-        ragContext += `### Source [${index + 1}]: ${sourceName}${pageInfo} [${sourceType}]\n`;
+        ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
         ragContext += `${clipText(chunk.chunk_text, 1300)}\n\n`;
       });
     }
-
-    const historySection = historyContext
-      ? `\n\nConversation so far:\n${historyContext}`
-      : "";
 
     const systemPrompt = `You are EduChat, an AI learning assistant for university students. Your role is to answer questions about course materials accurately and helpfully.
 
@@ -1100,40 +1248,72 @@ IMPORTANT GUIDELINES:
     - A brief direct answer first.
     - Then sections such as "## Key Points" and "## Explanation" when helpful.
 11. Use bullet points for lists/comparisons; avoid mixing list styles in one section.
+12. Use prior conversation turns to resolve follow-up references ("this", "that", "it", "the previous example") before answering.
 
 Citation format examples (follow exactly):
 - "Virtual memory allows for larger address spaces <<cite:1>>."
 - "The CPU schedules processes based on priority <<cite:2>>. This ensures efficiency <<cite:3>>."
 
 ${ragContext ? "The following are relevant excerpts from the course materials. Use these to answer the student's question:" : "No specific course materials were found for this query. Provide a helpful general response but note that this isn't from the course materials."}
-${ragContext}${historySection}`;
+${ragContext}`;
+
+    let streamCancelled = false;
+    const cancelStream = (reason?: unknown) => {
+      if (streamCancelled) {
+        return;
+      }
+
+      streamCancelled = true;
+      console.log("RAG chat stream cancelled", reason);
+      abortRequestWork(reason);
+    };
 
     const stream = new ReadableStream({
       start(controller) {
         const encoder = new TextEncoder();
         const sendEvent = (event: string, payload: unknown) => {
+          if (streamCancelled) {
+            return;
+          }
           controller.enqueue(encoder.encode(formatSseEvent(event, payload)));
+        };
+
+        const ensureStreamActive = () => {
+          throwIfAborted(requestAbortController.signal);
+          if (streamCancelled) {
+            throw new DOMException("The operation was aborted.", "AbortError");
+          }
         };
 
         (async () => {
           try {
+            ensureStreamActive();
+
             const rawAnswer = await generateGeminiTextStream({
               geminiApiKey,
               systemPrompt,
               userPrompt: trimmedMessage,
+              historyTurns,
               temperature: 0.4,
               maxOutputTokens: 2000,
+              signal: requestAbortController.signal,
               onTextDelta: (delta) => {
+                ensureStreamActive();
                 sendEvent("token", { text: delta });
               },
             });
+
+            ensureStreamActive();
 
             const { answer, citedChunks } = await formatAnswerWithReliableCitations({
               geminiApiKey,
               question: trimmedMessage,
               rawAnswer,
               chunks: retrievedChunks,
+              signal: requestAbortController.signal,
             });
+
+            ensureStreamActive();
 
             const { data: userMessage, error: userMessageError } = await supabaseClient
               .from("messages")
@@ -1148,6 +1328,8 @@ ${ragContext}${historySection}`;
             if (userMessageError || !userMessage) {
               throw new Error(`Failed to save user message: ${userMessageError?.message || "Unknown error"}`);
             }
+
+            ensureStreamActive();
 
             const { data: assistantMessage, error: assistantMessageError } = await supabaseClient
               .from("messages")
@@ -1164,6 +1346,8 @@ ${ragContext}${historySection}`;
             }
 
             if (citedChunks.length > 0) {
+              ensureStreamActive();
+
               const citationRows = citedChunks.map((chunk) => ({
                 message_id: assistantMessage.id,
                 chunk_id: chunk.id,
@@ -1180,6 +1364,8 @@ ${ragContext}${historySection}`;
               }
             }
 
+            ensureStreamActive();
+
             await supabaseClient
               .from("conversations")
               .update({ updated_at: new Date().toISOString() })
@@ -1192,6 +1378,8 @@ ${ragContext}${historySection}`;
               answer,
             });
             const unresolved = unresolvedReason !== null;
+
+            ensureStreamActive();
 
             await insertQueryEvent(supabaseAdminClient, {
               user_id: user.id,
@@ -1217,11 +1405,14 @@ ${ragContext}${historySection}`;
               documentName: chunk.material_name || chunk.document_name || "Unknown document",
               documentType: chunk.material_type || chunk.document_type || "document",
               pageNumber: chunk.page_number,
+              startMs: chunk.start_ms,
+              endMs: chunk.end_ms,
               relevanceScore: chunk.relevance_score,
             }));
 
             console.log(`Successfully generated response with ${citations.length} citations`);
 
+            ensureStreamActive();
             sendEvent("final", {
               answer,
               citations,
@@ -1233,6 +1424,11 @@ ${ragContext}${historySection}`;
               },
             });
           } catch (streamError) {
+            if (isAbortError(streamError)) {
+              console.log("RAG chat stream aborted");
+              return;
+            }
+
             console.error("RAG chat stream error:", streamError);
 
             const status = streamError instanceof HttpError ? streamError.status : 500;
@@ -1240,12 +1436,14 @@ ${ragContext}${historySection}`;
 
             sendEvent("error", { error: message, status });
           } finally {
-            controller.close();
+            if (!streamCancelled) {
+              controller.close();
+            }
           }
         })();
       },
       cancel(reason) {
-        console.log("RAG chat stream cancelled", reason);
+        cancelStream(reason);
       },
     });
 
@@ -1260,6 +1458,14 @@ ${ragContext}${historySection}`;
     });
 
   } catch (error) {
+    if (isAbortError(error)) {
+      console.log("RAG chat request aborted before completion");
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders,
+      });
+    }
+
     console.error("RAG chat error:", error);
 
     const status = error instanceof HttpError ? error.status : 500;
