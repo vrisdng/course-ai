@@ -14,3 +14,15 @@ verify_jwt = false
 
 [functions.process-material-job]
 verify_jwt = false
+
+[functions.manage-course-invites]
+verify_jwt = false
+
+[functions.check-course-invite]
+verify_jwt = false
+
+[functions.redeem-course-invite]
+verify_jwt = false
+
+[functions.analytics-chat]
+verify_jwt = false

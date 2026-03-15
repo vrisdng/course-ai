@@ -38,6 +38,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -376,6 +377,48 @@ export default function AdminDashboard() {
     }, {});
   }, [academicTerms]);
 
+  const getUploadSetupError = () => {
+    if (!uploadCourseId) {
+      return 'Select the course for this document first';
+    }
+
+    if (!uploadAcademicTermId) {
+      return 'Select the academic term first';
+    }
+
+    if (!uploadAccessScope) {
+      return 'Choose who can access this document first';
+    }
+
+    return null;
+  };
+
+  const uploadSetupError = getUploadSetupError();
+  const isUploadSetupComplete = uploadSetupError === null;
+
+  const uploadChecklistItems = [
+    {
+      id: 'course',
+      label: 'Select course',
+      isDone: Boolean(uploadCourseId),
+      detail: uploadCourseId ? courseLabelById[uploadCourseId] || 'Course selected' : 'Choose the course these files belong to.',
+    },
+    {
+      id: 'term',
+      label: 'Select academic term',
+      isDone: Boolean(uploadAcademicTermId),
+      detail: uploadAcademicTermId
+        ? termLabelById[uploadAcademicTermId] || 'Academic term selected'
+        : 'Pick the academic term for this upload.',
+    },
+    {
+      id: 'access',
+      label: 'Choose accessibility',
+      isDone: Boolean(uploadAccessScope),
+      detail: uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Choose whether this stays course-only or private.',
+    },
+  ];
+
   const filteredMaterials = useMemo(() => {
     const now = new Date();
 
@@ -439,12 +482,8 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (!uploadCourseId) {
-      toast.error('Select the course for this document first');
-      return;
-    }
-    if (!uploadAcademicTermId) {
-      toast.error('Select the academic term first');
+    if (uploadSetupError) {
+      toast.error(uploadSetupError);
       return;
     }
 
@@ -505,7 +544,7 @@ export default function AdminDashboard() {
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    if (!isUploading && uploadCourseId) {
+    if (!isUploading && isUploadSetupComplete) {
       setIsDragActive(true);
     }
   };
@@ -523,12 +562,8 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (!uploadCourseId) {
-      toast.error('Select the course for this document first');
-      return;
-    }
-    if (!uploadAcademicTermId) {
-      toast.error('Select the academic term first');
+    if (uploadSetupError) {
+      toast.error(uploadSetupError);
       return;
     }
 
@@ -876,11 +911,11 @@ export default function AdminDashboard() {
     }
   };
 
-  const accessScopeLabel = (scope: AccessScope) => {
+  function accessScopeLabel(scope: AccessScope) {
     if (scope === 'course') return 'Course only';
     if (scope === 'public') return 'Everyone';
     return 'Private';
-  };
+  }
 
   const renderAccessBadge = (scope: AccessScope) => {
     const icon = {
@@ -1309,13 +1344,6 @@ export default function AdminDashboard() {
               Manage course documents for RAG. Only enrolled students and course staff can access uploaded files.
             </p>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm">Help</Button>
-            <Button variant="outline" size="icon" aria-label="More options">
-              <Ellipsis className="h-4 w-4" />
-            </Button>
-          </div>
         </div>
 
         <Tabs defaultValue="add-document" className="space-y-6">
@@ -1548,25 +1576,6 @@ export default function AdminDashboard() {
           <TabsContent value="add-document" className="mt-0 space-y-5">
             <Card>
               <CardContent className="space-y-4 pt-6">
-                <div className="flex flex-col gap-3 lg:flex-row">
-                  <div className="relative flex-1">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                      placeholder="Search for document"
-                      className="pl-9"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" onClick={() => setShowFilters((current) => !current)}>
-                      <Filter className="mr-2 h-4 w-4" />
-                      Filters
-                    </Button>
-                  </div>
-                </div>
-
                 <div className="grid gap-4 rounded-lg border border-border bg-muted/20 p-4 lg:grid-cols-3">
                   <div className="space-y-2">
                     <Label htmlFor="upload-course-select">Course this document belongs to</Label>
@@ -1607,8 +1616,8 @@ export default function AdminDashboard() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Who can access this document?</Label>
-                    <div className="grid gap-2 sm:grid-cols-3">
+                    <Label>Accessibility</Label>
+                    <div className="grid gap-2 sm:grid-cols-2">
                       <Button
                         type="button"
                         variant={uploadAccessScope === 'course' ? 'default' : 'outline'}
@@ -1618,16 +1627,6 @@ export default function AdminDashboard() {
                       >
                         <Users2 className="h-4 w-4" />
                         Course only
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={uploadAccessScope === 'public' ? 'default' : 'outline'}
-                        className="justify-start gap-2"
-                        onClick={() => setUploadAccessScope('public')}
-                        disabled={isUploading}
-                      >
-                        <Globe2 className="h-4 w-4" />
-                        Everyone
                       </Button>
                       <Button
                         type="button"
@@ -1646,75 +1645,6 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {showFilters && (
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                    <Select value={courseFilter} onValueChange={setCourseFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="All Courses" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Courses</SelectItem>
-                        {courses.map((course) => (
-                          <SelectItem key={course.id} value={course.id}>
-                            {course.name} {course.code ? `(${course.code})` : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <Select value={accessFilter} onValueChange={setAccessFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Access" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Access</SelectItem>
-                        <SelectItem value="course">Course only</SelectItem>
-                        <SelectItem value="public">Everyone</SelectItem>
-                        <SelectItem value="private">Private</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Select value={typeFilter} onValueChange={setTypeFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Document Type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Document Type</SelectItem>
-                        {uniqueFileTypes.map((fileType) => (
-                          <SelectItem key={fileType} value={fileType}>
-                            {fileType}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <Select value={dateFilter} onValueChange={setDateFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Document Date" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Document Date</SelectItem>
-                        <SelectItem value="last_7_days">Last 7 days</SelectItem>
-                        <SelectItem value="last_30_days">Last 30 days</SelectItem>
-                        <SelectItem value="this_year">This year</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Select value={statusFilter} onValueChange={setStatusFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Status</SelectItem>
-                        <SelectItem value="pending">Pending</SelectItem>
-                        <SelectItem value="processing">Processing</SelectItem>
-                        <SelectItem value="completed">Completed</SelectItem>
-                        <SelectItem value="failed">Failed</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1722,28 +1652,29 @@ export default function AdminDashboard() {
                   accept={ACCEPTED_FILE_TYPES}
                   className="hidden"
                   onChange={handleFileInputChange}
-                  disabled={isUploading || !uploadCourseId || !uploadAcademicTermId}
+                  disabled={isUploading || !isUploadSetupComplete}
                 />
 
                 <div
                   role="button"
                   tabIndex={0}
+                  aria-disabled={!isUploadSetupComplete || isUploading}
                   onClick={() => {
-                    if ((!uploadCourseId || !uploadAcademicTermId) && !isUploading) {
-                      toast.error(uploadCourseId ? 'Select the academic term first' : 'Select the course for this document first');
+                    if (uploadSetupError && !isUploading) {
+                      toast.error(uploadSetupError);
                       return;
                     }
-                    if (!isUploading && uploadCourseId && uploadAcademicTermId) {
+                    if (!isUploading && isUploadSetupComplete) {
                       fileInputRef.current?.click();
                     }
                   }}
                   onKeyDown={(event) => {
-                    if ((!uploadCourseId || !uploadAcademicTermId) && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
+                    if (uploadSetupError && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
-                      toast.error(uploadCourseId ? 'Select the academic term first' : 'Select the course for this document first');
+                      toast.error(uploadSetupError);
                       return;
                     }
-                    if (!isUploading && uploadCourseId && uploadAcademicTermId && (event.key === 'Enter' || event.key === ' ')) {
+                    if (!isUploading && isUploadSetupComplete && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
                       fileInputRef.current?.click();
                     }
@@ -1754,19 +1685,39 @@ export default function AdminDashboard() {
                   className={cn(
                     'rounded-lg border-2 border-dashed p-10 text-center transition-colors',
                     isDragActive ? 'border-primary bg-primary/5' : 'border-border bg-muted/20',
-                    (!uploadCourseId || !uploadAcademicTermId) && 'border-muted-foreground/30 bg-muted/10',
+                    !isUploadSetupComplete && 'border-muted-foreground/30 bg-muted/10',
                     isUploading && 'pointer-events-none opacity-70'
                   )}
                 >
                   <UploadCloud className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-                  {uploadCourseId && uploadAcademicTermId ? (
+                  {isUploadSetupComplete ? (
                     <>
                       <p className="text-sm text-muted-foreground">
                         Drop your course materials here, or <span className="font-medium text-primary underline">click to browse</span>
                       </p>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Files are added to a review list first. PDF, DOC, and image files must be 15MB or smaller. MP4 and WebM video files must be 25MB or smaller and are transcribed with timestamps. Text and code files must stay under 500,000 characters. DOCX and PPTX are extracted locally. Larger document parsing now continues in the background after upload.
-                      </p>
+                      <div className="mt-4 grid gap-3 text-left sm:grid-cols-3">
+                        {uploadChecklistItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className={cn(
+                              'rounded-lg border px-4 py-3',
+                              item.isDone ? 'border-emerald-200 bg-emerald-50/80' : 'border-border bg-background/70'
+                            )}
+                          >
+                            <div className="flex items-start gap-3">
+                              {item.isDone ? (
+                                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                              ) : (
+                                <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                              )}
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-foreground">{item.label}</p>
+                                <p className="text-xs text-muted-foreground">{item.detail}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                       {isUploading && currentUploadFileName && (
                         <p className="mt-2 text-xs text-muted-foreground">
                           Uploading: {currentUploadFileName}
@@ -1775,12 +1726,30 @@ export default function AdminDashboard() {
                     </>
                   ) : (
                     <>
-                      <p className="text-sm font-medium text-foreground">
-                        {!uploadCourseId ? 'Select a course first' : 'Select an academic term first'}
-                      </p>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Then you can choose course materials to upload.
-                      </p>
+                      <p className="text-sm font-medium text-foreground">Complete these steps before adding files</p>
+                      <div className="mt-4 grid gap-3 text-left sm:grid-cols-3">
+                        {uploadChecklistItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className={cn(
+                              'rounded-lg border px-4 py-3',
+                              item.isDone ? 'border-emerald-200 bg-emerald-50/80' : 'border-border bg-background/70'
+                            )}
+                          >
+                            <div className="flex items-start gap-3">
+                              {item.isDone ? (
+                                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                              ) : (
+                                <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                              )}
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-foreground">{item.label}</p>
+                                <p className="text-xs text-muted-foreground">{item.detail}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </>
                   )}
                 </div>
@@ -1853,32 +1822,117 @@ export default function AdminDashboard() {
               <CardHeader className="pb-3">
                 <CardTitle>Uploaded Materials</CardTitle>
                 <CardDescription>
-                  {isLoadingCourses
-                    ? 'Loading courses...'
-                    : `${filteredMaterials.length} material${filteredMaterials.length === 1 ? '' : 's'} found${
-                        hasBackgroundProcessing ? ' • processing is active' : ''
-                      }`}
+                  Use the search tools below to quickly search for your materials
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <Table>
+              <CardContent className="space-y-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder="Search uploaded materials"
+                      className="pl-9"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" onClick={() => setShowFilters((current) => !current)}>
+                      <Filter className="mr-2 h-4 w-4" />
+                      Filters
+                    </Button>
+                  </div>
+                </div>
+
+                {showFilters && (
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    <Select value={courseFilter} onValueChange={setCourseFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Courses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Courses</SelectItem>
+                        {courses.map((course) => (
+                          <SelectItem key={course.id} value={course.id}>
+                            {course.name} {course.code ? `(${course.code})` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={accessFilter} onValueChange={setAccessFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Access" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Access</SelectItem>
+                        <SelectItem value="course">Course only</SelectItem>
+                        <SelectItem value="public">Everyone</SelectItem>
+                        <SelectItem value="private">Private</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={typeFilter} onValueChange={setTypeFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Document Type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Document Type</SelectItem>
+                        {uniqueFileTypes.map((fileType) => (
+                          <SelectItem key={fileType} value={fileType}>
+                            {fileType}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={dateFilter} onValueChange={setDateFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Document Date" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Document Date</SelectItem>
+                        <SelectItem value="last_7_days">Last 7 days</SelectItem>
+                        <SelectItem value="last_30_days">Last 30 days</SelectItem>
+                        <SelectItem value="this_year">This year</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Status</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="processing">Processing</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="failed">Failed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="overflow-x-auto">
+                  <Table className="min-w-[760px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Document Name</TableHead>
-                      <TableHead>Document Type</TableHead>
-                      <TableHead>Document Date</TableHead>
                       <TableHead>Academic Term</TableHead>
                       <TableHead>Course</TableHead>
                       <TableHead>Access</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Size</TableHead>
-                      <TableHead className="text-right">Operation</TableHead>
+                      <TableHead className="sticky right-0 z-20 w-14 border-l bg-inherit px-2 text-right">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {isLoadingMaterials ? (
                       <TableRow>
-                        <TableCell colSpan={9}>
+                        <TableCell colSpan={7}>
                           <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             Loading documents...
@@ -1887,7 +1941,7 @@ export default function AdminDashboard() {
                       </TableRow>
                     ) : filteredMaterials.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9}>
+                        <TableCell colSpan={7}>
                           <div className="flex flex-col items-center justify-center py-6 text-center text-sm text-muted-foreground">
                             <FileText className="mb-2 h-5 w-5" />
                             No materials match your filters.
@@ -1908,8 +1962,6 @@ export default function AdminDashboard() {
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell className="capitalize">{material.file_type}</TableCell>
-                          <TableCell>{new Date(material.created_at).toLocaleDateString()}</TableCell>
                           <TableCell>{material.academic_term_id ? termLabelById[material.academic_term_id] || 'Unknown term' : '-'}</TableCell>
                           <TableCell>{courseLabelById[material.course_id] || 'Unknown course'}</TableCell>
                           <TableCell>{renderAccessBadge(material.access_scope)}</TableCell>
@@ -1930,38 +1982,45 @@ export default function AdminDashboard() {
                             </div>
                           </TableCell>
                           <TableCell>{formatBytes(material.file_size)}</TableCell>
-                          <TableCell>
-                            <div className="flex justify-end gap-2">
-                              {material.file_type === 'video' ? (
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => handleOpenTranscript(material)}
-                                  disabled={material.processing_status !== 'completed'}
-                                  aria-label={`View transcript for ${material.file_name}`}
-                                >
-                                  <FileText className="h-4 w-4" />
-                                </Button>
-                              ) : null}
-                              <Button variant="outline" size="icon" onClick={() => handleOpenMaterial(material)} aria-label="Open document">
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => handleDeleteMaterial(material)}
-                                aria-label="Delete document"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                          <TableCell className="sticky right-0 z-10 border-l bg-inherit px-2">
+                            <div className="flex justify-end">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" aria-label={`Open actions for ${material.file_name}`}>
+                                    <Ellipsis className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-40">
+                                  {material.file_type === 'video' ? (
+                                    <DropdownMenuItem
+                                      disabled={material.processing_status !== 'completed'}
+                                      onClick={() => handleOpenTranscript(material)}
+                                    >
+                                      <FileText className="mr-2 h-4 w-4" />
+                                      View transcript
+                                    </DropdownMenuItem>
+                                  ) : null}
+                                  <DropdownMenuItem onClick={() => handleOpenMaterial(material)}>
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    View file
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => handleDeleteMaterial(material)}
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
                           </TableCell>
                         </TableRow>
                       ))
                     )}
                   </TableBody>
-                </Table>
+                  </Table>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

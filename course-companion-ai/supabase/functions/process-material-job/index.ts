@@ -17,11 +17,44 @@ interface ExtractedSegment {
   pageNumber: number | null;
 }
 
+interface ChunkData {
+  text: string;
+  start: number;
+  end: number;
+  pageNumber: number | null;
+}
+
+interface JobPayload {
+  filePath: string;
+  fileType: string;
+  bucketName: string;
+  // Resumable state — set after extraction+chunking is done
+  chunks?: ChunkData[];
+  embeddedUpTo?: number; // index of first un-embedded chunk
+  totalChunks?: number;
+}
+
 const INLINE_GEMINI_MAX_FILE_SIZE = 15 * 1024 * 1024;
 const MAX_DOCUMENT_CHUNKS = 250;
-const EMBEDDING_CONCURRENCY = 4;
+const MAX_JOB_ATTEMPTS = 5;
+
+// How many chunks to embed per invocation before yielding.
+// Keeps each invocation well within Edge Runtime limits.
+const EMBEDDING_SLICE_SIZE = 50;
+
+// Gemini batchEmbedContents supports up to 100 texts per call.
+const EMBEDDING_BATCH_API_SIZE = 100;
+
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
+
+declare const EdgeRuntime:
+  | { waitUntil?: (promise: Promise<unknown>) => void }
+  | undefined;
+
+// ---------------------------------------------------------------------------
+// Text extraction helpers (unchanged)
+// ---------------------------------------------------------------------------
 
 function usesInlineGeminiExtraction(fileExtension: string): boolean {
   return ["pdf", "png", "jpg", "jpeg", "webp", "gif", "doc"].includes(fileExtension);
@@ -301,39 +334,57 @@ function getMimeType(fileType: string, fileName: string): string {
   return mimeMap[ext] || mimeMap[fileType] || "application/octet-stream";
 }
 
-async function embedChunkWithRetry(
-  chunkText: string,
+// ---------------------------------------------------------------------------
+// Batch embedding — uses Gemini batchEmbedContents for up to 100 texts/call
+// ---------------------------------------------------------------------------
+
+interface EmbeddingResult {
+  chunkIndex: number;
+  embedding: number[];
+}
+
+async function batchEmbedWithRetry(
+  texts: string[],
+  startIndex: number,
   geminiApiKey: string,
-  chunkIndex: number,
-): Promise<number[]> {
+): Promise<EmbeddingResult[]> {
   let lastStatus: number | null = null;
   let lastErrorText = "";
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const requests = texts.map((text) => ({
+      model: "models/gemini-embedding-001",
+      content: { parts: [{ text }] },
+      taskType: "RETRIEVAL_DOCUMENT",
+      outputDimensionality: 1536,
+    }));
+
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
       {
         method: "POST",
         headers: {
           "x-goog-api-key": geminiApiKey,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          model: "models/gemini-embedding-001",
-          content: { parts: [{ text: chunkText }] },
-          taskType: "RETRIEVAL_DOCUMENT",
-          outputDimensionality: 1536,
-        }),
+        body: JSON.stringify({ requests }),
       },
     );
 
     if (response.ok) {
       const payload = await response.json();
-      const values = payload.embedding?.values;
-      if (!Array.isArray(values)) {
-        throw new Error(`Embedding response did not include values at chunk ${chunkIndex}`);
+      const embeddings = payload.embeddings;
+      if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
+        throw new Error(
+          `batchEmbedContents returned ${embeddings?.length ?? 0} embeddings, expected ${texts.length}`,
+        );
       }
-      return values as number[];
+      return embeddings.map(
+        (emb: { values: number[] }, i: number): EmbeddingResult => ({
+          chunkIndex: startIndex + i,
+          embedding: emb.values,
+        }),
+      );
     }
 
     lastStatus = response.status;
@@ -344,110 +395,21 @@ async function embedChunkWithRetry(
       break;
     }
 
-    const backoffMs = 1500 * (attempt + 1);
+    const backoffMs = 2000 * (attempt + 1);
     console.warn(
-      `Embedding retry ${attempt + 1} for chunk ${chunkIndex} after status ${response.status}; waiting ${backoffMs}ms`,
+      `batchEmbed retry ${attempt + 1} (chunks ${startIndex}-${startIndex + texts.length - 1}) after status ${response.status}; waiting ${backoffMs}ms`,
     );
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
   }
 
   throw new Error(
-    `Embedding failed at chunk ${chunkIndex}: ${lastStatus ?? "unknown"} - ${lastErrorText || "No response body"}`,
+    `Batch embedding failed (chunks ${startIndex}-${startIndex + texts.length - 1}): ${lastStatus ?? "unknown"} - ${lastErrorText || "No response body"}`,
   );
 }
 
-async function embedChunksConcurrently(options: {
-  chunks: Array<{ text: string; start: number; end: number; pageNumber: number | null }>;
-  geminiApiKey: string;
-  materialId: string;
-  adminClient: ReturnType<typeof createClient>;
-}): Promise<Array<{
-  material_id: string;
-  chunk_index: number;
-  chunk_text: string;
-  embedding: number[];
-  start_position: number;
-  end_position: number;
-  page_number: number | null;
-}>> {
-  const results: Array<{
-    material_id: string;
-    chunk_index: number;
-    chunk_text: string;
-    embedding: number[];
-    start_position: number;
-    end_position: number;
-    page_number: number | null;
-  }> = new Array(options.chunks.length);
-
-  let nextIndex = 0;
-  let completedCount = 0;
-
-  const syncProgress = async () => {
-    const completionRatio =
-      options.chunks.length === 0 ? 1 : completedCount / options.chunks.length;
-    const nextProgress = Math.min(
-      EMBEDDING_PROGRESS_END,
-      Math.round(
-        EMBEDDING_PROGRESS_START +
-          (EMBEDDING_PROGRESS_END - EMBEDDING_PROGRESS_START) * completionRatio,
-      ),
-    );
-
-    await options.adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "embedding",
-        processing_progress: nextProgress,
-      })
-      .eq("id", options.materialId);
-  };
-
-  const worker = async () => {
-    while (true) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-
-      if (currentIndex >= options.chunks.length) {
-        return;
-      }
-
-      const chunk = options.chunks[currentIndex];
-      const embedding = await embedChunkWithRetry(
-        chunk.text,
-        options.geminiApiKey,
-        currentIndex,
-      );
-
-      results[currentIndex] = {
-        material_id: options.materialId,
-        chunk_index: currentIndex,
-        chunk_text: chunk.text,
-        embedding,
-        start_position: chunk.start,
-        end_position: chunk.end,
-        page_number: chunk.pageNumber,
-      };
-
-      completedCount += 1;
-      if (
-        completedCount === options.chunks.length ||
-        completedCount % EMBEDDING_CONCURRENCY === 0
-      ) {
-        await syncProgress();
-      }
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(EMBEDDING_CONCURRENCY, options.chunks.length) },
-    () => worker(),
-  );
-  await Promise.all(workers);
-
-  return results;
-}
+// ---------------------------------------------------------------------------
+// Main handler
+// ---------------------------------------------------------------------------
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -473,6 +435,9 @@ serve(async (req) => {
     const requestBody = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const { materialId, workerId } = requestBody as ProcessMaterialJobRequest;
 
+    // -----------------------------------------------------------------------
+    // Claim a job
+    // -----------------------------------------------------------------------
     const { data: claimedJobs, error: claimError } = await adminClient.rpc(
       "claim_material_processing_job",
       {
@@ -497,193 +462,354 @@ serve(async (req) => {
     jobIdForUpdate = job.id;
     materialIdForError = job.material_id;
 
-    const payload = typeof job.payload === "object" && job.payload ? job.payload as Record<string, unknown> : {};
-    const filePath = typeof payload.filePath === "string" ? payload.filePath : "";
-    const fileType = typeof payload.fileType === "string" ? payload.fileType : "";
-    const bucketName = typeof payload.bucketName === "string" ? payload.bucketName : "course-materials";
+    // Max attempts guard (also enforced in SQL, but belt-and-suspenders)
+    if (job.attempt_count > MAX_JOB_ATTEMPTS) {
+      await adminClient
+        .from("material_processing_jobs")
+        .update({
+          status: "failed",
+          last_error: `Exceeded maximum retry attempts (${MAX_JOB_ATTEMPTS})`,
+          locked_at: null,
+          locked_by: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobIdForUpdate);
+
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "failed",
+          processing_error: `Processing failed after ${MAX_JOB_ATTEMPTS} attempts. Please re-upload the document.`,
+          processing_stage: "failed",
+          processing_progress: null,
+        })
+        .eq("id", materialIdForError);
+
+      return new Response(
+        JSON.stringify({ processed: false, message: "Job exceeded max attempts." }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const payload = (typeof job.payload === "object" && job.payload
+      ? job.payload
+      : {}) as JobPayload;
+    const filePath = payload.filePath || "";
+    const fileType = payload.fileType || "";
+    const bucketName = payload.bucketName || "course-materials";
 
     if (!filePath) {
       throw new Error("Queued parse job is missing filePath");
     }
 
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_error: null,
-        processing_stage: "extracting",
-        processing_progress: 25,
-      })
-      .eq("id", materialIdForError);
+    // -----------------------------------------------------------------------
+    // Check if this is a RESUMED invocation (chunks already extracted)
+    // -----------------------------------------------------------------------
+    const isResuming = Array.isArray(payload.chunks) && payload.chunks.length > 0;
+    let chunks: ChunkData[];
+    let totalChunks: number;
+    let embeddedUpTo: number;
 
-    const { data: fileData, error: downloadError } = await adminClient.storage
-      .from(bucketName)
-      .download(filePath);
+    if (isResuming) {
+      // Resuming — skip extraction + chunking, go straight to embedding
+      chunks = payload.chunks!;
+      totalChunks = payload.totalChunks ?? chunks.length;
+      embeddedUpTo = payload.embeddedUpTo ?? 0;
 
-    if (downloadError || !fileData) {
-      throw new Error(`Failed to download file: ${downloadError?.message || "No data"}`);
-    }
-
-    const fileBytes = new Uint8Array(await fileData.arrayBuffer());
-    const ext = filePath.split(".").pop()?.toLowerCase() || fileType;
-
-    if (usesInlineGeminiExtraction(ext) && fileBytes.length > INLINE_GEMINI_MAX_FILE_SIZE) {
-      throw new Error(
-        `File size (${(fileBytes.length / 1024 / 1024).toFixed(1)}MB) exceeds the 15MB processing limit for PDF, DOC, and image files. Please split the document into smaller parts.`
+      console.log(
+        `Resuming job ${jobIdForUpdate}: embedding from chunk ${embeddedUpTo}/${totalChunks}`,
       );
+    } else {
+      // Fresh job — extract text, chunk, then start embedding
+      embeddedUpTo = 0;
+
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "processing",
+          processing_error: null,
+          processing_stage: "extracting",
+          processing_progress: 25,
+        })
+        .eq("id", materialIdForError);
+
+      const { data: fileData, error: downloadError } = await adminClient.storage
+        .from(bucketName)
+        .download(filePath);
+
+      if (downloadError || !fileData) {
+        throw new Error(`Failed to download file: ${downloadError?.message || "No data"}`);
+      }
+
+      const fileBytes = new Uint8Array(await fileData.arrayBuffer());
+      const ext = filePath.split(".").pop()?.toLowerCase() || fileType;
+
+      if (usesInlineGeminiExtraction(ext) && fileBytes.length > INLINE_GEMINI_MAX_FILE_SIZE) {
+        throw new Error(
+          `File size (${(fileBytes.length / 1024 / 1024).toFixed(1)}MB) exceeds the 15MB processing limit for PDF, DOC, and image files. Please split the document into smaller parts.`
+        );
+      }
+
+      let extractedSegments: ExtractedSegment[] = [];
+
+      switch (ext) {
+        case "pdf": {
+          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
+          extractedSegments = extraction.segments;
+          break;
+        }
+        case "png":
+        case "jpg":
+        case "jpeg":
+        case "webp":
+        case "gif": {
+          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, false);
+          extractedSegments = extraction.segments;
+          break;
+        }
+        case "docx": {
+          extractedSegments = await extractSegmentsFromDocx(fileBytes);
+          break;
+        }
+        case "doc": {
+          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
+          extractedSegments = extraction.segments;
+          break;
+        }
+        case "pptx": {
+          extractedSegments = await extractSegmentsFromPptx(fileBytes);
+          break;
+        }
+        default:
+          throw new Error(`Unsupported file type: ${ext}`);
+      }
+
+      if (extractedSegments.length === 0) {
+        throw new Error("No text could be extracted from the document");
+      }
+
+      // --- Chunking ---
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "processing",
+          processing_stage: "chunking",
+          processing_progress: 55,
+        })
+        .eq("id", materialIdForError);
+
+      const CHUNK_SIZE = 1200;
+      const OVERLAP = 200;
+      const step = Math.max(1, CHUNK_SIZE - OVERLAP);
+      chunks = [];
+
+      for (const segment of extractedSegments) {
+        const normalized = segment.text.replace(/\r\n/g, "\n").replace(/\t/g, " ");
+        const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
+        if (!cleaned) continue;
+
+        for (let start = 0; start < cleaned.length; start += step) {
+          const end = Math.min(start + CHUNK_SIZE, cleaned.length);
+          const slice = cleaned.slice(start, end).trim();
+          if (slice) {
+            chunks.push({ text: slice, start, end, pageNumber: segment.pageNumber });
+          }
+        }
+      }
+
+      if (chunks.length === 0) {
+        throw new Error("No text chunks to process after extraction");
+      }
+
+      if (chunks.length > MAX_DOCUMENT_CHUNKS) {
+        throw new Error(
+          `Document expands to ${chunks.length} chunks, which exceeds the processing limit of ${MAX_DOCUMENT_CHUNKS}. Split the file into smaller parts.`,
+        );
+      }
+
+      totalChunks = chunks.length;
+
+      // Clear existing chunks for this material (fresh extraction)
+      await adminClient.from("chunks").delete().eq("material_id", materialIdForError);
     }
 
-    let extractedSegments: ExtractedSegment[] = [];
-    let extractedTextLength = 0;
+    // -----------------------------------------------------------------------
+    // Embedding (resumable — processes EMBEDDING_SLICE_SIZE chunks per run)
+    // -----------------------------------------------------------------------
+    const sliceEnd = Math.min(embeddedUpTo + EMBEDDING_SLICE_SIZE, totalChunks);
+    const sliceChunks = chunks.slice(embeddedUpTo, sliceEnd);
 
-    switch (ext) {
-      case "pdf": {
-        const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
-        extractedSegments = extraction.segments;
-        extractedTextLength = extraction.text.length;
-        break;
-      }
-      case "png":
-      case "jpg":
-      case "jpeg":
-      case "webp":
-      case "gif": {
-        const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, false);
-        extractedSegments = extraction.segments;
-        extractedTextLength = extraction.text.length;
-        break;
-      }
-      case "docx": {
-        extractedSegments = await extractSegmentsFromDocx(fileBytes);
-        extractedTextLength = extractedSegments.reduce((sum, segment) => sum + segment.text.length, 0);
-        break;
-      }
-      case "doc": {
-        const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
-        extractedSegments = extraction.segments;
-        extractedTextLength = extraction.text.length;
-        break;
-      }
-      case "pptx": {
-        extractedSegments = await extractSegmentsFromPptx(fileBytes);
-        extractedTextLength = extractedSegments.reduce((sum, segment) => sum + segment.text.length, 0);
-        break;
-      }
-      default:
-        throw new Error(`Unsupported file type: ${ext}`);
-    }
+    if (sliceChunks.length > 0) {
+      // Update progress
+      const overallRatio = totalChunks === 0 ? 1 : embeddedUpTo / totalChunks;
+      const startProgress = Math.round(
+        EMBEDDING_PROGRESS_START +
+          (EMBEDDING_PROGRESS_END - EMBEDDING_PROGRESS_START) * overallRatio,
+      );
 
-    if (extractedSegments.length === 0) {
-      throw new Error("No text could be extracted from the document");
-    }
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "processing",
+          processing_stage: "embedding",
+          processing_progress: startProgress,
+        })
+        .eq("id", materialIdForError);
 
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "chunking",
-        processing_progress: 55,
-      })
-      .eq("id", materialIdForError);
+      // Embed in batches of EMBEDDING_BATCH_API_SIZE using batchEmbedContents
+      const rows: Array<{
+        material_id: string;
+        chunk_index: number;
+        chunk_text: string;
+        embedding: number[];
+        start_position: number;
+        end_position: number;
+        page_number: number | null;
+      }> = [];
 
-    const CHUNK_SIZE = 1200;
-    const OVERLAP = 200;
-    const step = Math.max(1, CHUNK_SIZE - OVERLAP);
-    const chunks: { text: string; start: number; end: number; pageNumber: number | null }[] = [];
+      for (let b = 0; b < sliceChunks.length; b += EMBEDDING_BATCH_API_SIZE) {
+        const batchChunks = sliceChunks.slice(b, b + EMBEDDING_BATCH_API_SIZE);
+        const batchTexts = batchChunks.map((c) => c.text);
+        const globalOffset = embeddedUpTo + b;
 
-    for (const segment of extractedSegments) {
-      const normalized = segment.text.replace(/\r\n/g, "\n").replace(/\t/g, " ");
-      const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
-      if (!cleaned) continue;
+        const embedResults = await batchEmbedWithRetry(batchTexts, globalOffset, geminiApiKey);
 
-      for (let start = 0; start < cleaned.length; start += step) {
-        const end = Math.min(start + CHUNK_SIZE, cleaned.length);
-        const slice = cleaned.slice(start, end).trim();
-        if (slice) {
-          chunks.push({
-            text: slice,
-            start,
-            end,
-            pageNumber: segment.pageNumber,
+        for (let i = 0; i < embedResults.length; i++) {
+          const chunk = batchChunks[i];
+          rows.push({
+            material_id: materialIdForError,
+            chunk_index: embedResults[i].chunkIndex,
+            chunk_text: chunk.text,
+            embedding: embedResults[i].embedding,
+            start_position: chunk.start,
+            end_position: chunk.end,
+            page_number: chunk.pageNumber,
           });
+        }
+
+        // Sync progress after each batch API call
+        const batchDone = embeddedUpTo + b + batchChunks.length;
+        const batchRatio = totalChunks === 0 ? 1 : batchDone / totalChunks;
+        const batchProgress = Math.min(
+          EMBEDDING_PROGRESS_END,
+          Math.round(
+            EMBEDDING_PROGRESS_START +
+              (EMBEDDING_PROGRESS_END - EMBEDDING_PROGRESS_START) * batchRatio,
+          ),
+        );
+
+        await adminClient
+          .from("materials")
+          .update({
+            processing_status: "processing",
+            processing_stage: "embedding",
+            processing_progress: batchProgress,
+          })
+          .eq("id", materialIdForError);
+      }
+
+      // Insert embedded chunks into DB
+      const DB_BATCH_SIZE = 100;
+      for (let i = 0; i < rows.length; i += DB_BATCH_SIZE) {
+        const batch = rows.slice(i, i + DB_BATCH_SIZE);
+        const { error: insertError } = await adminClient.from("chunks").insert(batch);
+        if (insertError) {
+          throw new Error(`Failed to insert chunks: ${insertError.message}`);
         }
       }
     }
 
-    if (chunks.length === 0) {
-      throw new Error("No text chunks to process after extraction");
-    }
+    const newEmbeddedUpTo = sliceEnd;
 
-    if (chunks.length > MAX_DOCUMENT_CHUNKS) {
-      throw new Error(
-        `Document expands to ${chunks.length} chunks, which exceeds the processing limit of ${MAX_DOCUMENT_CHUNKS}. Split the file into smaller parts.`,
+    // -----------------------------------------------------------------------
+    // Check: are we done, or do we need to continue in next invocation?
+    // -----------------------------------------------------------------------
+    if (newEmbeddedUpTo >= totalChunks) {
+      // All chunks embedded — finalize
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "completed",
+          processing_error: null,
+          processing_stage: "completed",
+          processing_progress: 100,
+        })
+        .eq("id", materialIdForError);
+
+      await adminClient
+        .from("material_processing_jobs")
+        .update({
+          status: "completed",
+          last_error: null,
+          locked_at: null,
+          locked_by: null,
+          payload: { filePath, fileType, bucketName, totalChunks },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobIdForUpdate);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          jobId: jobIdForUpdate,
+          materialId: materialIdForError,
+          chunksInserted: totalChunks,
+          resumed: isResuming,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    await adminClient.from("chunks").delete().eq("material_id", materialIdForError);
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "embedding",
-        processing_progress: 75,
-      })
-      .eq("id", materialIdForError);
-
-    const rows = await embedChunksConcurrently({
+    // Not done yet — save cursor and requeue for next invocation
+    const updatedPayload: JobPayload = {
+      filePath,
+      fileType,
+      bucketName,
       chunks,
-      geminiApiKey,
-      materialId: materialIdForError,
-      adminClient,
-    });
-
-    const batchSize = 100;
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize);
-      const { error: insertError } = await adminClient.from("chunks").insert(batch);
-      if (insertError) {
-        throw new Error(`Failed to insert chunks: ${insertError.message}`);
-      }
-    }
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "finalizing",
-        processing_progress: 95,
-      })
-      .eq("id", materialIdForError);
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "completed",
-        processing_error: null,
-        processing_stage: "completed",
-        processing_progress: 100,
-      })
-      .eq("id", materialIdForError);
+      embeddedUpTo: newEmbeddedUpTo,
+      totalChunks,
+    };
 
     await adminClient
       .from("material_processing_jobs")
       .update({
-        status: "completed",
+        status: "pending",
         last_error: null,
         locked_at: null,
         locked_by: null,
+        payload: updatedPayload as unknown as Record<string, unknown>,
         updated_at: new Date().toISOString(),
       })
       .eq("id", jobIdForUpdate);
+
+    // Fire-and-forget: trigger next invocation
+    const continueWorker = fetch(`${supabaseUrl}/functions/v1/process-material-job`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ materialId: materialIdForError }),
+    }).catch((err) => {
+      console.error("Failed to trigger continuation:", err);
+    });
+
+    if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+      EdgeRuntime.waitUntil(continueWorker);
+    } else {
+      void continueWorker;
+    }
 
     return new Response(
       JSON.stringify({
         success: true,
         jobId: jobIdForUpdate,
         materialId: materialIdForError,
-        chunksInserted: rows.length,
-        textLength: extractedTextLength,
+        chunksEmbeddedThisRun: sliceChunks.length,
+        embeddedUpTo: newEmbeddedUpTo,
+        totalChunks,
+        continuing: true,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

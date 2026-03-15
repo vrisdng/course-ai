@@ -9,9 +9,10 @@ const corsHeaders = {
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const CHAT_MODEL = "gemini-3-flash-preview";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
-const HIGH_RECALL_MATCH_THRESHOLD = 0.35;
+const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
 const HIGH_RECALL_MATCH_COUNT = 18;
 const FINAL_MATCH_COUNT = 6;
+const RELEVANCE_FLOOR = 0.55;
 const CITATION_TOKEN_PATTERN = "<<cite:(\\d+)>>";
 const CONVERSATION_HISTORY_FETCH_LIMIT = 24;
 const CONVERSATION_HISTORY_PROMPT_LIMIT = 14;
@@ -341,7 +342,10 @@ function rerankRetrievedChunks(chunks: RetrievedChunk[], query: string, topK: nu
   });
 
   scored.sort((a, b) => b.combinedScore - a.combinedScore);
-  return scored.slice(0, topK).map((entry) => entry.chunk);
+  return scored.slice(0, topK).map((entry) => ({
+    ...entry.chunk,
+    relevance_score: entry.combinedScore,
+  }));
 }
 
 function classifyQueryCategory(message: string): string {
@@ -1181,14 +1185,17 @@ serve(async (req) => {
     throwIfAborted(requestAbortController.signal);
 
     const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
-    const retrievedChunks = rerankRetrievedChunks(
+    const rerankedChunks = rerankRetrievedChunks(
       highRecallChunks,
       rewrittenQuery || trimmedMessage,
       FINAL_MATCH_COUNT
     );
+    const retrievedChunks = rerankedChunks.filter(
+      (c) => c.relevance_score >= RELEVANCE_FLOOR
+    );
 
     console.log(
-      `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${retrievedChunks.length}.`
+      `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor.`
     );
 
     let ragContext = "";
@@ -1211,33 +1218,23 @@ serve(async (req) => {
       });
     }
 
-    const systemPrompt = `You are EduChat, an AI learning assistant for university students. Your role is to answer questions about course materials accurately and helpfully.
+    const systemPrompt = `You are EduChat, an AI learning assistant for university students.
 
-IMPORTANT GUIDELINES:
-1. Base your answers on the provided course materials when available.
-2. ALWAYS cite your sources using numbered tokens in this exact format: <<cite:1>>, <<cite:2>>.
-3. Place citation tokens immediately after the sentence or claim they support.
-4. If the information is not in the provided materials, say so clearly.
-5. Use markdown formatting for better readability.
-6. Be concise but thorough.
-7. Do NOT output a "Sources" section. Only use inline citation tokens like <<cite:1>>.
-8. Use only citation numbers that correspond to provided sources.
-9. Keep formatting consistent across answers:
-   - If the response is short (1-2 brief paragraphs), do not use headings.
-   - If headings are needed, use only level-2 markdown headings (##) in Title Case.
-   - Use at most 3 sections and keep heading style consistent throughout.
-   - Do not use bold text as fake headings.
-10. Prefer this structure for multi-part answers:
-    - A brief direct answer first.
-    - Then sections such as "## Key Points" and "## Explanation" when helpful.
-11. Use bullet points for lists/comparisons; avoid mixing list styles in one section.
-12. Use prior conversation turns to resolve follow-up references ("this", "that", "it", "the previous example") before answering.
+Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 
-Citation format examples (follow exactly):
+FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text — use **bold** for headings. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data
+
+CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that correspond to provided sources.
+
+Examples:
 - "Virtual memory allows for larger address spaces <<cite:1>>."
 - "The CPU schedules processes based on priority <<cite:2>>. This ensures efficiency <<cite:3>>."
 
-${ragContext ? "The following are relevant excerpts from the course materials. Use these to answer the student's question:" : "No specific course materials were found for this query. Provide a helpful general response but note that this isn't from the course materials."}
+RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If the question is outside the scope of the course materials, say so and suggest the student search online. Do not force-fit unrelated material.
+
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".
+
+${ragContext ? "The following are relevant excerpts from the course materials:" : "No relevant course materials were found for this query."}
 ${ragContext}`;
 
     let streamCancelled = false;
@@ -1298,6 +1295,36 @@ ${ragContext}`;
 
             ensureStreamActive();
 
+            const citations = citedChunks.map((chunk, index) => ({
+              id: `citation-${index + 1}`,
+              chunkId: chunk.id,
+              excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+              documentName: chunk.material_name || chunk.document_name || "Unknown document",
+              documentType: chunk.material_type || chunk.document_type || "document",
+              pageNumber: chunk.page_number,
+              startMs: chunk.start_ms,
+              endMs: chunk.end_ms,
+              relevanceScore: chunk.relevance_score,
+            }));
+
+            // Send the final event to the client BEFORE persisting to DB.
+            // This ensures the user always sees the complete answer even if
+            // a subsequent database write fails.
+            sendEvent("final", {
+              answer,
+              citations,
+              conversationId: activeConversationId,
+              meta: {
+                chatModel: CHAT_MODEL,
+                embeddingModel: EMBEDDING_MODEL,
+                citationPipelineVersion: CITATION_PIPELINE_VERSION,
+              },
+            });
+
+            console.log(`Successfully generated response with ${citations.length} citations`);
+
+            // --- Persist to database (best-effort after client has received the answer) ---
+
             const { data: userMessage, error: userMessageError } = await supabaseClient
               .from("messages")
               .insert({
@@ -1309,10 +1336,9 @@ ${ragContext}`;
               .single();
 
             if (userMessageError || !userMessage) {
-              throw new Error(`Failed to save user message: ${userMessageError?.message || "Unknown error"}`);
+              console.error(`Failed to save user message: ${userMessageError?.message || "Unknown error"}`);
+              return;
             }
-
-            ensureStreamActive();
 
             const { data: assistantMessage, error: assistantMessageError } = await supabaseClient
               .from("messages")
@@ -1325,12 +1351,11 @@ ${ragContext}`;
               .single();
 
             if (assistantMessageError || !assistantMessage) {
-              throw new Error(`Failed to save assistant message: ${assistantMessageError?.message || "Unknown error"}`);
+              console.error(`Failed to save assistant message: ${assistantMessageError?.message || "Unknown error"}`);
+              return;
             }
 
             if (citedChunks.length > 0) {
-              ensureStreamActive();
-
               const citationRows = citedChunks.map((chunk) => ({
                 message_id: assistantMessage.id,
                 chunk_id: chunk.id,
@@ -1343,11 +1368,9 @@ ${ragContext}`;
                 .insert(citationRows);
 
               if (citationsError) {
-                throw new Error(`Failed to save citations: ${citationsError.message}`);
+                console.error(`Failed to save citations: ${citationsError.message}`);
               }
             }
-
-            ensureStreamActive();
 
             await supabaseClient
               .from("conversations")
@@ -1361,8 +1384,6 @@ ${ragContext}`;
               answer,
             });
             const unresolved = unresolvedReason !== null;
-
-            ensureStreamActive();
 
             await insertQueryEvent(supabaseAdminClient, {
               user_id: user.id,
@@ -1379,32 +1400,6 @@ ${ragContext}`;
               unresolved,
               unresolved_reason: unresolvedReason,
               latency_ms: Date.now() - requestStartedAt,
-            });
-
-            const citations = citedChunks.map((chunk, index) => ({
-              id: `citation-${index + 1}`,
-              chunkId: chunk.id,
-              excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
-              documentName: chunk.material_name || chunk.document_name || "Unknown document",
-              documentType: chunk.material_type || chunk.document_type || "document",
-              pageNumber: chunk.page_number,
-              startMs: chunk.start_ms,
-              endMs: chunk.end_ms,
-              relevanceScore: chunk.relevance_score,
-            }));
-
-            console.log(`Successfully generated response with ${citations.length} citations`);
-
-            ensureStreamActive();
-            sendEvent("final", {
-              answer,
-              citations,
-              conversationId: activeConversationId,
-              meta: {
-                chatModel: CHAT_MODEL,
-                embeddingModel: EMBEDDING_MODEL,
-                citationPipelineVersion: CITATION_PIPELINE_VERSION,
-              },
             });
           } catch (streamError) {
             if (isAbortError(streamError)) {

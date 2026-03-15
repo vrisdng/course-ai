@@ -529,7 +529,11 @@ export function useStudentChat(routeConversationId: string | null = null) {
       }
 
       if (!finalPayload) {
-        throw new Error('The response stream ended before completion.');
+        // Stream ended without a "final" event (e.g. backend error during
+        // DB persistence after the answer was already streamed). Keep
+        // whatever content the user already saw instead of deleting it.
+        console.warn('Stream ended without a final event — keeping partial content.');
+        return;
       }
 
       if (activeRequestIdRef.current !== requestId) {
