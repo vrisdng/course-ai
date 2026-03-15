@@ -1,5 +1,5 @@
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { ChevronRight, FileText, Loader2, Sparkles } from 'lucide-react';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 
 import { cn } from '@/lib/utils';
 
@@ -7,10 +7,10 @@ import { markdownWithCitationLinks } from './citations';
 import type { Message } from './types';
 
 const SUGGESTIONS = [
-  'Explain the concept of machine learning',
-  'What are the key points from Week 3?',
-  'How does regression analysis work?',
-  'Summarize the main algorithms covered',
+  'Explain this concept in simple terms',
+  'What are the key takeaways?',
+  'How does this idea work step by step?',
+  'Summarize the most important points',
 ];
 
 interface MessageListProps {

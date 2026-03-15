@@ -11,9 +11,11 @@ interface ChatComposerProps {
   onInputChange: (nextValue: string) => void;
   onSend: () => void;
   onStop: () => void;
+  placeholder?: string;
+  footerText?: string;
 }
 
-export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop }: ChatComposerProps) {
+export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop, placeholder = 'Ask a question about your course materials...', footerText = 'EduChat uses RAG to ground answers in your course materials' }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -39,7 +41,7 @@ export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop }
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question about your course materials..."
+            placeholder={placeholder}
             className="min-h-[44px] max-h-[200px] resize-none"
             rows={1}
             disabled={isLoading}
@@ -67,7 +69,7 @@ export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop }
         </div>
 
         <p className="mt-2 text-center text-xs text-muted-foreground">
-          EduChat uses RAG to ground answers in your course materials
+          {footerText}
         </p>
       </div>
     </div>
