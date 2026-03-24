@@ -26,11 +26,15 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
 import {
+  INLINE_GEMINI_MAX_FILE_SIZE_BYTES,
+  LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES,
   getDeferredUploadValidationError,
   getImmediateUploadValidationError,
   isTextLikeUpload,
   isVideoUpload,
 } from '@/lib/materialUpload';
+import { preloadFFmpeg } from '@/lib/ffmpegAudioExtractor';
+import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -229,6 +233,10 @@ export default function AdminDashboard() {
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [currentUploadFileName, setCurrentUploadFileName] = useState<string | null>(null);
+  const [currentUploadStatusText, setCurrentUploadStatusText] = useState<string | null>(null);
+  const [currentUploadProgress, setCurrentUploadProgress] = useState<number | null>(null);
+  const [currentUploadFileSize, setCurrentUploadFileSize] = useState<number | null>(null);
+  const [currentUploadIndex, setCurrentUploadIndex] = useState<{ current: number; total: number } | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
   const [isLoadingTerms, setIsLoadingTerms] = useState(true);
@@ -395,6 +403,7 @@ export default function AdminDashboard() {
 
   const uploadSetupError = getUploadSetupError();
   const isUploadSetupComplete = uploadSetupError === null;
+  const documentLimitMb = Math.round(INLINE_GEMINI_MAX_FILE_SIZE_BYTES / 1024 / 1024);
 
   const uploadChecklistItems = [
     {
@@ -471,6 +480,10 @@ export default function AdminDashboard() {
   const resetUploadSelection = () => {
     setPendingFiles([]);
     setCurrentUploadFileName(null);
+    setCurrentUploadStatusText(null);
+    setCurrentUploadProgress(null);
+    setCurrentUploadFileSize(null);
+    setCurrentUploadIndex(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -573,11 +586,22 @@ export default function AdminDashboard() {
   useEffect(() => {
     setPendingFiles([]);
     setCurrentUploadFileName(null);
+    setCurrentUploadStatusText(null);
+    setCurrentUploadProgress(null);
+    setCurrentUploadFileSize(null);
+    setCurrentUploadIndex(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   }, [uploadAcademicTermId, uploadCourseId]);
+
+  // Preload FFmpeg WASM when video files are in the pending list
+  useEffect(() => {
+    if (pendingFiles.some((f) => isVideoUpload(f))) {
+      preloadFFmpeg();
+    }
+  }, [pendingFiles]);
 
   const handleCreateCourse = async () => {
     if (!profile) {
@@ -705,6 +729,39 @@ export default function AdminDashboard() {
       throw new Error(uploadValidationError);
     }
 
+    // Video files use client-side audio extraction — handle separately
+    if (isVideoUpload(targetFile)) {
+      if (cancelUploadRef.current) throw new Error('Upload cancelled');
+
+      // Use the AbortController already set by the upload loop
+      if (!abortControllerRef.current) {
+        abortControllerRef.current = new AbortController();
+      }
+
+      await uploadVideoForTranscription({
+        file: targetFile,
+        courseId,
+        onProgress: (update) => {
+          setCurrentUploadStatusText(update.statusText);
+          setCurrentUploadProgress(update.progress);
+        },
+        confirmLargeFile:
+          targetFile.size > LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES
+            ? () =>
+                Promise.resolve(
+                  window.confirm(
+                    'This file is large. Extraction will take a few minutes. Continue?'
+                  )
+                )
+            : undefined,
+        signal: abortControllerRef.current.signal,
+      });
+      return 'processing';
+    }
+
+    setCurrentUploadStatusText('Uploading file...');
+    setCurrentUploadProgress(0);
+
     const filePath = `${courseId}/${crypto.randomUUID()}-${targetFile.name}`;
     const { error: uploadError } = await supabaseAbortable.storage
       .from('course-materials')
@@ -737,6 +794,9 @@ export default function AdminDashboard() {
       .select('id')
       .single();
 
+    setCurrentUploadStatusText('Processing...');
+    setCurrentUploadProgress(50);
+
     if (insertError || !material) {
       if (insertError?.message?.toLowerCase().includes('access_scope')) {
         throw new Error('Database is missing access scope support. Run the latest migrations.');
@@ -749,7 +809,6 @@ export default function AdminDashboard() {
     }
 
     const isTextLike = isTextLikeUpload(targetFile);
-    const isVideo = isVideoUpload(targetFile);
     if (isTextLike) {
       const text = await targetFile.text();
       const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
@@ -766,25 +825,6 @@ export default function AdminDashboard() {
 
       if (ingestResult?.error) {
         throw new Error(ingestResult.error);
-      }
-      return 'indexed';
-    }
-
-    if (isVideo) {
-      const { data: transcriptionResult, error: transcriptionError } = await supabaseAbortable.functions.invoke('transcribe-video', {
-        body: {
-          materialId: material.id,
-          filePath,
-        },
-        signal: abortControllerRef.current?.signal,
-      });
-
-      if (transcriptionError) {
-        throw new Error(transcriptionError.message || 'Failed to transcribe video');
-      }
-
-      if (transcriptionResult?.error) {
-        throw new Error(transcriptionResult.error);
       }
       return 'indexed';
     }
@@ -852,6 +892,10 @@ export default function AdminDashboard() {
 
         const targetFile = queue[index];
         setCurrentUploadFileName(targetFile.name);
+        setCurrentUploadStatusText(null);
+        setCurrentUploadProgress(null);
+        setCurrentUploadFileSize(targetFile.size);
+        setCurrentUploadIndex({ current: index + 1, total: queue.length });
         abortControllerRef.current = new AbortController();
 
         try {
@@ -908,6 +952,10 @@ export default function AdminDashboard() {
       cancelUploadRef.current = false;
       abortControllerRef.current = null;
       setCurrentUploadFileName(null);
+    setCurrentUploadStatusText(null);
+    setCurrentUploadProgress(null);
+    setCurrentUploadFileSize(null);
+    setCurrentUploadIndex(null);
     }
   };
 
@@ -1718,11 +1766,6 @@ export default function AdminDashboard() {
                           </div>
                         ))}
                       </div>
-                      {isUploading && currentUploadFileName && (
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          Uploading: {currentUploadFileName}
-                        </p>
-                      )}
                     </>
                   ) : (
                     <>
@@ -1752,6 +1795,16 @@ export default function AdminDashboard() {
                       </div>
                     </>
                   )}
+                </div>
+
+                <div className="rounded-lg border border-border bg-muted/20 p-4">
+                  <p className="text-sm font-medium text-foreground">What can be uploaded?</p>
+                  <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                    <li>PDF, DOC, DOCX, PPTX, PNG, JPG, JPEG, WEBP, and GIF files.</li>
+                    <li>PDF, DOC, and image files must be {documentLimitMb}MB or smaller.</li>
+                    <li>MP4 and WebM video files are supported (audio is extracted and transcribed with timestamps).</li>
+                    <li>DOCX and PPTX files are extracted after upload.</li>
+                  </ul>
                 </div>
 
                 {pendingFiles.length > 0 && (
@@ -1793,6 +1846,40 @@ export default function AdminDashboard() {
                         );
                       })}
                     </div>
+
+                    {isUploading && currentUploadFileName && (
+                      <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {currentUploadFileName}
+                          </p>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {currentUploadFileSize != null && (
+                              <span className="text-xs text-muted-foreground">{formatBytes(currentUploadFileSize)}</span>
+                            )}
+                            {currentUploadIndex && (
+                              <Badge variant="secondary" className="text-xs">
+                                {currentUploadIndex.current} / {currentUploadIndex.total}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-primary transition-all duration-300"
+                              style={{ width: `${currentUploadProgress ?? 0}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-medium text-muted-foreground w-8 text-right">
+                            {currentUploadProgress != null ? `${Math.round(currentUploadProgress)}%` : ''}
+                          </span>
+                        </div>
+                        {currentUploadStatusText && (
+                          <p className="text-xs text-muted-foreground">{currentUploadStatusText}</p>
+                        )}
+                      </div>
+                    )}
 
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                       <Button size="sm" variant="outline" onClick={handleCancelUpload}>

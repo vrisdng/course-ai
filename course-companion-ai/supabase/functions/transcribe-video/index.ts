@@ -7,11 +7,34 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-interface TranscribeVideoRequest {
+// ---------- Request types ----------
+
+interface SingleFileRequest {
   materialId: string;
   filePath: string;
   bucketName?: string;
 }
+
+interface ChunkMeta {
+  filePath: string;
+  index: number;
+  offsetMs: number;
+}
+
+interface MultiChunkRequest {
+  materialId: string;
+  chunks: ChunkMeta[];
+  totalChunks: number;
+  currentChunkIndex?: number; // set on self-invocation
+}
+
+type TranscribeRequest = SingleFileRequest | MultiChunkRequest;
+
+function isMultiChunkRequest(body: TranscribeRequest): body is MultiChunkRequest {
+  return Array.isArray((body as MultiChunkRequest).chunks);
+}
+
+// ---------- Internal types ----------
 
 interface TranscriptSegment {
   startMs: number;
@@ -34,7 +57,9 @@ interface TranscriptChunk {
   endMs: number;
 }
 
-const VIDEO_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+// ---------- Constants ----------
+
+const WHISPER_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_BUCKET = "course-materials";
 const DEFAULT_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions";
 const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
@@ -43,8 +68,9 @@ const EMBEDDING_URL =
 const TARGET_CHUNK_CHARACTERS = 1200;
 const MIN_CHUNK_CHARACTERS = 200;
 const SEGMENT_OVERLAP = 1;
-const SUPPORTED_VIDEO_EXTENSIONS = new Set(["mp4", "webm"]);
-const SUPPORTED_VIDEO_MIME_TYPES = new Set(["video/mp4", "video/webm"]);
+const SUPPORTED_AUDIO_EXTENSIONS = new Set(["mp3", "mp4", "webm", "m4a", "wav", "ogg"]);
+
+// ---------- Helpers ----------
 
 function formatFileSizeMb(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
@@ -54,41 +80,36 @@ function getFileExtension(filePath: string): string {
   return filePath.split(".").pop()?.toLowerCase() || "";
 }
 
-function getMimeType(filePath: string, blobType: string): string {
-  if (SUPPORTED_VIDEO_MIME_TYPES.has(blobType)) {
-    return blobType;
-  }
-
-  const extension = getFileExtension(filePath);
-  if (extension === "mp4") {
-    return "video/mp4";
-  }
-
-  if (extension === "webm") {
-    return "video/webm";
-  }
-
-  return blobType || "application/octet-stream";
+function getMimeTypeForFile(filePath: string): string {
+  const ext = getFileExtension(filePath);
+  const map: Record<string, string> = {
+    mp3: "audio/mpeg",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+  };
+  return map[ext] || "application/octet-stream";
 }
 
-function normalizeTranscriptSegments(segments: unknown[]): TranscriptSegment[] {
+function normalizeTranscriptSegments(
+  segments: unknown[],
+  offsetMs = 0
+): TranscriptSegment[] {
   const normalized = segments
     .map((segment) => {
-      if (!segment || typeof segment !== "object") {
-        return null;
-      }
+      if (!segment || typeof segment !== "object") return null;
 
       const candidate = segment as Record<string, unknown>;
       const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
       const startSeconds = typeof candidate.start === "number" ? candidate.start : null;
       const endSeconds = typeof candidate.end === "number" ? candidate.end : null;
 
-      if (!text || startSeconds === null || endSeconds === null) {
-        return null;
-      }
+      if (!text || startSeconds === null || endSeconds === null) return null;
 
-      const startMs = Math.max(0, Math.round(startSeconds * 1000));
-      const endMs = Math.max(startMs, Math.round(endSeconds * 1000));
+      const startMs = Math.max(0, Math.round(startSeconds * 1000) + offsetMs);
+      const endMs = Math.max(startMs, Math.round(endSeconds * 1000) + offsetMs);
 
       return {
         startMs,
@@ -99,25 +120,21 @@ function normalizeTranscriptSegments(segments: unknown[]): TranscriptSegment[] {
         speakerLabel: null,
       } satisfies TranscriptSegment;
     })
-    .filter((segment): segment is TranscriptSegment => Boolean(segment))
+    .filter((s): s is TranscriptSegment => Boolean(s))
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 
   const deduped: TranscriptSegment[] = [];
   for (const segment of normalized) {
-    const previous = deduped[deduped.length - 1];
+    const prev = deduped[deduped.length - 1];
     if (
-      previous &&
-      previous.startMs === segment.startMs &&
-      previous.endMs === segment.endMs &&
-      previous.text === segment.text
+      prev &&
+      prev.startMs === segment.startMs &&
+      prev.endMs === segment.endMs &&
+      prev.text === segment.text
     ) {
       continue;
     }
-
-    if (previous && segment.startMs < previous.startMs) {
-      continue;
-    }
-
+    if (prev && segment.startMs < prev.startMs) continue;
     deduped.push(segment);
   }
 
@@ -125,9 +142,7 @@ function normalizeTranscriptSegments(segments: unknown[]): TranscriptSegment[] {
 }
 
 function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[] {
-  if (segments.length === 0) {
-    return [];
-  }
+  if (segments.length === 0) return [];
 
   const chunks: TranscriptChunk[] = [];
   let index = 0;
@@ -153,16 +168,12 @@ function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[]
       textLength = nextLength;
       cursor += 1;
 
-      if (textLength >= TARGET_CHUNK_CHARACTERS) {
-        break;
-      }
+      if (textLength >= TARGET_CHUNK_CHARACTERS) break;
     }
 
-    if (windowSegments.length === 0) {
-      break;
-    }
+    if (windowSegments.length === 0) break;
 
-    const text = windowSegments.map((segment) => segment.text).join(" ").trim();
+    const text = windowSegments.map((s) => s.text).join(" ").trim();
     if (text) {
       chunks.push({
         text,
@@ -171,10 +182,7 @@ function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[]
       });
     }
 
-    if (cursor >= segments.length) {
-      break;
-    }
-
+    if (cursor >= segments.length) break;
     index = Math.max(index + 1, cursor - SEGMENT_OVERLAP);
   }
 
@@ -222,6 +230,7 @@ async function transcribeWithOpenAiCompatible(input: {
   bytes: Uint8Array;
   fileName: string;
   mimeType: string;
+  offsetMs?: number;
 }): Promise<TranscriptionResult> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   const apiUrl =
@@ -229,12 +238,14 @@ async function transcribeWithOpenAiCompatible(input: {
   const model =
     Deno.env.get("OPENAI_TRANSCRIPTION_MODEL") || DEFAULT_TRANSCRIPTION_MODEL;
 
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
-  }
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
   const formData = new FormData();
-  formData.append("file", new Blob([input.bytes], { type: input.mimeType }), input.fileName);
+  formData.append(
+    "file",
+    new Blob([input.bytes], { type: input.mimeType }),
+    input.fileName
+  );
   formData.append("model", model);
   formData.append("response_format", "verbose_json");
   formData.append("timestamp_granularities[]", "segment");
@@ -243,9 +254,7 @@ async function transcribeWithOpenAiCompatible(input: {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch(apiUrl, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { Authorization: `Bearer ${apiKey}` },
       body: formData,
     });
 
@@ -266,7 +275,10 @@ async function transcribeWithOpenAiCompatible(input: {
   }
 
   const segments = Array.isArray(payload.segments) ? payload.segments : [];
-  const normalizedSegments = normalizeTranscriptSegments(segments);
+  const normalizedSegments = normalizeTranscriptSegments(
+    segments,
+    input.offsetMs ?? 0
+  );
 
   if (normalizedSegments.length === 0) {
     throw new Error("The transcription service returned no timestamped segments");
@@ -275,13 +287,143 @@ async function transcribeWithOpenAiCompatible(input: {
   return {
     durationMs:
       typeof payload.duration === "number"
-        ? Math.round(payload.duration * 1000)
+        ? Math.round(payload.duration * 1000) + (input.offsetMs ?? 0)
         : normalizedSegments[normalizedSegments.length - 1]?.endMs ?? null,
     language: typeof payload.language === "string" ? payload.language : null,
     provider: "openai-whisper-compatible",
     segments: normalizedSegments,
   };
 }
+
+// ---------- Core processing: finalize (chunk + embed + store) ----------
+
+async function finalizeTranscription(opts: {
+  materialId: string;
+  allSegments: TranscriptSegment[];
+  durationMs: number | null;
+  language: string | null;
+  adminClient: any;
+  geminiApiKey: string;
+  chunkStoragePaths?: string[];
+}) {
+  const {
+    materialId,
+    allSegments,
+    durationMs,
+    language,
+    adminClient,
+    geminiApiKey,
+    chunkStoragePaths,
+  } = opts;
+
+  const transcriptChunks = buildTranscriptChunks(allSegments);
+  if (transcriptChunks.length === 0) {
+    throw new Error("The transcript did not contain enough text to index");
+  }
+
+  await adminClient
+    .from("materials")
+    .update({
+      processing_status: "processing",
+      processing_stage: "chunking",
+      processing_progress: 72,
+    })
+    .eq("id", materialId);
+
+  // Clear previous data
+  await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
+  await adminClient.from("chunks").delete().eq("material_id", materialId);
+
+  // Insert transcript segments
+  const transcriptRows = allSegments.map((segment, index) => ({
+    material_id: materialId,
+    segment_index: index,
+    start_ms: segment.startMs,
+    end_ms: segment.endMs,
+    text: segment.text,
+    confidence: segment.confidence ?? null,
+    speaker_label: segment.speakerLabel ?? null,
+  }));
+
+  for (let i = 0; i < transcriptRows.length; i += 250) {
+    const batch = transcriptRows.slice(i, i + 250);
+    const { error } = await adminClient
+      .from("material_transcript_segments")
+      .insert(batch);
+    if (error) throw new Error(`Failed to insert transcript segments: ${error.message}`);
+  }
+
+  // Generate embeddings
+  await adminClient
+    .from("materials")
+    .update({
+      processing_status: "processing",
+      processing_stage: "embedding",
+      processing_progress: 80,
+    })
+    .eq("id", materialId);
+
+  const chunkRows: Array<{
+    material_id: string;
+    chunk_index: number;
+    chunk_text: string;
+    embedding: number[];
+    start_position: number;
+    end_position: number;
+    start_ms: number;
+    end_ms: number;
+    page_number: null;
+  }> = [];
+
+  for (let i = 0; i < transcriptChunks.length; i += 1) {
+    const chunk = transcriptChunks[i];
+    const embedding = await embedText(chunk.text, geminiApiKey);
+    chunkRows.push({
+      material_id: materialId,
+      chunk_index: i,
+      chunk_text: chunk.text,
+      embedding,
+      start_position: 0,
+      end_position: chunk.text.length,
+      start_ms: chunk.startMs,
+      end_ms: chunk.endMs,
+      page_number: null,
+    });
+  }
+
+  for (let i = 0; i < chunkRows.length; i += 100) {
+    const batch = chunkRows.slice(i, i + 100);
+    const { error } = await adminClient.from("chunks").insert(batch);
+    if (error) throw new Error(`Failed to insert transcript chunks: ${error.message}`);
+  }
+
+  // Clean up audio chunks from storage
+  if (chunkStoragePaths && chunkStoragePaths.length > 0) {
+    await adminClient.storage
+      .from(DEFAULT_BUCKET)
+      .remove(chunkStoragePaths);
+  }
+
+  // Mark completed — clear file_path since original video is not stored
+  await adminClient
+    .from("materials")
+    .update({
+      processing_status: "completed",
+      processing_error: null,
+      processing_stage: "completed",
+      processing_progress: 100,
+      duration_ms: durationMs,
+      transcription_provider: "openai-whisper-compatible",
+      transcription_language: language,
+      thumbnail_path: null,
+      file_path: "",
+    })
+    .eq("id", materialId);
+
+  return { segmentsInserted: transcriptRows.length, chunksInserted: chunkRows.length };
+}
+
+// ---------- Main handler ----------
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -345,13 +487,190 @@ serve(async (req) => {
       });
     }
 
-    const { materialId, filePath, bucketName } =
-      (await req.json()) as TranscribeVideoRequest;
-    materialIdForError = materialId;
+    const body = (await req.json()) as TranscribeRequest;
+    materialIdForError = body.materialId;
 
-    if (!materialId || !filePath) {
+    if (!body.materialId) {
       return new Response(
-        JSON.stringify({ error: "materialId and filePath are required" }),
+        JSON.stringify({ error: "materialId is required" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // ===== Multi-chunk mode =====
+    if (isMultiChunkRequest(body)) {
+      const { materialId, chunks, totalChunks } = body;
+      const currentChunkIndex = body.currentChunkIndex ?? 0;
+
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "processing",
+          processing_error: null,
+          processing_stage: "transcribing",
+          processing_progress: 35 + Math.round((currentChunkIndex / totalChunks) * 35),
+        })
+        .eq("id", materialId);
+
+      // Transcribe the current chunk
+      const chunkMeta = chunks[currentChunkIndex];
+      const { data: fileData, error: downloadError } = await adminClient.storage
+        .from(DEFAULT_BUCKET)
+        .download(chunkMeta.filePath);
+
+      if (downloadError || !fileData) {
+        throw new Error(
+          `Failed to download audio chunk ${currentChunkIndex}: ${downloadError?.message || "No data"}`
+        );
+      }
+
+      const fileBytes = new Uint8Array(await fileData.arrayBuffer());
+      if (fileBytes.length > WHISPER_MAX_FILE_SIZE_BYTES) {
+        throw new Error(
+          `Audio chunk ${currentChunkIndex} (${formatFileSizeMb(fileBytes.length)}) exceeds the 25MB Whisper limit.`
+        );
+      }
+
+      const mimeType = getMimeTypeForFile(chunkMeta.filePath);
+      const transcription = await transcribeWithOpenAiCompatible({
+        bytes: fileBytes,
+        fileName: chunkMeta.filePath.split("/").pop() || `chunk_${currentChunkIndex}.mp3`,
+        mimeType,
+        offsetMs: chunkMeta.offsetMs,
+      });
+
+      // Store this chunk's segments immediately
+      const segmentRows = transcription.segments.map((seg, i) => ({
+        material_id: materialId,
+        segment_index: currentChunkIndex * 10000 + i, // offset to avoid index collision across chunks
+        start_ms: seg.startMs,
+        end_ms: seg.endMs,
+        text: seg.text,
+        confidence: seg.confidence ?? null,
+        speaker_label: seg.speakerLabel ?? null,
+      }));
+
+      for (let i = 0; i < segmentRows.length; i += 250) {
+        const batch = segmentRows.slice(i, i + 250);
+        const { error } = await adminClient
+          .from("material_transcript_segments")
+          .insert(batch);
+        if (error) throw new Error(`Failed to insert transcript segments: ${error.message}`);
+      }
+
+      const nextIndex = currentChunkIndex + 1;
+
+      if (nextIndex < totalChunks) {
+        // More chunks to process — self-invoke for the next chunk
+        await adminClient
+          .from("materials")
+          .update({
+            processing_progress: 35 + Math.round((nextIndex / totalChunks) * 35),
+          })
+          .eq("id", materialId);
+
+        // Fire-and-forget self-invocation
+        const selfInvokeBody: MultiChunkRequest = {
+          materialId,
+          chunks,
+          totalChunks,
+          currentChunkIndex: nextIndex,
+        };
+
+        // Use EdgeRuntime.waitUntil to not block the response
+        const selfInvokePromise = fetch(
+          `${supabaseUrl}/functions/v1/transcribe-video`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: authHeader,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(selfInvokeBody),
+          }
+        ).catch((err) => console.error("Self-invoke failed:", err));
+
+        // @ts-ignore — Deno EdgeRuntime global
+        if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+          // @ts-ignore
+          EdgeRuntime.waitUntil(selfInvokePromise);
+        } else {
+          // Fallback: await it (will block response but still works)
+          await selfInvokePromise;
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            status: "processing",
+            processedChunk: currentChunkIndex,
+            nextChunk: nextIndex,
+            totalChunks,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // All chunks transcribed — now read all segments back, build chunks, embed
+      const { data: allSegmentRows, error: segFetchError } = await adminClient
+        .from("material_transcript_segments")
+        .select("start_ms, end_ms, text, confidence, speaker_label")
+        .eq("material_id", materialId)
+        .order("start_ms", { ascending: true });
+
+      if (segFetchError) {
+        throw new Error(`Failed to fetch accumulated segments: ${segFetchError.message}`);
+      }
+
+      const allSegments: TranscriptSegment[] = (allSegmentRows || []).map((row: any) => ({
+        startMs: row.start_ms,
+        endMs: row.end_ms,
+        text: row.text,
+        confidence: row.confidence,
+        speakerLabel: row.speaker_label,
+      }));
+
+      // Clear segments (will be re-inserted with proper indices by finalizeTranscription)
+      await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
+
+      const chunkStoragePaths = chunks.map((c) => c.filePath);
+      const maxDurationMs = allSegments.length > 0
+        ? allSegments[allSegments.length - 1].endMs
+        : transcription.durationMs;
+
+      const result = await finalizeTranscription({
+        materialId,
+        allSegments,
+        durationMs: maxDurationMs,
+        language: transcription.language,
+        adminClient,
+        geminiApiKey,
+        chunkStoragePaths,
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          provider: "openai-whisper-compatible",
+          language: transcription.language,
+          durationMs: maxDurationMs,
+          segmentsInserted: result.segmentsInserted,
+          chunksInserted: result.chunksInserted,
+          totalChunksProcessed: totalChunks,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ===== Single-file mode (original behavior) =====
+    const { filePath, bucketName } = body as SingleFileRequest;
+
+    if (!filePath) {
+      return new Response(
+        JSON.stringify({ error: "filePath is required" }),
         {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -360,8 +679,8 @@ serve(async (req) => {
     }
 
     const extension = getFileExtension(filePath);
-    if (!SUPPORTED_VIDEO_EXTENSIONS.has(extension)) {
-      throw new Error(`Unsupported video type: ${extension || "unknown"}`);
+    if (!SUPPORTED_AUDIO_EXTENSIONS.has(extension)) {
+      throw new Error(`Unsupported file type: ${extension || "unknown"}`);
     }
 
     await adminClient
@@ -372,7 +691,7 @@ serve(async (req) => {
         processing_stage: "transcribing",
         processing_progress: 25,
       })
-      .eq("id", materialId);
+      .eq("id", body.materialId);
 
     const { data: fileData, error: downloadError } = await adminClient.storage
       .from(bucketName || DEFAULT_BUCKET)
@@ -380,21 +699,18 @@ serve(async (req) => {
 
     if (downloadError || !fileData) {
       throw new Error(
-        `Failed to download video: ${downloadError?.message || "No data"}`
+        `Failed to download file: ${downloadError?.message || "No data"}`
       );
     }
 
     const fileBytes = new Uint8Array(await fileData.arrayBuffer());
-    if (fileBytes.length > VIDEO_MAX_FILE_SIZE_BYTES) {
+    if (fileBytes.length > WHISPER_MAX_FILE_SIZE_BYTES) {
       throw new Error(
-        `File size (${formatFileSizeMb(fileBytes.length)}) exceeds the 25MB transcription limit for MP4 and WebM uploads.`
+        `File size (${formatFileSizeMb(fileBytes.length)}) exceeds the 25MB transcription limit.`
       );
     }
 
-    const mimeType = getMimeType(filePath, fileData.type);
-    if (!SUPPORTED_VIDEO_MIME_TYPES.has(mimeType)) {
-      throw new Error(`Unsupported video MIME type: ${mimeType}`);
-    }
+    const mimeType = getMimeTypeForFile(filePath);
 
     const transcription = await transcribeWithOpenAiCompatible({
       bytes: fileBytes,
@@ -402,102 +718,15 @@ serve(async (req) => {
       mimeType,
     });
 
-    const transcriptChunks = buildTranscriptChunks(transcription.segments);
-    if (transcriptChunks.length === 0) {
-      throw new Error("The transcript did not contain enough text to index");
-    }
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "chunking",
-        processing_progress: 55,
-      })
-      .eq("id", materialId);
-
-    await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
-    await adminClient.from("chunks").delete().eq("material_id", materialId);
-
-    const transcriptRows = transcription.segments.map((segment, index) => ({
-      material_id: materialId,
-      segment_index: index,
-      start_ms: segment.startMs,
-      end_ms: segment.endMs,
-      text: segment.text,
-      confidence: segment.confidence ?? null,
-      speaker_label: segment.speakerLabel ?? null,
-    }));
-
-    for (let i = 0; i < transcriptRows.length; i += 250) {
-      const batch = transcriptRows.slice(i, i + 250);
-      const { error } = await adminClient
-        .from("material_transcript_segments")
-        .insert(batch);
-
-      if (error) {
-        throw new Error(`Failed to insert transcript segments: ${error.message}`);
-      }
-    }
-
-    const chunkRows: Array<{
-      material_id: string;
-      chunk_index: number;
-      chunk_text: string;
-      embedding: number[];
-      start_position: number;
-      end_position: number;
-      start_ms: number;
-      end_ms: number;
-      page_number: null;
-    }> = [];
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "embedding",
-        processing_progress: 80,
-      })
-      .eq("id", materialId);
-
-    for (let i = 0; i < transcriptChunks.length; i += 1) {
-      const chunk = transcriptChunks[i];
-      const embedding = await embedText(chunk.text, geminiApiKey);
-      chunkRows.push({
-        material_id: materialId,
-        chunk_index: i,
-        chunk_text: chunk.text,
-        embedding,
-        start_position: 0,
-        end_position: chunk.text.length,
-        start_ms: chunk.startMs,
-        end_ms: chunk.endMs,
-        page_number: null,
-      });
-    }
-
-    for (let i = 0; i < chunkRows.length; i += 100) {
-      const batch = chunkRows.slice(i, i + 100);
-      const { error } = await adminClient.from("chunks").insert(batch);
-      if (error) {
-        throw new Error(`Failed to insert transcript chunks: ${error.message}`);
-      }
-    }
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "completed",
-        processing_error: null,
-        processing_stage: "completed",
-        processing_progress: 100,
-        duration_ms: transcription.durationMs,
-        transcription_provider: transcription.provider,
-        transcription_language: transcription.language,
-        thumbnail_path: null,
-      })
-      .eq("id", materialId);
+    const result = await finalizeTranscription({
+      materialId: body.materialId,
+      allSegments: transcription.segments,
+      durationMs: transcription.durationMs,
+      language: transcription.language,
+      adminClient,
+      geminiApiKey,
+      chunkStoragePaths: [filePath], // clean up the single audio file too
+    });
 
     return new Response(
       JSON.stringify({
@@ -505,12 +734,10 @@ serve(async (req) => {
         provider: transcription.provider,
         language: transcription.language,
         durationMs: transcription.durationMs,
-        segmentsInserted: transcriptRows.length,
-        chunksInserted: chunkRows.length,
+        segmentsInserted: result.segmentsInserted,
+        chunksInserted: result.chunksInserted,
       }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     const message =

@@ -1,9 +1,8 @@
-import { Loader2, CheckCircle2, AlertCircle, FileText } from 'lucide-react';
-import { Progress } from '@/components/ui/progress';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface UploadProgress {
   fileName: string;
-  stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
+  stage: 'extracting' | 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
   progress: number;
   error?: string;
   statusText?: string;
@@ -14,12 +13,56 @@ interface UploadProgressListProps {
 }
 
 const STAGE_LABELS: Record<string, string> = {
+  extracting: 'Extracting audio from video...',
   uploading: 'Collecting your file...',
   parsing: 'Processing the material...',
   embedding: 'Synthesizing key details...',
   done: 'Ready',
   error: 'Could not process this file',
 };
+
+function CircularProgress({ value }: { value: number }) {
+  const size = 32;
+  const strokeWidth = 3;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (Math.min(100, Math.max(0, value)) / 100) * circumference;
+
+  return (
+    <svg width={size} height={size} className="shrink-0 -rotate-90">
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        className="text-muted/40"
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        className="text-primary transition-all duration-300"
+      />
+      <text
+        x={size / 2}
+        y={size / 2}
+        textAnchor="middle"
+        dominantBaseline="central"
+        className="rotate-90 origin-center fill-foreground text-[9px] font-medium"
+      >
+        {Math.round(value)}
+      </text>
+    </svg>
+  );
+}
 
 export function UploadProgressList({ uploads }: UploadProgressListProps) {
   if (uploads.size === 0) return null;
@@ -37,7 +80,7 @@ export function UploadProgressList({ uploads }: UploadProgressListProps) {
             ) : upload.stage === 'error' ? (
               <AlertCircle className="h-5 w-5 text-destructive" />
             ) : (
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <CircularProgress value={upload.progress} />
             )}
           </div>
 
@@ -48,9 +91,6 @@ export function UploadProgressList({ uploads }: UploadProgressListProps) {
             <p className="text-xs text-muted-foreground">
               {upload.error || upload.statusText || STAGE_LABELS[upload.stage]}
             </p>
-            {upload.stage !== 'done' && upload.stage !== 'error' && (
-              <Progress value={upload.progress} className="mt-1 h-1.5" />
-            )}
           </div>
         </div>
       ))}

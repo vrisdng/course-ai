@@ -11,8 +11,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
 
-const SUPABASE_FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 type InviteCheckResponse = {
   valid: boolean;
@@ -42,29 +40,16 @@ type RedeemInviteResponse = {
   error?: string;
 };
 
-const redeemCourseInvite = async (accessToken: string, inviteCode: string): Promise<RedeemInviteResponse> => {
-  const response = await fetch(`${SUPABASE_FUNCTIONS_URL}/redeem-course-invite`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SUPABASE_PUBLISHABLE_KEY,
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ inviteCode }),
+const redeemCourseInvite = async (_accessToken: string, inviteCode: string): Promise<RedeemInviteResponse> => {
+  const { data, error } = await supabase.functions.invoke('redeem-course-invite', {
+    body: { inviteCode },
   });
 
-  let payload: RedeemInviteResponse | null = null;
-  try {
-    payload = (await response.json()) as RedeemInviteResponse;
-  } catch {
-    payload = null;
+  if (error) {
+    throw new Error(error.message || 'Failed to enroll with invite');
   }
 
-  if (!response.ok) {
-    throw new Error(payload?.error || `Failed to enroll with invite (${response.status})`);
-  }
-
-  return payload || {};
+  return (data as RedeemInviteResponse) || {};
 };
 
 export default function Landing() {
