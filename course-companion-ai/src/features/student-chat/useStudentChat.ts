@@ -713,8 +713,25 @@ export function useStudentChat(routeConversationId: string | null = null) {
           .eq('id', chunkRow.material_id)
           .maybeSingle();
 
-        if (materialError || !materialRow?.file_path) {
+        if (materialError || !materialRow) {
           throw new Error(materialError?.message || 'Unable to locate source file');
+        }
+
+        // Videos may not have a stored file (audio extracted, original not kept)
+        if (materialRow.file_type === 'video' && !materialRow.file_path) {
+          setActiveVideoSource({
+            title: materialRow.file_name,
+            signedUrl: null,
+            materialId: chunkRow.material_id,
+            startMs: citation.startMs ?? 0,
+            endMs: citation.endMs,
+            excerpt: citation.excerpt,
+          });
+          return;
+        }
+
+        if (!materialRow.file_path) {
+          throw new Error('Unable to locate source file');
         }
 
         bucket = 'course-materials';
@@ -752,6 +769,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setActiveVideoSource({
           title: fileName,
           signedUrl: signedUrlData.signedUrl,
+          materialId: chunkRow.material_id,
           startMs: citation.startMs ?? 0,
           endMs: citation.endMs,
           excerpt: citation.excerpt,

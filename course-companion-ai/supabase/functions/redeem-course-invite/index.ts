@@ -32,14 +32,14 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    const supabaseClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    // Service-role client for DB operations (bypasses RLS so students can read/update invites)
+    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey);
 
+    // Authenticate the user from their Bearer token
     const {
       data: { user },
       error: userError,
-    } = await supabaseClient.auth.getUser(authHeader.replace("Bearer ", ""));
+    } = await adminClient.auth.getUser(authHeader.replace("Bearer ", ""));
 
     if (userError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -58,7 +58,7 @@ serve(async (req) => {
       });
     }
 
-    const { data: profileRow, error: profileError } = await supabaseClient
+    const { data: profileRow, error: profileError } = await adminClient
       .from("profiles")
       .select("email")
       .eq("user_id", user.id)
@@ -71,7 +71,7 @@ serve(async (req) => {
       });
     }
 
-    const { data: inviteRow, error: inviteError } = await supabaseClient
+    const { data: inviteRow, error: inviteError } = await adminClient
       .from("course_invites")
       .select("id, course_id, invited_email, expires_at, redeemed_at, redeemed_by")
       .eq("invite_code", inviteCode)
@@ -116,7 +116,7 @@ serve(async (req) => {
       });
     }
 
-    const { data: enrollmentRow, error: enrollmentError } = await supabaseClient
+    const { data: enrollmentRow, error: enrollmentError } = await adminClient
       .from("enrollments")
       .select("id")
       .eq("user_id", user.id)
@@ -130,7 +130,7 @@ serve(async (req) => {
     const alreadyEnrolled = Boolean(enrollmentRow?.id);
 
     if (!alreadyEnrolled) {
-      const { error: insertEnrollmentError } = await supabaseClient.from("enrollments").insert({
+      const { error: insertEnrollmentError } = await adminClient.from("enrollments").insert({
         user_id: user.id,
         course_id: inviteRow.course_id,
       });
@@ -141,7 +141,7 @@ serve(async (req) => {
     }
 
     if (!inviteRow.redeemed_at) {
-      const { error: markRedeemedError } = await supabaseClient
+      const { error: markRedeemedError } = await adminClient
         .from("course_invites")
         .update({ redeemed_at: nowIso, redeemed_by: user.id })
         .eq("id", inviteRow.id)

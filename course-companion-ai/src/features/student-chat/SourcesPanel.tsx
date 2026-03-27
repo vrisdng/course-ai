@@ -131,7 +131,7 @@ export function SourcesPanel({
                             {isOpening
                               ? 'Opening source...'
                               : citation.documentType === 'video'
-                                ? 'Play cited segment'
+                                ? 'View transcript'
                                 : 'View original file'}
                           </button>
                         </div>

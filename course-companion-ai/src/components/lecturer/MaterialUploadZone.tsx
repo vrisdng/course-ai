@@ -1,6 +1,8 @@
 import React, { useCallback, useRef } from 'react';
 import { Upload, FileText, Image, FileSpreadsheet, Video } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import {
+  INLINE_GEMINI_MAX_FILE_SIZE_BYTES,
+} from '@/lib/materialUpload';
 
 interface MaterialUploadZoneProps {
   onFilesSelected: (files: File[]) => void;
@@ -62,6 +64,8 @@ export function MaterialUploadZone({
     [onFilesSelected]
   );
 
+  const documentLimitMb = Math.round(INLINE_GEMINI_MAX_FILE_SIZE_BYTES / 1024 / 1024);
+
   return (
     <div
       className={`relative rounded-lg border-2 border-dashed p-8 text-center transition-colors ${
@@ -87,9 +91,6 @@ export function MaterialUploadZone({
       <p className="mb-1 text-sm font-medium text-foreground">
         Drag & drop files here, or click to browse
       </p>
-      <p className="text-xs text-muted-foreground">
-        Files are added to a review list first. PDF, DOC, and image files must be 15MB or smaller. MP4 and WebM video files must be 25MB or smaller and are transcribed with timestamps. DOCX and PPTX are extracted locally.
-      </p>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
         {Object.entries(FILE_ICONS).map(([ext, icon]) => (
@@ -101,6 +102,16 @@ export function MaterialUploadZone({
             .{ext}
           </span>
         ))}
+      </div>
+
+      <div className="mx-auto mt-5 max-w-xl rounded-lg border border-border/70 bg-background/80 p-4 text-left">
+        <p className="text-sm font-medium text-foreground">What can be uploaded?</p>
+        <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+          <li>PDF, DOC, DOCX, PPTX, PNG, JPG, JPEG, WEBP, and GIF files.</li>
+          <li>PDF, DOC, and image files must be {documentLimitMb}MB or smaller.</li>
+          <li>MP4 and WebM video files are supported (audio is extracted and transcribed with timestamps).</li>
+          <li>DOCX and PPTX files are extracted after upload.</li>
+        </ul>
       </div>
     </div>
   );

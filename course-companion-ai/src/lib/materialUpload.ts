@@ -1,5 +1,7 @@
 export const INLINE_GEMINI_MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
-export const OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+export const OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES = 1024 * 1024 * 1024; // 1GB — audio is extracted client-side before Whisper
+export const AUDIO_CHUNK_MAX_BYTES = 20 * 1024 * 1024;
+export const LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES = 200 * 1024 * 1024;
 export const TEXT_INGEST_MAX_CHARACTERS = 500_000;
 
 const INLINE_GEMINI_EXTENSIONS = new Set([
@@ -61,7 +63,7 @@ export function getImmediateUploadValidationError(candidate: Pick<File, 'name' |
   }
 
   if (isVideoUpload(candidate) && candidate.size > OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES) {
-    return `File too large (${formatFileSizeMb(candidate.size)}). MP4 and WebM video files must be 25MB or smaller.`;
+    return `File too large (${formatFileSizeMb(candidate.size)}). Video files must be 1GB or smaller.`;
   }
 
   return null;

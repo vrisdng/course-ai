@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
-import { getDeferredUploadValidationError, isTextLikeUpload, isVideoUpload } from '@/lib/materialUpload';
+import { getDeferredUploadValidationError, isTextLikeUpload, isVideoUpload, LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES } from '@/lib/materialUpload';
+import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 
 interface Material {
   id: string;
@@ -20,7 +21,7 @@ interface Material {
 
 interface UploadProgress {
   fileName: string;
-  stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
+  stage: 'extracting' | 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
   progress: number; // 0–100
   error?: string;
   statusText?: string;
@@ -159,15 +160,57 @@ export function useMaterials(courseId: string | null) {
       const next = new Map(prev);
       next.set(uploadId, {
         fileName: file.name,
-        stage: 'uploading',
-        progress: 10,
-        statusText: 'Collecting your file...',
+        stage: isVideoUpload(file) ? 'extracting' : 'uploading',
+        progress: 5,
+        statusText: isVideoUpload(file) ? 'Preparing video processor...' : 'Collecting your file...',
       });
       return next;
     });
 
     try {
-      // 1. Upload to storage
+      // --- Video files: use the client-side extraction pipeline ---
+      if (isVideoUpload(file)) {
+        await uploadVideoForTranscription({
+          file,
+          courseId,
+          onProgress: (update) => {
+            updateUpload(uploadId, {
+              stage: update.stage,
+              progress: update.progress,
+              statusText: update.statusText,
+            });
+          },
+          confirmLargeFile:
+            file.size > LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES
+              ? () =>
+                  Promise.resolve(
+                    window.confirm(
+                      'This file is large. Extraction will take a few minutes. Continue?'
+                    )
+                  )
+              : undefined,
+        });
+
+        const isBackground = true; // multi-chunk or single — server continues in background
+        updateUpload(uploadId, {
+          stage: 'parsing',
+          progress: 40,
+          statusText: 'Transcribing in background...',
+        });
+        toast.success(`${file.name} is being transcribed. This may take a few minutes.`);
+        await fetchMaterials();
+
+        setTimeout(() => {
+          setUploads((prev) => {
+            const next = new Map(prev);
+            next.delete(uploadId);
+            return next;
+          });
+        }, 3000);
+        return;
+      }
+
+      // --- Non-video files: existing flow ---
       const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
       const storagePath = `${courseId}/${Date.now()}-${file.name}`;
 
@@ -183,7 +226,7 @@ export function useMaterials(courseId: string | null) {
         statusText: 'Saving your file...',
       });
 
-      // 2. Create material record
+      // Create material record
       const { data: material, error: materialError } = await supabase
         .from('materials')
         .insert({
@@ -233,9 +276,7 @@ export function useMaterials(courseId: string | null) {
 
       const processingFunction = isTextLikeUpload(file)
         ? 'ingest-material'
-        : isVideoUpload(file)
-          ? 'transcribe-video'
-          : 'parse-document';
+        : 'parse-document';
       const { data: parseResult, error: parseError } = await supabase.functions.invoke(
         processingFunction,
         {
@@ -247,7 +288,7 @@ export function useMaterials(courseId: string | null) {
             : {
                 materialId: material.id,
                 filePath: storagePath,
-                ...(isVideoUpload(file) ? {} : { fileType: ext }),
+                fileType: ext,
               },
         }
       );
