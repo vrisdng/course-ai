@@ -34,6 +34,7 @@ import {
   isVideoUpload,
 } from '@/lib/materialUpload';
 import { preloadFFmpeg } from '@/lib/ffmpegAudioExtractor';
+import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
 import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -759,20 +760,29 @@ export default function AdminDashboard() {
       return 'processing';
     }
 
-    setCurrentUploadStatusText('Uploading file...');
+    setCurrentUploadStatusText(`Uploading ${targetFile.name}... 0%`);
     setCurrentUploadProgress(0);
 
     const filePath = `${courseId}/${crypto.randomUUID()}-${targetFile.name}`;
-    const { error: uploadError } = await supabaseAbortable.storage
-      .from('course-materials')
-      .upload(filePath, targetFile, { upsert: false });
+    console.log('[admin-upload]', `Uploading "${targetFile.name}" (${(targetFile.size / 1024 / 1024).toFixed(1)} MB) to ${filePath}`);
+    const uploadStart = performance.now();
+
+    await uploadToStorageWithProgress({
+      bucket: 'course-materials',
+      path: filePath,
+      body: targetFile,
+      signal: abortControllerRef.current?.signal,
+      onProgress: (fraction) => {
+        const pct = Math.round(fraction * 100);
+        setCurrentUploadStatusText(`Uploading ${targetFile.name}... ${pct}%`);
+        setCurrentUploadProgress(pct * 0.5); // upload is 0-50%, processing is 50-100%
+      },
+    });
+
+    console.log('[admin-upload]', `Upload complete in ${((performance.now() - uploadStart) / 1000).toFixed(1)}s`);
 
     if (cancelUploadRef.current) {
       throw new Error('Upload cancelled');
-    }
-
-    if (uploadError) {
-      throw new Error(uploadError.message);
     }
 
     const { data: material, error: insertError } = await supabaseAbortable

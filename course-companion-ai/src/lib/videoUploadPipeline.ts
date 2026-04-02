@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { extractAndSplitAudio, type AudioChunk } from './ffmpegAudioExtractor';
+import { uploadToStorageWithProgress } from './uploadWithProgress';
 
 export interface VideoUploadProgress {
   stage: 'extracting' | 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
@@ -110,26 +111,35 @@ export async function uploadVideoForTranscription(opts: {
     const chunk = chunks[i];
     const storagePath = `${basePath}/${chunk.fileName}`;
 
+    const chunkLabel = chunks.length === 1
+      ? `Uploading audio (${formatBytes(chunk.blob.size)})`
+      : `Uploading audio chunk ${i + 1} of ${chunks.length} (${formatBytes(chunk.blob.size)})`;
+
     onProgress({
       stage: 'uploading',
-      progress: 20 + Math.round(((i + 0.5) / chunks.length) * 15), // 20–35%
-      statusText:
-        chunks.length === 1
-          ? `Uploading audio (${formatBytes(chunk.blob.size)})...`
-          : `Uploading audio chunk ${i + 1} of ${chunks.length} (${formatBytes(chunk.blob.size)})...`,
+      progress: 20 + Math.round(((i) / chunks.length) * 15), // 20–35%
+      statusText: `${chunkLabel}... 0%`,
     });
 
     console.log(LOG_PREFIX, `[${elapsed()}] Uploading chunk ${i + 1}/${chunks.length} (${formatBytes(chunk.blob.size)}) to ${storagePath}`);
     const uploadStart = performance.now();
 
-    const { error: uploadError } = await supabase.storage
-      .from('course-materials')
-      .upload(storagePath, chunk.blob, { contentType: 'audio/mpeg' });
-
-    if (uploadError) {
-      console.error(LOG_PREFIX, `[${elapsed()}] Chunk ${i + 1} upload failed:`, uploadError);
-      throw new Error(`Failed to upload audio chunk ${i + 1}: ${uploadError.message}`);
-    }
+    await uploadToStorageWithProgress({
+      bucket: 'course-materials',
+      path: storagePath,
+      body: chunk.blob,
+      contentType: 'audio/mpeg',
+      signal,
+      onProgress: (fraction) => {
+        const pct = Math.round(fraction * 100);
+        console.log(LOG_PREFIX, `[${elapsed()}] Chunk ${i + 1} upload progress: ${pct}%`);
+        onProgress({
+          stage: 'uploading',
+          progress: 20 + Math.round(((i + fraction) / chunks.length) * 15),
+          statusText: `${chunkLabel}... ${pct}%`,
+        });
+      },
+    });
 
     console.log(LOG_PREFIX, `[${elapsed()}] Chunk ${i + 1} uploaded in ${((performance.now() - uploadStart) / 1000).toFixed(1)}s`);
 

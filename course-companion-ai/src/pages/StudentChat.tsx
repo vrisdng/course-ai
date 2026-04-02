@@ -18,7 +18,7 @@ export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
+  const { conversationId: rosuteConversationId } = useParams<{ conversationId?: string }>();
 
   const {
     activeVideoSource,
