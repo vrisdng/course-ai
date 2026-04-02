@@ -1,6 +1,6 @@
+import { BookOpen } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { BookOpen } from 'lucide-react';
 
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Label } from '@/components/ui/label';
@@ -18,7 +18,7 @@ export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { conversationId: rosuteConversationId } = useParams<{ conversationId?: string }>();
+  const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
 
   const {
     activeVideoSource,
