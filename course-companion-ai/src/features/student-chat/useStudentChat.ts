@@ -241,39 +241,35 @@ export function useStudentChat(routeConversationId: string | null = null) {
           )
         );
 
-        if (materialIds.length > 0) {
-          const { data: materialRows, error: materialsError } = await supabase
-            .from('materials')
-            .select('id, file_name, file_type')
-            .in('id', materialIds);
+        // Fetch materials and student documents in parallel
+        const [materialsResult, studentDocsResult] = await Promise.all([
+          materialIds.length > 0
+            ? supabase.from('materials').select('id, file_name, file_type').in('id', materialIds)
+            : { data: null, error: null },
+          studentDocumentIds.length > 0
+            ? supabase.from('student_documents').select('id, file_name, file_type').in('id', studentDocumentIds)
+            : { data: null, error: null },
+        ]);
 
-          if (materialsError) {
-            console.error('Failed to load citation materials:', materialsError);
-          } else {
-            for (const material of materialRows || []) {
-              materialById[material.id] = {
-                fileName: material.file_name,
-                fileType: material.file_type,
-              };
-            }
+        if (materialsResult.error) {
+          console.error('Failed to load citation materials:', materialsResult.error);
+        } else {
+          for (const material of materialsResult.data || []) {
+            materialById[material.id] = {
+              fileName: material.file_name,
+              fileType: material.file_type,
+            };
           }
         }
 
-        if (studentDocumentIds.length > 0) {
-          const { data: documentRows, error: documentsError } = await supabase
-            .from('student_documents')
-            .select('id, file_name, file_type')
-            .in('id', studentDocumentIds);
-
-          if (documentsError) {
-            console.error('Failed to load citation student documents:', documentsError);
-          } else {
-            for (const document of documentRows || []) {
-              studentDocumentById[document.id] = {
-                fileName: document.file_name,
-                fileType: document.file_type,
-              };
-            }
+        if (studentDocsResult.error) {
+          console.error('Failed to load citation student documents:', studentDocsResult.error);
+        } else {
+          for (const document of studentDocsResult.data || []) {
+            studentDocumentById[document.id] = {
+              fileName: document.file_name,
+              fileType: document.file_type,
+            };
           }
         }
       }
@@ -456,6 +452,21 @@ export function useStudentChat(routeConversationId: string | null = null) {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        // Batch token updates: accumulate in ref, flush at display refresh rate
+        let pendingContent = '';
+        let rafHandle = 0;
+        const flushTokens = () => {
+          rafHandle = 0;
+          const snapshot = pendingContent;
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: snapshot }
+                : message
+            )
+          );
+        };
+
         const handleEvent = (event: ParsedSseEvent) => {
           const parsed = parseMaybeJson(event.data);
 
@@ -468,13 +479,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
               return;
             }
 
-            setMessages((prev) =>
-              prev.map((message) =>
-                message.id === assistantMessageId
-                  ? { ...message, content: `${message.content}${delta}` }
-                  : message
-              )
-            );
+            pendingContent += delta;
+            if (!rafHandle) {
+              rafHandle = requestAnimationFrame(flushTokens);
+            }
             return;
           }
 
@@ -525,6 +533,15 @@ export function useStudentChat(routeConversationId: string | null = null) {
           if (trailingEvent) {
             handleEvent(trailingEvent);
           }
+        }
+
+        // Flush any remaining buffered tokens
+        if (rafHandle) {
+          cancelAnimationFrame(rafHandle);
+          rafHandle = 0;
+        }
+        if (pendingContent) {
+          flushTokens();
         }
       }
 

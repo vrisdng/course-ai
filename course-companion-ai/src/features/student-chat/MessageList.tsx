@@ -1,5 +1,6 @@
 import { ChevronRight, FileText, Loader2, Sparkles } from 'lucide-react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { cn } from '@/lib/utils';
 
@@ -74,6 +75,7 @@ export function MessageList({
             ) : (
               <div className="prose prose-sm max-w-none dark:prose-invert">
                 <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
                   urlTransform={(url) => (url.startsWith('citation:') ? url : defaultUrlTransform(url))}
                   components={{
                     a: ({ href, children }) => {

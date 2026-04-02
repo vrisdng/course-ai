@@ -1,6 +1,6 @@
+import { BookOpen } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { BookOpen } from 'lucide-react';
 
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Label } from '@/components/ui/label';

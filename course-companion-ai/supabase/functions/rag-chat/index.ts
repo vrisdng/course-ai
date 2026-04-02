@@ -1129,24 +1129,30 @@ serve(async (req) => {
 
     const activeConversationId = resolved.conversationId;
     const activeCourseId = resolved.courseId;
-    const activeAcademicTermId = await getActiveAcademicTermId(supabaseClient);
 
-    console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
-
-    const { data: recentMessages, error: historyError } = await supabaseClient
-      .from("messages")
-      .select("role, content")
-      .eq("conversation_id", activeConversationId)
-      .order("created_at", { ascending: false })
-      .limit(CONVERSATION_HISTORY_FETCH_LIMIT);
+    // Parallelize: academic term ID + conversation history + original query embedding
+    const [activeAcademicTermId, { data: recentMessages, error: historyError }, originalEmbedding] = await Promise.all([
+      getActiveAcademicTermId(supabaseClient),
+      supabaseClient
+        .from("messages")
+        .select("role, content")
+        .eq("conversation_id", activeConversationId)
+        .order("created_at", { ascending: false })
+        .limit(CONVERSATION_HISTORY_FETCH_LIMIT),
+      embedQuery(geminiApiKey, trimmedMessage, requestAbortController.signal),
+    ]);
 
     if (historyError) {
       console.error("Failed to load conversation history:", historyError);
     }
 
+    console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
+
     const priorMessages = [...(recentMessages || [])].reverse();
     const historyTurns = buildConversationHistoryTurns(priorMessages);
     const historyContext = buildHistoryContext(historyTurns);
+
+    throwIfAborted(requestAbortController.signal);
 
     const rewrittenQuery = await rewriteQueryForRetrieval({
       geminiApiKey,
@@ -1155,17 +1161,13 @@ serve(async (req) => {
       signal: requestAbortController.signal,
     });
 
-    const retrievalQueries = Array.from(
-      new Set(
-        [trimmedMessage, rewrittenQuery]
-          .map((query) => query.trim())
-          .filter((query) => query.length > 0)
-      )
-    );
-
-    const embeddings = await Promise.all(
-      retrievalQueries.map((query) => embedQuery(geminiApiKey, query, requestAbortController.signal))
-    );
+    // Only embed the rewritten query if it differs from the original
+    const embeddings = [originalEmbedding];
+    const retrievalQueries = [trimmedMessage];
+    if (rewrittenQuery.trim() && rewrittenQuery.trim() !== trimmedMessage.trim()) {
+      retrievalQueries.push(rewrittenQuery.trim());
+      embeddings.push(await embedQuery(geminiApiKey, rewrittenQuery, requestAbortController.signal));
+    }
 
     throwIfAborted(requestAbortController.signal);
 
@@ -1325,58 +1327,42 @@ ${ragContext}`;
 
             // --- Persist to database (best-effort after client has received the answer) ---
 
-            const { data: userMessage, error: userMessageError } = await supabaseClient
-              .from("messages")
-              .insert({
-                conversation_id: activeConversationId,
-                role: "user",
-                content: trimmedMessage,
-              })
-              .select("id")
-              .single();
+            // Insert both messages in parallel (no FK dependency between them)
+            const [userMessageResult, assistantMessageResult] = await Promise.all([
+              supabaseClient
+                .from("messages")
+                .insert({
+                  conversation_id: activeConversationId,
+                  role: "user",
+                  content: trimmedMessage,
+                })
+                .select("id")
+                .single(),
+              supabaseClient
+                .from("messages")
+                .insert({
+                  conversation_id: activeConversationId,
+                  role: "assistant",
+                  content: answer,
+                })
+                .select("id")
+                .single(),
+            ]);
 
-            if (userMessageError || !userMessage) {
-              console.error(`Failed to save user message: ${userMessageError?.message || "Unknown error"}`);
+            if (userMessageResult.error || !userMessageResult.data) {
+              console.error(`Failed to save user message: ${userMessageResult.error?.message || "Unknown error"}`);
               return;
             }
 
-            const { data: assistantMessage, error: assistantMessageError } = await supabaseClient
-              .from("messages")
-              .insert({
-                conversation_id: activeConversationId,
-                role: "assistant",
-                content: answer,
-              })
-              .select("id")
-              .single();
-
-            if (assistantMessageError || !assistantMessage) {
-              console.error(`Failed to save assistant message: ${assistantMessageError?.message || "Unknown error"}`);
+            if (assistantMessageResult.error || !assistantMessageResult.data) {
+              console.error(`Failed to save assistant message: ${assistantMessageResult.error?.message || "Unknown error"}`);
               return;
             }
 
-            if (citedChunks.length > 0) {
-              const citationRows = citedChunks.map((chunk) => ({
-                message_id: assistantMessage.id,
-                chunk_id: chunk.id,
-                relevance_score: chunk.relevance_score,
-                excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
-              }));
+            const userMessage = userMessageResult.data;
+            const assistantMessage = assistantMessageResult.data;
 
-              const { error: citationsError } = await supabaseClient
-                .from("citations")
-                .insert(citationRows);
-
-              if (citationsError) {
-                console.error(`Failed to save citations: ${citationsError.message}`);
-              }
-            }
-
-            await supabaseClient
-              .from("conversations")
-              .update({ updated_at: new Date().toISOString() })
-              .eq("id", activeConversationId);
-
+            // Citations, conversation update, and analytics can all run in parallel
             const queryCategory = classifyQueryCategory(trimmedMessage);
             const unresolvedReason = inferUnresolvedReason({
               retrievedChunkCount: retrievedChunks.length,
@@ -1385,22 +1371,44 @@ ${ragContext}`;
             });
             const unresolved = unresolvedReason !== null;
 
-            await insertQueryEvent(supabaseAdminClient, {
-              user_id: user.id,
-              conversation_id: activeConversationId,
-              course_id: activeCourseId,
-              academic_term_id: activeAcademicTermId,
-              user_message_id: userMessage.id,
-              assistant_message_id: assistantMessage.id,
-              query_text: trimmedMessage,
-              query_category: queryCategory,
-              retrieved_chunk_count: retrievedChunks.length,
-              citation_count: citedChunks.length,
-              citation_hit: citedChunks.length > 0,
-              unresolved,
-              unresolved_reason: unresolvedReason,
-              latency_ms: Date.now() - requestStartedAt,
-            });
+            await Promise.all([
+              // Insert citations
+              (async () => {
+                if (citedChunks.length > 0) {
+                  const { error: citationsError } = await supabaseClient
+                    .from("citations")
+                    .insert(citedChunks.map((chunk) => ({
+                      message_id: assistantMessage.id,
+                      chunk_id: chunk.id,
+                      relevance_score: chunk.relevance_score,
+                      excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+                    })));
+                  if (citationsError) console.error(`Failed to save citations: ${citationsError.message}`);
+                }
+              })(),
+              // Update conversation timestamp
+              supabaseClient
+                .from("conversations")
+                .update({ updated_at: new Date().toISOString() })
+                .eq("id", activeConversationId),
+              // Insert analytics event
+              insertQueryEvent(supabaseAdminClient, {
+                user_id: user.id,
+                conversation_id: activeConversationId,
+                course_id: activeCourseId,
+                academic_term_id: activeAcademicTermId,
+                user_message_id: userMessage.id,
+                assistant_message_id: assistantMessage.id,
+                query_text: trimmedMessage,
+                query_category: queryCategory,
+                retrieved_chunk_count: retrievedChunks.length,
+                citation_count: citedChunks.length,
+                citation_hit: citedChunks.length > 0,
+                unresolved,
+                unresolved_reason: unresolvedReason,
+                latency_ms: Date.now() - requestStartedAt,
+              }),
+            ]);
           } catch (streamError) {
             if (isAbortError(streamError)) {
               console.log("RAG chat stream aborted");
