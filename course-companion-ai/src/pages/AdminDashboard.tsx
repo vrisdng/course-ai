@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
   AlertCircle,
@@ -6,47 +5,26 @@ import {
   Clock,
   Copy,
   Ellipsis,
-  Eye,
   FileText,
   Filter,
   Globe2,
   Loader2,
   Lock,
+  Pencil,
   Search,
   Trash2,
   UploadCloud,
   Users2,
   Video,
-  X,
+  X
 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
-import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
-import type { Database } from '@/integrations/supabase/types';
-import {
-  INLINE_GEMINI_MAX_FILE_SIZE_BYTES,
-  LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES,
-  getDeferredUploadValidationError,
-  getImmediateUploadValidationError,
-  isTextLikeUpload,
-  isVideoUpload,
-} from '@/lib/materialUpload';
-import { preloadFFmpeg } from '@/lib/ffmpegAudioExtractor';
-import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
-import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
-import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Dialog,
   DialogContent,
@@ -55,7 +33,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
+import type { Database } from '@/integrations/supabase/types';
+import {
+  INLINE_GEMINI_MAX_FILE_SIZE_BYTES,
+  getDeferredUploadValidationError,
+  getImmediateUploadValidationError,
+  isTextLikeUpload,
+  isVideoUpload,
+} from '@/lib/materialUpload';
+import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
+import { cn } from '@/lib/utils';
+import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -226,7 +224,7 @@ export default function AdminDashboard() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [courseFilter, setCourseFilter] = useState('all');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [academicTermFilter, setAcademicTermFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
   const [accessFilter, setAccessFilter] = useState('all');
@@ -254,6 +252,9 @@ export default function AdminDashboard() {
   const [transcriptMaterial, setTranscriptMaterial] = useState<Material | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
+  const [editingFileNameMaterial, setEditingFileNameMaterial] = useState<Material | null>(null);
+  const [editingFileNameValue, setEditingFileNameValue] = useState('');
+  const [isUpdatingFileName, setIsUpdatingFileName] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cancelUploadRef = useRef(false);
@@ -436,7 +437,7 @@ export default function AdminDashboard() {
       const haystack = `${material.file_name} ${material.topic || ''}`.toLowerCase();
       const searchMatch = !searchQuery.trim() || haystack.includes(searchQuery.trim().toLowerCase());
       const courseMatch = courseFilter === 'all' || material.course_id === courseFilter;
-      const typeMatch = typeFilter === 'all' || material.file_type === typeFilter;
+      const academicTermMatch = academicTermFilter === 'all' || material.academic_term_id === academicTermFilter;
       const statusMatch = statusFilter === 'all' || material.processing_status === statusFilter;
       const accessMatch = accessFilter === 'all' || material.access_scope === accessFilter;
 
@@ -454,9 +455,9 @@ export default function AdminDashboard() {
         }
       }
 
-      return searchMatch && courseMatch && typeMatch && statusMatch && accessMatch && dateMatch;
+      return searchMatch && courseMatch && academicTermMatch && statusMatch && accessMatch && dateMatch;
     });
-  }, [accessFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter, typeFilter]);
+  }, [accessFilter, academicTermFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter]);
 
   const hasBackgroundProcessing = useMemo(
     () => materials.some((material) => material.processing_status === 'processing'),
@@ -556,6 +557,17 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleOpenFilePicker = () => {
+    if (uploadSetupError && !isUploading) {
+      toast.error(uploadSetupError);
+      return;
+    }
+
+    if (!isUploading && isUploadSetupComplete) {
+      fileInputRef.current?.click();
+    }
+  };
+
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     if (!isUploading && isUploadSetupComplete) {
@@ -597,12 +609,6 @@ export default function AdminDashboard() {
     }
   }, [uploadAcademicTermId, uploadCourseId]);
 
-  // Preload FFmpeg WASM when video files are in the pending list
-  useEffect(() => {
-    if (pendingFiles.some((f) => isVideoUpload(f))) {
-      preloadFFmpeg();
-    }
-  }, [pendingFiles]);
 
   const handleCreateCourse = async () => {
     if (!profile) {
@@ -746,15 +752,6 @@ export default function AdminDashboard() {
           setCurrentUploadStatusText(update.statusText);
           setCurrentUploadProgress(update.progress);
         },
-        confirmLargeFile:
-          targetFile.size > LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES
-            ? () =>
-                Promise.resolve(
-                  window.confirm(
-                    'This file is large. Extraction will take a few minutes. Continue?'
-                  )
-                )
-            : undefined,
         signal: abortControllerRef.current.signal,
       });
       return 'processing';
@@ -1051,6 +1048,66 @@ export default function AdminDashboard() {
     setIsLoadingTranscript(false);
   };
 
+  const openEditFileNameDialog = (material: Material) => {
+    setEditingFileNameMaterial(material);
+    setEditingFileNameValue(material.file_name);
+  };
+
+  const closeEditFileNameDialog = () => {
+    if (isUpdatingFileName) {
+      return;
+    }
+
+    setEditingFileNameMaterial(null);
+    setEditingFileNameValue('');
+  };
+
+  const handleUpdateFileName = async () => {
+    if (!editingFileNameMaterial) {
+      return;
+    }
+
+    const nextFileName = editingFileNameValue.trim();
+    if (!nextFileName) {
+      toast.error('Filename is required');
+      return;
+    }
+
+    if (nextFileName === editingFileNameMaterial.file_name) {
+      closeEditFileNameDialog();
+      return;
+    }
+
+    setIsUpdatingFileName(true);
+    const { error } = await supabase
+      .from('materials')
+      .update({ file_name: nextFileName })
+      .eq('id', editingFileNameMaterial.id);
+
+    if (error) {
+      setIsUpdatingFileName(false);
+      toast.error(error.message || 'Failed to update filename');
+      return;
+    }
+
+    setMaterials((previous) =>
+      previous.map((material) =>
+        material.id === editingFileNameMaterial.id
+          ? { ...material, file_name: nextFileName }
+          : material
+      )
+    );
+    setTranscriptMaterial((current) =>
+      current?.id === editingFileNameMaterial.id
+        ? { ...current, file_name: nextFileName }
+        : current
+    );
+    setIsUpdatingFileName(false);
+    setEditingFileNameMaterial(null);
+    setEditingFileNameValue('');
+    toast.success('Filename updated');
+  };
+
   const handleDeleteMaterial = async (material: Material) => {
     const shouldDelete = window.confirm(`Delete ${material.file_name}? This cannot be undone.`);
     if (!shouldDelete) {
@@ -1086,7 +1143,6 @@ export default function AdminDashboard() {
     }
 
     if (stage === 'queueing') return 'Queueing';
-    if (stage === 'extracting') return 'Extracting';
     if (stage === 'chunking') return 'Chunking';
     if (stage === 'embedding') return 'Embedding';
     if (stage === 'transcribing') return 'Transcribing';
@@ -1128,10 +1184,6 @@ export default function AdminDashboard() {
       </Badge>
     );
   };
-
-  const uniqueFileTypes = useMemo(() => {
-    return Array.from(new Set(materials.map((material) => material.file_type))).sort();
-  }, [materials]);
 
   const parsedInviteEmails = useMemo(() => {
     return Array.from(
@@ -1388,6 +1440,49 @@ export default function AdminDashboard() {
                 </>
               ) : (
                 'Generate Invite Codes'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingFileNameMaterial)} onOpenChange={(open) => (open ? undefined : closeEditFileNameDialog())}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Filename</DialogTitle>
+            <DialogDescription>
+              Update the display name used for this material in the dashboard.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-material-filename">Filename</Label>
+            <Input
+              id="edit-material-filename"
+              value={editingFileNameValue}
+              onChange={(event) => setEditingFileNameValue(event.target.value)}
+              disabled={isUpdatingFileName}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void handleUpdateFileName();
+                }
+              }}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeEditFileNameDialog} disabled={isUpdatingFileName}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void handleUpdateFileName()} disabled={isUpdatingFileName}>
+              {isUpdatingFileName ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Filename'
               )}
             </Button>
           </DialogFooter>
@@ -1714,45 +1809,157 @@ export default function AdminDashboard() {
                 />
 
                 <div
-                  role="button"
-                  tabIndex={0}
+                  role={pendingFiles.length === 0 ? 'button' : undefined}
+                  tabIndex={pendingFiles.length === 0 ? 0 : -1}
                   aria-disabled={!isUploadSetupComplete || isUploading}
-                  onClick={() => {
-                    if (uploadSetupError && !isUploading) {
-                      toast.error(uploadSetupError);
-                      return;
-                    }
-                    if (!isUploading && isUploadSetupComplete) {
-                      fileInputRef.current?.click();
-                    }
-                  }}
+                  onClick={pendingFiles.length === 0 ? handleOpenFilePicker : undefined}
                   onKeyDown={(event) => {
-                    if (uploadSetupError && !isUploading && (event.key === 'Enter' || event.key === ' ')) {
+                    if (pendingFiles.length === 0 && (event.key === 'Enter' || event.key === ' ')) {
                       event.preventDefault();
-                      toast.error(uploadSetupError);
-                      return;
-                    }
-                    if (!isUploading && isUploadSetupComplete && (event.key === 'Enter' || event.key === ' ')) {
-                      event.preventDefault();
-                      fileInputRef.current?.click();
+                      handleOpenFilePicker();
                     }
                   }}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
                   className={cn(
-                    'rounded-lg border-2 border-dashed p-10 text-center transition-colors',
+                    'rounded-lg border-2 border-dashed p-6 transition-colors sm:p-8',
                     isDragActive ? 'border-primary bg-primary/5' : 'border-border bg-muted/20',
                     !isUploadSetupComplete && 'border-muted-foreground/30 bg-muted/10',
                     isUploading && 'pointer-events-none opacity-70'
                   )}
                 >
-                  <UploadCloud className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-                  {isUploadSetupComplete ? (
+                  {pendingFiles.length > 0 ? (
                     <>
-                      <p className="text-sm text-muted-foreground">
-                        Drop your course materials here, or <span className="font-medium text-primary underline">click to browse</span>
-                      </p>
+                      <div className="flex flex-col gap-3 text-left sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-foreground">
+                            {pendingFiles.length} material{pendingFiles.length === 1 ? '' : 's'} ready
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access:{' '}
+                            {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'} • Term:{' '}
+                            {termLabelById[uploadAcademicTermId] || 'Not selected'}
+                          </p>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Drag and drop more files here, or use Add Document.
+                          </p>
+                        </div>
+
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleOpenFilePicker();
+                          }}
+                          disabled={isUploading}
+                        >
+                          Add Document
+                        </Button>
+                      </div>
+
+                      <div className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1 text-left">
+                        {pendingFiles.map((candidate) => {
+                          const fileKey = getPendingFileKey(candidate);
+                          return (
+                            <div
+                              key={fileKey}
+                              className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium text-foreground">{candidate.name}</p>
+                                <p className="text-xs text-muted-foreground">{formatBytes(candidate.size)}</p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  removePendingFile(fileKey);
+                                }}
+                                disabled={isUploading}
+                                aria-label={`Remove ${candidate.name}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {isUploading && currentUploadFileName && (
+                        <div className="mt-4 space-y-2 rounded-md border border-primary/20 bg-primary/5 p-3 text-left">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-sm font-medium text-foreground">{currentUploadFileName}</p>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {currentUploadFileSize != null && (
+                                <span className="text-xs text-muted-foreground">{formatBytes(currentUploadFileSize)}</span>
+                              )}
+                              {currentUploadIndex && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {currentUploadIndex.current} / {currentUploadIndex.total}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className="h-full rounded-full bg-primary transition-all duration-300"
+                                style={{ width: `${currentUploadProgress ?? 0}%` }}
+                              />
+                            </div>
+                            <span className="w-8 text-right text-xs font-medium text-muted-foreground">
+                              {currentUploadProgress != null ? `${Math.round(currentUploadProgress)}%` : ''}
+                            </span>
+                          </div>
+                          {currentUploadStatusText && (
+                            <p className="text-xs text-muted-foreground">{currentUploadStatusText}</p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleCancelUpload();
+                          }}
+                        >
+                          {isUploading ? 'Cancel Upload' : 'Clear List'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleUpload();
+                          }}
+                          disabled={!uploadCourseId || !uploadAccessScope || !uploadAcademicTermId || isUploading || pendingFiles.length === 0}
+                        >
+                          {isUploading ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Uploading...
+                            </>
+                          ) : (
+                            `Upload Selected (${pendingFiles.length})`
+                          )}
+                        </Button>
+                      </div>
+                    </>
+                  ) : isUploadSetupComplete ? (
+                    <>
+                      <div className="text-center">
+                        <UploadCloud className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+                        <p className="text-sm text-muted-foreground">
+                          Drop your course materials here, or <span className="font-medium text-primary underline">click to browse</span>
+                        </p>
+                      </div>
                       <div className="mt-4 grid gap-3 text-left sm:grid-cols-3">
                         {uploadChecklistItems.map((item) => (
                           <div
@@ -1779,7 +1986,10 @@ export default function AdminDashboard() {
                     </>
                   ) : (
                     <>
-                      <p className="text-sm font-medium text-foreground">Complete these steps before adding files</p>
+                      <div className="text-center">
+                        <UploadCloud className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+                        <p className="text-sm font-medium text-foreground">Complete these steps before adding files</p>
+                      </div>
                       <div className="mt-4 grid gap-3 text-left sm:grid-cols-3">
                         {uploadChecklistItems.map((item) => (
                           <div
@@ -1816,102 +2026,6 @@ export default function AdminDashboard() {
                     <li>DOCX and PPTX files are extracted after upload.</li>
                   </ul>
                 </div>
-
-                {pendingFiles.length > 0 && (
-                  <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="text-sm font-medium text-foreground">
-                        {pendingFiles.length} material{pendingFiles.length === 1 ? '' : 's'} ready
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Course: {courseLabelById[uploadCourseId] || 'Unknown'} • Access:{' '}
-                        {uploadAccessScope ? accessScopeLabel(uploadAccessScope) : 'Not selected'} • Term:{' '}
-                        {termLabelById[uploadAcademicTermId] || 'Not selected'}
-                      </p>
-                    </div>
-
-                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                      {pendingFiles.map((candidate) => {
-                        const fileKey = getPendingFileKey(candidate);
-                        return (
-                          <div
-                            key={fileKey}
-                            className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-foreground">{candidate.name}</p>
-                              <p className="text-xs text-muted-foreground">{formatBytes(candidate.size)}</p>
-                            </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removePendingFile(fileKey)}
-                              disabled={isUploading}
-                              aria-label={`Remove ${candidate.name}`}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {isUploading && currentUploadFileName && (
-                      <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-medium text-foreground">
-                            {currentUploadFileName}
-                          </p>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {currentUploadFileSize != null && (
-                              <span className="text-xs text-muted-foreground">{formatBytes(currentUploadFileSize)}</span>
-                            )}
-                            {currentUploadIndex && (
-                              <Badge variant="secondary" className="text-xs">
-                                {currentUploadIndex.current} / {currentUploadIndex.total}
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-primary transition-all duration-300"
-                              style={{ width: `${currentUploadProgress ?? 0}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-medium text-muted-foreground w-8 text-right">
-                            {currentUploadProgress != null ? `${Math.round(currentUploadProgress)}%` : ''}
-                          </span>
-                        </div>
-                        {currentUploadStatusText && (
-                          <p className="text-xs text-muted-foreground">{currentUploadStatusText}</p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-                      <Button size="sm" variant="outline" onClick={handleCancelUpload}>
-                        {isUploading ? 'Cancel Upload' : 'Clear List'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={handleUpload}
-                        disabled={!uploadCourseId || !uploadAccessScope || !uploadAcademicTermId || isUploading || pendingFiles.length === 0}
-                      >
-                        {isUploading ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Uploading...
-                          </>
-                        ) : (
-                          `Upload Selected (${pendingFiles.length})`
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                )}
               </CardContent>
             </Card>
 
@@ -1970,15 +2084,15 @@ export default function AdminDashboard() {
                       </SelectContent>
                     </Select>
 
-                    <Select value={typeFilter} onValueChange={setTypeFilter}>
+                    <Select value={academicTermFilter} onValueChange={setAcademicTermFilter}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Document Type" />
+                        <SelectValue placeholder="Academic Terms" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">Document Type</SelectItem>
-                        {uniqueFileTypes.map((fileType) => (
-                          <SelectItem key={fileType} value={fileType}>
-                            {fileType}
+                        <SelectItem value="all">Academic Terms</SelectItem>
+                        {academicTerms.map((term) => (
+                          <SelectItem key={term.id} value={term.id}>
+                            {term.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -2087,7 +2201,7 @@ export default function AdminDashboard() {
                                     <Ellipsis className="h-4 w-4" />
                                   </Button>
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-40">
+                                <DropdownMenuContent align="end" className="w-48">
                                   {material.file_type === 'video' ? (
                                     <DropdownMenuItem
                                       disabled={material.processing_status !== 'completed'}
@@ -2097,9 +2211,9 @@ export default function AdminDashboard() {
                                       View transcript
                                     </DropdownMenuItem>
                                   ) : null}
-                                  <DropdownMenuItem onClick={() => handleOpenMaterial(material)}>
-                                    <Eye className="mr-2 h-4 w-4" />
-                                    View file
+                                  <DropdownMenuItem onClick={() => openEditFileNameDialog(material)}>
+                                    <Pencil className="mr-2 h-4 w-4" />
+                                    Edit filename
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     className="text-destructive focus:text-destructive"

@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 interface ChatComposerProps {
   input: string;
   isLoading: boolean;
+  disabled?: boolean;
   onInputChange: (nextValue: string) => void;
   onSend: () => void;
   onStop: () => void;
@@ -15,7 +16,7 @@ interface ChatComposerProps {
   footerText?: string;
 }
 
-export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop, placeholder = 'Ask a question about your course materials...', footerText = 'EduChat uses RAG to ground answers in your course materials' }: ChatComposerProps) {
+export function ChatComposer({ input, isLoading, disabled = false, onInputChange, onSend, onStop, placeholder = 'Ask a question about your course materials...', footerText = 'EduChat uses RAG to ground answers in your course materials' }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -44,12 +45,12 @@ export function ChatComposer({ input, isLoading, onInputChange, onSend, onStop, 
             placeholder={placeholder}
             className="min-h-[44px] max-h-[200px] resize-none"
             rows={1}
-            disabled={isLoading}
+            disabled={isLoading || disabled}
           />
 
           <Button
             onClick={isLoading ? onStop : onSend}
-            disabled={!isLoading && !input.trim()}
+            disabled={(!isLoading && !input.trim()) || disabled}
             size={isLoading ? 'default' : 'icon'}
             variant={isLoading ? 'outline' : 'default'}
             className={cn(

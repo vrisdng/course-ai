@@ -2,7 +2,7 @@ import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface UploadProgress {
   fileName: string;
-  stage: 'extracting' | 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
+  stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
   progress: number;
   error?: string;
   statusText?: string;
@@ -13,8 +13,7 @@ interface UploadProgressListProps {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  extracting: 'Extracting audio from video...',
-  uploading: 'Collecting your file...',
+  uploading: 'Uploading your file...',
   parsing: 'Processing the material...',
   embedding: 'Synthesizing key details...',
   done: 'Ready',
