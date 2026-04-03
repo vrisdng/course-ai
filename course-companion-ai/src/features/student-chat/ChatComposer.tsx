@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { ReactNode, useEffect, useRef } from 'react';
 import { Send, Square } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -14,9 +15,24 @@ interface ChatComposerProps {
   onStop: () => void;
   placeholder?: string;
   footerText?: string;
+  documentSelector?: ReactNode;
+  documentScopeSummary?: string;
+  documentHint?: string | null;
 }
 
-export function ChatComposer({ input, isLoading, disabled = false, onInputChange, onSend, onStop, placeholder = 'Ask a question about your course materials...', footerText = 'EduChat uses RAG to ground answers in your course materials' }: ChatComposerProps) {
+export function ChatComposer({
+  input,
+  isLoading,
+  disabled = false,
+  onInputChange,
+  onSend,
+  onStop,
+  placeholder = 'Ask a question about your course materials...',
+  footerText = 'EduChat uses RAG to ground answers in your course materials',
+  documentSelector,
+  documentScopeSummary,
+  documentHint,
+}: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -35,7 +51,21 @@ export function ChatComposer({ input, isLoading, disabled = false, onInputChange
 
   return (
     <div className="border-t border-border bg-background p-4">
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-3xl space-y-3">
+        {documentSelector || documentScopeSummary || documentHint ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {documentSelector}
+            {documentScopeSummary ? (
+              <Badge variant="secondary" className="max-w-full truncate px-2 py-1 font-medium">
+                {documentScopeSummary}
+              </Badge>
+            ) : null}
+            {documentHint ? (
+              <span className="text-xs text-muted-foreground">{documentHint}</span>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="flex gap-2">
           <Textarea
             ref={textareaRef}
@@ -69,7 +99,7 @@ export function ChatComposer({ input, isLoading, disabled = false, onInputChange
           </Button>
         </div>
 
-        <p className="mt-2 text-center text-xs text-muted-foreground">
+        <p className="text-center text-xs text-muted-foreground">
           {footerText}
         </p>
       </div>
