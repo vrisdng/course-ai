@@ -4,6 +4,11 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
 import { getCitationKey } from './citations';
+import {
+  type ChatDocumentOption,
+  getDocumentScopeSummary,
+  sanitizeSelectedDocumentIds,
+} from './documentScope';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
 
@@ -79,6 +84,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [availableCourses, setAvailableCourses] = useState<AccessibleCourse[]>([]);
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
+  const [availableDocuments, setAvailableDocuments] = useState<ChatDocumentOption[]>([]);
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(routeConversationId);
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
@@ -125,6 +133,43 @@ export function useStudentChat(routeConversationId: string | null = null) {
       return nextCourses[0]?.id || null;
     });
     setIsLoadingCourses(false);
+  }, []);
+
+  const fetchAvailableDocuments = useCallback(async (courseId: string | null) => {
+    if (!courseId) {
+      setAvailableDocuments([]);
+      setSelectedDocumentIds([]);
+      setIsLoadingDocuments(false);
+      return;
+    }
+
+    setIsLoadingDocuments(true);
+
+    const { data, error } = await supabase
+      .from('materials')
+      .select('id, file_name, file_type')
+      .eq('course_id', courseId)
+      .eq('processing_status', 'completed')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Failed to load course documents:', error);
+      toast.error('Failed to load course documents');
+      setAvailableDocuments([]);
+      setSelectedDocumentIds([]);
+      setIsLoadingDocuments(false);
+      return;
+    }
+
+    const nextDocuments: ChatDocumentOption[] = (data || []).map((document) => ({
+      id: document.id,
+      name: document.file_name,
+      type: document.file_type,
+    }));
+
+    setAvailableDocuments(nextDocuments);
+    setSelectedDocumentIds((current) => sanitizeSelectedDocumentIds(current, nextDocuments));
+    setIsLoadingDocuments(false);
   }, []);
 
   const fetchConversations = useCallback(async (
@@ -317,6 +362,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
   }, [fetchAccessibleCourses]);
 
   useEffect(() => {
+    void fetchAvailableDocuments(selectedCourseId);
+  }, [fetchAvailableDocuments, selectedCourseId]);
+
+  useEffect(() => {
     void fetchConversations(initialPreferredConversationIdRef.current);
   }, [fetchConversations]);
 
@@ -426,6 +475,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           message: userMessage.content,
           conversationId: currentConversationId,
           courseId: selectedCourseId,
+          selectedDocumentIds,
         }),
       });
 
@@ -588,7 +638,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setIsLoading(false);
       }
     }
-  }, [currentConversationId, fetchConversations, input, isLoading, selectedCourseId]);
+  }, [currentConversationId, fetchConversations, input, isLoading, selectedCourseId, selectedDocumentIds]);
 
   const stopGenerating = useCallback(() => {
     const activeAssistantMessageId = activeAssistantMessageIdRef.current;
@@ -619,6 +669,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
     cancelActiveRequest();
     const conversation = conversations.find((item) => item.id === conversationId);
     if (conversation) {
+      if (conversation.courseId !== selectedCourseId) {
+        setSelectedDocumentIds([]);
+      }
       setSelectedCourseId(conversation.courseId);
     }
     setCurrentConversationId(conversationId);
@@ -626,7 +679,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(null);
     setOpeningCitationKey(null);
     setActiveVideoSource(null);
-  }, [cancelActiveRequest, conversations]);
+  }, [cancelActiveRequest, conversations, selectedCourseId]);
 
   const changeSelectedCourse = useCallback((courseId: string) => {
     if (courseId === selectedCourseId) {
@@ -635,6 +688,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
     cancelActiveRequest();
     setSelectedCourseId(courseId);
+    setAvailableDocuments([]);
+    setSelectedDocumentIds([]);
     setCurrentConversationId(null);
     setMessages([]);
     setSelectedMessage(null);
@@ -642,6 +697,18 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setOpeningCitationKey(null);
     setActiveVideoSource(null);
   }, [cancelActiveRequest, selectedCourseId]);
+
+  const toggleSelectedDocument = useCallback((documentId: string) => {
+    setSelectedDocumentIds((current) => (
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
+    ));
+  }, []);
+
+  const clearSelectedDocuments = useCallback(() => {
+    setSelectedDocumentIds([]);
+  }, []);
 
   const deleteConversation = useCallback(async (conversationId: string) => {
     const conversation = conversations.find((item) => item.id === conversationId);
@@ -811,10 +878,14 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
   }, []);
 
+  const documentScopeSummary = getDocumentScopeSummary(availableDocuments, selectedDocumentIds);
+
   return {
     activeVideoSource,
     availableCourses,
     isLoadingCourses,
+    availableDocuments,
+    isLoadingDocuments,
     messages,
     input,
     isLoading,
@@ -825,8 +896,12 @@ export function useStudentChat(routeConversationId: string | null = null) {
     conversations,
     currentConversationId,
     selectedCourseId,
+    selectedDocumentIds,
+    documentScopeSummary,
     deletingConversationId,
     changeSelectedCourse,
+    toggleSelectedDocument,
+    clearSelectedDocuments,
     setInput,
     setShowSidePanel,
     setHighlightedCitationKey,

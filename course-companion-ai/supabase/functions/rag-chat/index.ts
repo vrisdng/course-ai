@@ -19,11 +19,13 @@ const CONVERSATION_HISTORY_PROMPT_LIMIT = 14;
 const CONVERSATION_HISTORY_CHAR_BUDGET = 9000;
 const CONVERSATION_HISTORY_MESSAGE_CLIP = 850;
 const MEMORY_CITATION_TOKEN_PATTERN = /<<\s*cite\s*:\s*[1-9]\d*\s*>>/gi;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface ChatRequest {
   message: string;
   conversationId?: string;
   courseId?: string;
+  selectedDocumentIds?: string[];
 }
 
 interface RetrievedChunk {
@@ -66,6 +68,11 @@ interface CitationSanitizationResult {
 interface ConversationHistoryTurn {
   role: "user" | "assistant";
   content: string;
+}
+
+interface ResolvedSelectedMaterial {
+  id: string;
+  fileName: string;
 }
 
 interface GeminiContentTurn {
@@ -168,6 +175,49 @@ function clipText(value: string, maxLength = 1200): string {
     return value;
   }
   return `${value.slice(0, maxLength).trim()}...`;
+}
+
+function normalizeSelectedDocumentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const uniqueIds = new Set<string>();
+
+  for (const rawId of value) {
+    if (typeof rawId !== "string") {
+      continue;
+    }
+
+    const trimmedId = rawId.trim();
+    if (!UUID_PATTERN.test(trimmedId)) {
+      continue;
+    }
+
+    uniqueIds.add(trimmedId);
+  }
+
+  return Array.from(uniqueIds);
+}
+
+function formatDocumentNameList(materials: ResolvedSelectedMaterial[]): string {
+  if (materials.length === 0) {
+    return "the selected documents";
+  }
+
+  if (materials.length === 1) {
+    return `"${materials[0].fileName}"`;
+  }
+
+  if (materials.length === 2) {
+    return `"${materials[0].fileName}" and "${materials[1].fileName}"`;
+  }
+
+  return `${materials.length} selected documents`;
+}
+
+function buildSelectedDocumentEmptyAnswer(materials: ResolvedSelectedMaterial[]): string {
+  return `I couldn't find enough information in ${formatDocumentNameList(materials)} to answer that from the selected documents alone.\n\n## Next step\n\nTry selecting additional documents or switching back to **All course documents** for a broader grounded answer.`;
 }
 
 function sanitizeMessageForMemory(content: string): string {
@@ -396,7 +446,7 @@ function inferUnresolvedReason(options: {
   }
 
   const loweredAnswer = options.answer.toLowerCase();
-  const materialGapPattern = /(not (?:in|from) (?:the )?(?:provided )?(?:course )?materials|not available in (?:the )?(?:provided )?(?:course )?materials|cannot find this in (?:the )?materials)/;
+  const materialGapPattern = /(not (?:in|from) (?:the )?(?:provided )?(?:selected )?(?:course )?(?:documents|materials)|not available in (?:the )?(?:provided )?(?:selected )?(?:course )?(?:documents|materials)|cannot find this in (?:the )?(?:selected )?(?:documents|materials))/;
   if (materialGapPattern.test(loweredAnswer)) {
     return "insufficient_materials";
   }
@@ -772,6 +822,7 @@ async function retrieveChunkCandidates(options: {
   embedding: number[];
   threshold: number;
   count: number;
+  selectedMaterialIds?: string[];
 }): Promise<RetrievedChunk[]> {
   const { data: chunks, error: searchError } = await options.supabaseClient.rpc(
     "match_chunks",
@@ -781,6 +832,9 @@ async function retrieveChunkCandidates(options: {
       match_count: options.count,
       user_id: options.userId,
       course_id_filter: options.courseId,
+      selected_material_ids: options.selectedMaterialIds && options.selectedMaterialIds.length > 0
+        ? options.selectedMaterialIds
+        : null,
     }
   );
 
@@ -920,6 +974,44 @@ async function hasCourseAccess(
   }
 
   return Boolean(isAdmin);
+}
+
+async function resolveSelectedMaterials(
+  supabaseClient: ReturnType<typeof createClient>,
+  courseId: string,
+  selectedDocumentIds: string[],
+): Promise<ResolvedSelectedMaterial[]> {
+  if (selectedDocumentIds.length === 0) {
+    return [];
+  }
+
+  const { data, error } = await supabaseClient
+    .from("materials")
+    .select("id, file_name")
+    .eq("course_id", courseId)
+    .eq("processing_status", "completed")
+    .in("id", selectedDocumentIds);
+
+  if (error) {
+    throw new Error(`Failed to validate selected documents: ${error.message}`);
+  }
+
+  const resolvedMaterials = (data || []).map((material) => ({
+    id: material.id,
+    fileName: material.file_name,
+  }));
+
+  if (resolvedMaterials.length !== selectedDocumentIds.length) {
+    throw new HttpError(
+      400,
+      "One or more selected documents are unavailable for this course. Refresh the page and try again.",
+    );
+  }
+
+  const orderById = new Map(resolvedMaterials.map((material) => [material.id, material]));
+  return selectedDocumentIds
+    .map((documentId) => orderById.get(documentId))
+    .filter((material): material is ResolvedSelectedMaterial => Boolean(material));
 }
 
 async function findDefaultCourseId(
@@ -1104,8 +1196,14 @@ serve(async (req) => {
       );
     }
 
-    const { message, conversationId, courseId } = await req.json() as ChatRequest;
+    const {
+      message,
+      conversationId,
+      courseId,
+      selectedDocumentIds: rawSelectedDocumentIds,
+    } = await req.json() as ChatRequest;
     const trimmedMessage = message?.trim();
+    const selectedDocumentIds = normalizeSelectedDocumentIds(rawSelectedDocumentIds);
 
     if (!trimmedMessage) {
       return new Response(
@@ -1129,6 +1227,12 @@ serve(async (req) => {
 
     const activeConversationId = resolved.conversationId;
     const activeCourseId = resolved.courseId;
+    const selectedMaterials = await resolveSelectedMaterials(
+      supabaseClient,
+      activeCourseId,
+      selectedDocumentIds,
+    );
+    const selectedMaterialIds = selectedMaterials.map((material) => material.id);
 
     // Parallelize: academic term ID + conversation history + original query embedding
     const [activeAcademicTermId, { data: recentMessages, error: historyError }, originalEmbedding] = await Promise.all([
@@ -1180,6 +1284,7 @@ serve(async (req) => {
           embedding,
           threshold: HIGH_RECALL_MATCH_THRESHOLD,
           count: HIGH_RECALL_MATCH_COUNT,
+          selectedMaterialIds,
         })
       )
     );
@@ -1197,12 +1302,15 @@ serve(async (req) => {
     );
 
     console.log(
-      `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor.`
+      `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
     );
 
+    const hasSelectedDocumentFilter = selectedMaterials.length > 0;
     let ragContext = "";
     if (retrievedChunks.length > 0) {
-      ragContext = "\n\n## Relevant Course Materials:\n\n";
+      ragContext = hasSelectedDocumentFilter
+        ? "\n\n## Relevant Selected Documents:\n\n"
+        : "\n\n## Relevant Course Materials:\n\n";
       retrievedChunks.forEach((chunk, index) => {
         const sourceName = chunk.material_name || chunk.document_name || "Unknown document";
         const sourceType = chunk.material_type || chunk.document_type || "document";
@@ -1220,6 +1328,16 @@ serve(async (req) => {
       });
     }
 
+    const retrievalScopeInstruction = hasSelectedDocumentFilter
+      ? `DOCUMENT SCOPE: The user selected a document filter. You may ground your answer ONLY in these documents: ${formatDocumentNameList(selectedMaterials)}. Do not use any outside course materials, prior assumptions, or unstated course context beyond those selected documents. If the selected documents do not contain enough evidence, say the answer is not available in the selected documents.`
+      : "DOCUMENT SCOPE: No document filter is active. You may use any retrieved material from the selected course.";
+    const retrievalContextHeading = hasSelectedDocumentFilter
+      ? "The following are relevant excerpts from the selected documents:"
+      : "The following are relevant excerpts from the course materials:";
+    const noResultsInstruction = hasSelectedDocumentFilter
+      ? "No relevant excerpts were found in the selected documents for this query. Tell the student the answer is not available in the selected documents."
+      : "No relevant course materials were found for this query.";
+
     const systemPrompt = `You are EduChat, an AI learning assistant for university students.
 
 Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
@@ -1236,7 +1354,9 @@ RELEVANCE: Before citing a source, verify it genuinely answers the question — 
 
 Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".
 
-${ragContext ? "The following are relevant excerpts from the course materials:" : "No relevant course materials were found for this query."}
+${retrievalScopeInstruction}
+
+${ragContext ? retrievalContextHeading : noResultsInstruction}
 ${ragContext}`;
 
     let streamCancelled = false;
@@ -1270,6 +1390,83 @@ ${ragContext}`;
         (async () => {
           try {
             ensureStreamActive();
+
+            if (hasSelectedDocumentFilter && retrievedChunks.length === 0) {
+              const answer = buildSelectedDocumentEmptyAnswer(selectedMaterials);
+
+              sendEvent("final", {
+                answer,
+                citations: [],
+                conversationId: activeConversationId,
+                meta: {
+                  chatModel: CHAT_MODEL,
+                  embeddingModel: EMBEDDING_MODEL,
+                  citationPipelineVersion: CITATION_PIPELINE_VERSION,
+                },
+              });
+
+              const [userMessageResult, assistantMessageResult] = await Promise.all([
+                supabaseClient
+                  .from("messages")
+                  .insert({
+                    conversation_id: activeConversationId,
+                    role: "user",
+                    content: trimmedMessage,
+                  })
+                  .select("id")
+                  .single(),
+                supabaseClient
+                  .from("messages")
+                  .insert({
+                    conversation_id: activeConversationId,
+                    role: "assistant",
+                    content: answer,
+                  })
+                  .select("id")
+                  .single(),
+              ]);
+
+              if (!userMessageResult.error && userMessageResult.data && !assistantMessageResult.error && assistantMessageResult.data) {
+                const queryCategory = classifyQueryCategory(trimmedMessage);
+                const unresolvedReason = inferUnresolvedReason({
+                  retrievedChunkCount: 0,
+                  citationCount: 0,
+                  answer,
+                });
+
+                await Promise.all([
+                  supabaseClient
+                    .from("conversations")
+                    .update({ updated_at: new Date().toISOString() })
+                    .eq("id", activeConversationId),
+                  insertQueryEvent(supabaseAdminClient, {
+                    user_id: user.id,
+                    conversation_id: activeConversationId,
+                    course_id: activeCourseId,
+                    academic_term_id: activeAcademicTermId,
+                    user_message_id: userMessageResult.data.id,
+                    assistant_message_id: assistantMessageResult.data.id,
+                    query_text: trimmedMessage,
+                    query_category: queryCategory,
+                    retrieved_chunk_count: 0,
+                    citation_count: 0,
+                    citation_hit: false,
+                    unresolved: unresolvedReason !== null,
+                    unresolved_reason: unresolvedReason,
+                    latency_ms: Date.now() - requestStartedAt,
+                  }),
+                ]);
+              } else {
+                if (userMessageResult.error) {
+                  console.error(`Failed to save user message: ${userMessageResult.error.message}`);
+                }
+                if (assistantMessageResult.error) {
+                  console.error(`Failed to save assistant message: ${assistantMessageResult.error.message}`);
+                }
+              }
+
+              return;
+            }
 
             const rawAnswer = await generateGeminiTextStream({
               geminiApiKey,

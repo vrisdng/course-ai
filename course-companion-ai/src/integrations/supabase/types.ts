@@ -689,6 +689,7 @@ export type Database = {
           match_count?: number
           match_threshold?: number
           query_embedding: string
+          selected_material_ids?: string[] | null
           user_id?: string
         }
         Returns: {
