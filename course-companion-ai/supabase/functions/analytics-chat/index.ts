@@ -9,12 +9,14 @@ const corsHeaders = {
 
 const CHAT_MODEL = "gemini-3-flash-preview";
 const HISTORY_LIMIT = 10;
-const DATA_WINDOW_DAYS = 30;
+const DEFAULT_DATA_WINDOW_DAYS = 30;
 
 interface AnalyticsChatRequest {
   message: string;
   courseId: string;
   history?: Array<{ role: string; content: string }>;
+  startAt?: string | null;
+  endAt?: string | null;
 }
 
 interface ConversationHistoryTurn {
@@ -79,6 +81,44 @@ function startAtIso(days: number): string {
   return d.toISOString();
 }
 
+function parseIsoDate(value: unknown, fieldName: string): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new HttpError(400, `${fieldName} must be a valid ISO timestamp`);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new HttpError(400, `${fieldName} must be a valid ISO timestamp`);
+  }
+
+  return parsed.toISOString();
+}
+
+function resolveAnalyticsRange(rawStartAt: unknown, rawEndAt: unknown): { startAt: string; endAt: string; label: string } {
+  if (rawStartAt === undefined && rawEndAt === undefined) {
+    const endAt = new Date().toISOString();
+    const startAt = startAtIso(DEFAULT_DATA_WINDOW_DAYS);
+    return { startAt, endAt, label: `last ${DEFAULT_DATA_WINDOW_DAYS} days` };
+  }
+
+  const startAt = parseIsoDate(rawStartAt, "startAt");
+  const endAt = parseIsoDate(rawEndAt, "endAt");
+
+  if (!startAt || !endAt) {
+    throw new HttpError(400, "startAt and endAt are both required");
+  }
+
+  if (new Date(startAt).getTime() > new Date(endAt).getTime()) {
+    throw new HttpError(400, "startAt must be earlier than or equal to endAt");
+  }
+
+  return { startAt, endAt, label: `${startAt} to ${endAt}` };
+}
+
 // ── Data fetching ──────────────────────────────────────────────────────
 
 interface AnalyticsData {
@@ -96,8 +136,23 @@ async function fetchAnalyticsData(
   supabaseClient: ReturnType<typeof createClient>,
   supabaseAdmin: ReturnType<typeof createClient>,
   courseId: string,
-  startAt: string,
+  startAt: string | null,
+  endAt: string | null,
 ): Promise<AnalyticsData> {
+  let unresolvedQuery = supabaseAdmin.from("query_events")
+    .select("query_text, unresolved_reason, created_at")
+    .eq("course_id", courseId)
+    .eq("unresolved", true)
+    .order("created_at", { ascending: false })
+    .limit(15);
+
+  if (startAt) {
+    unresolvedQuery = unresolvedQuery.gte("created_at", startAt);
+  }
+  if (endAt) {
+    unresolvedQuery = unresolvedQuery.lte("created_at", endAt);
+  }
+
   const [
     courseRes,
     enrollmentRes,
@@ -109,17 +164,11 @@ async function fetchAnalyticsData(
   ] = await Promise.all([
     supabaseAdmin.from("courses").select("name, code").eq("id", courseId).single(),
     supabaseAdmin.from("enrollments").select("id", { count: "exact", head: true }).eq("course_id", courseId),
-    supabaseAdmin.rpc("get_course_active_student_count" as string, { in_course_id: courseId, in_start_at: startAt }),
-    supabaseClient.rpc("get_course_top_questions", { in_course_id: courseId, in_start_at: startAt, in_limit: 10 }),
-    supabaseClient.rpc("get_course_keyword_stats", { in_course_id: courseId, in_start_at: startAt, in_limit: 15 }),
-    supabaseClient.rpc("get_course_document_reference_stats", { in_course_id: courseId, in_start_at: startAt }),
-    supabaseAdmin.from("query_events")
-      .select("query_text, unresolved_reason, created_at")
-      .eq("course_id", courseId)
-      .eq("unresolved", true)
-      .gte("created_at", startAt)
-      .order("created_at", { ascending: false })
-      .limit(15),
+    supabaseAdmin.rpc("get_course_active_student_count" as string, { in_course_id: courseId, in_start_at: startAt, in_end_at: endAt }),
+    supabaseClient.rpc("get_course_top_questions", { in_course_id: courseId, in_start_at: startAt, in_end_at: endAt, in_limit: 10 }),
+    supabaseClient.rpc("get_course_keyword_stats", { in_course_id: courseId, in_start_at: startAt, in_end_at: endAt, in_limit: 15 }),
+    supabaseClient.rpc("get_course_document_reference_stats", { in_course_id: courseId, in_start_at: startAt, in_end_at: endAt }),
+    unresolvedQuery,
   ]);
 
   return {
@@ -134,9 +183,9 @@ async function fetchAnalyticsData(
   };
 }
 
-function formatAnalyticsContext(data: AnalyticsData, windowDays: number): string {
+function formatAnalyticsContext(data: AnalyticsData, rangeLabel: string): string {
   const lines: string[] = [];
-  lines.push(`=== COURSE ANALYTICS DATA (last ${windowDays} days) ===`);
+  lines.push(`=== COURSE ANALYTICS DATA (${rangeLabel}) ===`);
   lines.push(`Course: ${data.courseName}${data.courseCode ? ` (${data.courseCode})` : ""}`);
   lines.push("");
 
@@ -350,7 +399,7 @@ serve(async (req) => {
       );
     }
 
-    const { message, courseId, history } = (await req.json()) as AnalyticsChatRequest;
+    const { message, courseId, history, startAt: rawStartAt, endAt: rawEndAt } = (await req.json()) as AnalyticsChatRequest;
     const trimmedMessage = message?.trim();
 
     if (!trimmedMessage) {
@@ -370,9 +419,9 @@ serve(async (req) => {
     throwIfAborted(requestAbortController.signal);
 
     // Fetch analytics data
-    const startAt = startAtIso(DATA_WINDOW_DAYS);
-    const analyticsData = await fetchAnalyticsData(supabaseClient, supabaseAdmin, courseId, startAt);
-    const analyticsContext = formatAnalyticsContext(analyticsData, DATA_WINDOW_DAYS);
+    const range = resolveAnalyticsRange(rawStartAt, rawEndAt);
+    const analyticsData = await fetchAnalyticsData(supabaseClient, supabaseAdmin, courseId, range.startAt, range.endAt);
+    const analyticsContext = formatAnalyticsContext(analyticsData, range.label);
 
     throwIfAborted(requestAbortController.signal);
 

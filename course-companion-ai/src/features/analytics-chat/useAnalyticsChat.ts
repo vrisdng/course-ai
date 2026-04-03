@@ -43,7 +43,7 @@ function parseMaybeJson(value: string): unknown {
   }
 }
 
-export function useAnalyticsChat(courseId: string | null) {
+export function useAnalyticsChat(courseId: string | null, startAt: string | null, endAt: string | null) {
   const [messages, setMessages] = useState<AnalyticsChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -57,7 +57,7 @@ export function useAnalyticsChat(courseId: string | null) {
     setInput('');
     abortControllerRef.current?.abort();
     setIsLoading(false);
-  }, [courseId]);
+  }, [courseId, endAt, startAt]);
 
   const clearChat = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -124,6 +124,8 @@ export function useAnalyticsChat(courseId: string | null) {
           message: userMessage.content,
           courseId,
           history,
+          startAt,
+          endAt,
         }),
       });
 
@@ -241,7 +243,7 @@ export function useAnalyticsChat(courseId: string | null) {
         setIsLoading(false);
       }
     }
-  }, [courseId, input, isLoading, messages]);
+  }, [courseId, endAt, input, isLoading, messages, startAt]);
 
   return { messages, input, setInput, isLoading, handleSend, stopGenerating, clearChat };
 }

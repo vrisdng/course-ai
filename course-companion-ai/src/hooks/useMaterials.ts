@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
-import { getDeferredUploadValidationError, isTextLikeUpload, isVideoUpload, LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES } from '@/lib/materialUpload';
+import { getDeferredUploadValidationError, isTextLikeUpload, isVideoUpload } from '@/lib/materialUpload';
 import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 
 interface Material {
@@ -21,7 +21,7 @@ interface Material {
 
 interface UploadProgress {
   fileName: string;
-  stage: 'extracting' | 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
+  stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
   progress: number; // 0–100
   error?: string;
   statusText?: string;
@@ -160,9 +160,9 @@ export function useMaterials(courseId: string | null) {
       const next = new Map(prev);
       next.set(uploadId, {
         fileName: file.name,
-        stage: isVideoUpload(file) ? 'extracting' : 'uploading',
+        stage: 'uploading',
         progress: 5,
-        statusText: isVideoUpload(file) ? 'Preparing video processor...' : 'Collecting your file...',
+        statusText: isVideoUpload(file) ? 'Uploading video...' : 'Collecting your file...',
       });
       return next;
     });
@@ -180,15 +180,6 @@ export function useMaterials(courseId: string | null) {
               statusText: update.statusText,
             });
           },
-          confirmLargeFile:
-            file.size > LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES
-              ? () =>
-                  Promise.resolve(
-                    window.confirm(
-                      'This file is large. Extraction will take a few minutes. Continue?'
-                    )
-                  )
-              : undefined,
         });
 
         const isBackground = true; // multi-chunk or single — server continues in background

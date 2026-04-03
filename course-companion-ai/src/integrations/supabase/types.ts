@@ -630,7 +630,7 @@ export type Database = {
     }
     Functions: {
       get_course_document_reference_stats: {
-        Args: { in_course_id: string; in_start_at?: string | null }
+        Args: { in_course_id: string; in_end_at?: string | null; in_start_at?: string | null }
         Returns: {
           file_name: string
           file_type: Database["public"]["Enums"]["document_type"]
@@ -642,14 +642,14 @@ export type Database = {
         }[]
       }
       get_course_keyword_stats: {
-        Args: { in_course_id: string; in_limit?: number; in_start_at?: string | null }
+        Args: { in_course_id: string; in_end_at?: string | null; in_limit?: number; in_start_at?: string | null }
         Returns: {
           frequency: number
           keyword: string
         }[]
       }
       get_course_top_questions: {
-        Args: { in_course_id: string; in_limit?: number; in_start_at?: string | null }
+        Args: { in_course_id: string; in_end_at?: string | null; in_limit?: number; in_start_at?: string | null }
         Returns: {
           frequency: number
           last_asked_at: string | null
@@ -660,6 +660,10 @@ export type Database = {
       get_active_academic_term_id: {
         Args: Record<PropertyKey, never>
         Returns: string | null
+      }
+      get_course_active_student_count: {
+        Args: { in_course_id: string; in_end_at?: string | null; in_start_at?: string | null }
+        Returns: number
       }
       get_material_course_id: {
         Args: { check_material_id: string }
