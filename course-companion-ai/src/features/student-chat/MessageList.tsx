@@ -79,6 +79,26 @@ export function MessageList({
                   remarkPlugins={[remarkGfm]}
                   urlTransform={(url) => (url.startsWith('citation:') ? url : defaultUrlTransform(url))}
                   components={{
+                    table: ({ children }) => (
+                      <div className="my-3 w-full overflow-x-auto">
+                        <table className="w-full border-collapse text-sm">{children}</table>
+                      </div>
+                    ),
+                    thead: ({ children }) => (
+                      <thead className="border-b border-border/60 bg-muted/40">{children}</thead>
+                    ),
+                    tbody: ({ children }) => (
+                      <tbody className="divide-y divide-border/40">{children}</tbody>
+                    ),
+                    tr: ({ children }) => (
+                      <tr className="transition-colors hover:bg-muted/20">{children}</tr>
+                    ),
+                    th: ({ children }) => (
+                      <th className="border-r border-border/40 px-3 py-2 text-left text-xs font-semibold text-muted-foreground last:border-r-0">{children}</th>
+                    ),
+                    td: ({ children }) => (
+                      <td className="border-r border-border/40 px-3 py-2 last:border-r-0">{children}</td>
+                    ),
                     a: ({ href, children }) => {
                       if (href?.startsWith('citation:')) {
                         const citationNumber = Number(href.split(':')[1]);
