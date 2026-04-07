@@ -54,6 +54,7 @@ import {
   isVideoUpload,
 } from '@/lib/materialUpload';
 import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
+import { groupSegmentsIntoParagraphs } from '@/features/student-chat/groupTranscriptSegments';
 import { cn } from '@/lib/utils';
 import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 
@@ -1363,15 +1364,14 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <div className="space-y-2">
-                {transcriptSegments.map((segment) => (
-                  <div key={segment.id} className="rounded-md border border-border bg-muted/20 px-4 py-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
+                {groupSegmentsIntoParagraphs(transcriptSegments).map((para) => (
+                  <div key={para.id} className="rounded-md border border-border bg-muted/20 px-4 py-3">
+                    <div className="mb-2 flex items-center gap-2">
                       <span className="text-xs font-medium text-primary">
-                        {formatTimestamp(segment.start_ms)}-{formatTimestamp(segment.end_ms)}
+                        {formatTimestamp(para.startMs)}–{formatTimestamp(para.endMs)}
                       </span>
-                      <span className="text-xs text-muted-foreground">Segment {segment.segment_index + 1}</span>
                     </div>
-                    <p className="text-sm text-foreground">{segment.text}</p>
+                    <p className="text-sm text-foreground">{para.text}</p>
                   </div>
                 ))}
               </div>

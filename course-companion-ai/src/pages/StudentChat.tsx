@@ -37,7 +37,7 @@ export default function StudentChat() {
   const navigate = useNavigate();
   const location = useLocation();
   const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
-  const { refreshProfile } = useAuth();
+  const { refreshProfile, isAdmin } = useAuth();
 
   const {
     activeVideoSource,
@@ -150,6 +150,7 @@ export default function StudentChat() {
           onSearchChange={setConversationSearch}
           onChangeCourse={changeSelectedCourse}
           onEnrollCourse={() => setIsEnrollOpen(true)}
+          showEnroll={!isAdmin}
         />
 
         <div className="flex flex-1 flex-col">
