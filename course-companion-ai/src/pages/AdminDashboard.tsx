@@ -5,9 +5,11 @@ import {
   Clock,
   Copy,
   Ellipsis,
+  ExternalLink,
   FileText,
   Filter,
   Globe2,
+  Link,
   Loader2,
   Lock,
   Pencil,
@@ -123,6 +125,7 @@ type Material = {
   file_path: string;
   file_type: string;
   file_size: number | null;
+  linked_url: string | null;
   topic: string | null;
   week_number: number | null;
   processing_error?: string | null;
@@ -256,6 +259,9 @@ export default function AdminDashboard() {
   const [editingFileNameMaterial, setEditingFileNameMaterial] = useState<Material | null>(null);
   const [editingFileNameValue, setEditingFileNameValue] = useState('');
   const [isUpdatingFileName, setIsUpdatingFileName] = useState(false);
+  const [linkedUrlMaterial, setLinkedUrlMaterial] = useState<Material | null>(null);
+  const [linkedUrlValue, setLinkedUrlValue] = useState('');
+  const [isSavingLinkedUrl, setIsSavingLinkedUrl] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cancelUploadRef = useRef(false);
@@ -330,14 +336,14 @@ export default function AdminDashboard() {
 
     const { data, error } = await supabase
       .from('materials')
-      .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at')
+      .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at')
       .order('created_at', { ascending: false })
       .limit(200);
 
     if (error) {
       const fallback = await supabase
         .from('materials')
-        .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, is_public, created_at')
+        .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, is_public, created_at')
         .order('created_at', { ascending: false })
         .limit(200);
 
@@ -1022,6 +1028,42 @@ export default function AdminDashboard() {
     window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
   };
 
+  const handleAttachLink = (material: Material) => {
+    setLinkedUrlMaterial(material);
+    setLinkedUrlValue(material.linked_url ?? '');
+  };
+
+  const closeLinkedUrlDialog = () => {
+    if (isSavingLinkedUrl) return;
+    setLinkedUrlMaterial(null);
+    setLinkedUrlValue('');
+  };
+
+  const handleSaveLinkedUrl = async () => {
+    if (!linkedUrlMaterial) return;
+    setIsSavingLinkedUrl(true);
+
+    const trimmed = linkedUrlValue.trim() || null;
+    const { error } = await supabase
+      .from('materials')
+      .update({ linked_url: trimmed })
+      .eq('id', linkedUrlMaterial.id);
+
+    if (error) {
+      toast.error(error.message || 'Failed to save URL');
+      setIsSavingLinkedUrl(false);
+      return;
+    }
+
+    setMaterials((prev) =>
+      prev.map((m) => (m.id === linkedUrlMaterial.id ? { ...m, linked_url: trimmed } : m))
+    );
+    toast.success('URL saved');
+    setIsSavingLinkedUrl(false);
+    setLinkedUrlMaterial(null);
+    setLinkedUrlValue('');
+  };
+
   const handleOpenTranscript = async (material: Material) => {
     setTranscriptMaterial(material);
     setTranscriptSegments([]);
@@ -1337,6 +1379,61 @@ export default function AdminDashboard() {
 
   return (
     <MainLayout showFooter={false}>
+      <Dialog open={Boolean(linkedUrlMaterial)} onOpenChange={(open) => (open ? undefined : closeLinkedUrlDialog())}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Attached URL</DialogTitle>
+            <DialogDescription>
+              {linkedUrlMaterial
+                ? `View or edit the URL attached to "${linkedUrlMaterial.file_name}".`
+                : 'View or edit the URL attached to this video.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Label htmlFor="linked-url">URL</Label>
+            <Input
+              id="linked-url"
+              type="url"
+              placeholder="https://example.com/video"
+              value={linkedUrlValue}
+              onChange={(e) => setLinkedUrlValue(e.target.value)}
+              disabled={isSavingLinkedUrl}
+            />
+            {linkedUrlValue.trim() && (
+              <a
+                href={linkedUrlValue.trim()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Open URL in new tab
+              </a>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeLinkedUrlDialog} disabled={isSavingLinkedUrl}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleSaveLinkedUrl} disabled={isSavingLinkedUrl}>
+              {isSavingLinkedUrl ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Link className="mr-2 h-4 w-4" />
+                  Save URL
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={Boolean(transcriptMaterial)} onOpenChange={(open) => (open ? undefined : closeTranscriptDialog())}>
         <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-3xl">
           <DialogHeader>
@@ -2229,6 +2326,13 @@ export default function AdminDashboard() {
                                 <DropdownMenuContent align="end" className="w-48">
                                   {material.file_type === 'video' ? (
                                     <>
+                                      <DropdownMenuItem
+                                        disabled={material.processing_status !== 'completed'}
+                                        onClick={() => handleAttachLink(material)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4" />
+                                        View attached URL
+                                      </DropdownMenuItem>
                                       <DropdownMenuItem
                                         disabled={material.processing_status !== 'completed'}
                                         onClick={() => handleOpenTranscript(material)}

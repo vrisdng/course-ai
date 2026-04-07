@@ -793,7 +793,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
       if (chunkRow.material_id) {
         const { data: materialRow, error: materialError } = await supabase
           .from('materials')
-          .select('file_path, file_type, file_name')
+          .select('file_path, file_type, file_name, linked_url')
           .eq('id', chunkRow.material_id)
           .maybeSingle();
 
@@ -810,6 +810,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
             startMs: citation.startMs ?? 0,
             endMs: citation.endMs,
             excerpt: citation.excerpt,
+            linkedUrl: materialRow.linked_url ?? null,
           });
           return;
         }

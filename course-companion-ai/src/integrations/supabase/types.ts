@@ -275,6 +275,7 @@ export type Database = {
           file_type: Database["public"]["Enums"]["document_type"]
           id: string
           is_public: boolean
+          linked_url: string | null
           processing_error: string | null
           processing_progress: number | null
           processing_stage: string | null
@@ -299,6 +300,7 @@ export type Database = {
           file_type?: Database["public"]["Enums"]["document_type"]
           id?: string
           is_public?: boolean
+          linked_url?: string | null
           processing_error?: string | null
           processing_progress?: number | null
           processing_stage?: string | null
@@ -323,6 +325,7 @@ export type Database = {
           file_type?: Database["public"]["Enums"]["document_type"]
           id?: string
           is_public?: boolean
+          linked_url?: string | null
           processing_error?: string | null
           processing_progress?: number | null
           processing_stage?: string | null
