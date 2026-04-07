@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, FileText, Loader2, PlayCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -35,12 +35,15 @@ interface VideoSourceDialogProps {
   onClose: () => void;
 }
 
+const CONTEXT_WINDOW_MS = 30_000; // 30s before and after the cited segment
+
 export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const highlightRef = useRef<HTMLDivElement | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [isLoadingSegments, setIsLoadingSegments] = useState(false);
 
-  // Fetch transcript segments when showing transcript-only view
+  // Fetch transcript segments windowed around the cited segment
   useEffect(() => {
     if (!source?.materialId || source.signedUrl) {
       setSegments([]);
@@ -50,24 +53,31 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
     let cancelled = false;
     setIsLoadingSegments(true);
 
+    const windowStart = Math.max(0, source.startMs - CONTEXT_WINDOW_MS);
+    const windowEnd = (source.endMs ?? source.startMs) + CONTEXT_WINDOW_MS;
+
     supabase
       .from('material_transcript_segments')
       .select('id, segment_index, start_ms, end_ms, text')
       .eq('material_id', source.materialId)
+      .gte('start_ms', windowStart)
+      .lte('start_ms', windowEnd)
       .order('segment_index', { ascending: true })
       .then(({ data, error }) => {
         if (cancelled) return;
-        if (error) {
-          console.error('Failed to load transcript segments:', error);
-        }
+        if (error) console.error('Failed to load transcript segments:', error);
         setSegments((data || []) as TranscriptSegment[]);
         setIsLoadingSegments(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [source?.materialId, source?.signedUrl]);
+    return () => { cancelled = true; };
+  }, [source?.materialId, source?.signedUrl, source?.startMs, source?.endMs]);
+
+  // Scroll to highlighted segment after load
+  useEffect(() => {
+    if (!highlightRef.current || isLoadingSegments) return;
+    highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [segments, isLoadingSegments]);
 
   // Seek video to start timestamp
   useEffect(() => {
@@ -84,6 +94,12 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
     video.addEventListener('loadedmetadata', seekToStart);
     return () => video.removeEventListener('loadedmetadata', seekToStart);
   }, [source]);
+
+  const isCitedSegment = (segment: TranscriptSegment) => {
+    if (!source) return false;
+    const endMs = source.endMs ?? source.startMs;
+    return segment.start_ms <= endMs + 500 && segment.end_ms >= source.startMs - 500;
+  };
 
   return (
     <Dialog open={Boolean(source)} onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -114,13 +130,6 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                     controls
                     className="max-h-[60vh] w-full rounded-lg bg-black"
                   />
-
-                  {source.excerpt ? (
-                    <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-                      &ldquo;{source.excerpt}&rdquo;
-                    </p>
-                  ) : null}
-
                   <div className="flex justify-end">
                     <Button asChild variant="outline">
                       <a href={source.signedUrl} target="_blank" rel="noopener noreferrer">
@@ -137,15 +146,6 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                     The original video is not stored online. Contact your lecturer to access the original material.
                   </div>
 
-                  {source.excerpt ? (
-                    <div className="rounded-md bg-yellow-100/70 px-3 py-2">
-                      <p className="mb-1 text-xs font-medium text-muted-foreground">Cited excerpt</p>
-                      <p className="text-sm text-foreground/80">
-                        &ldquo;{source.excerpt}&rdquo;
-                      </p>
-                    </div>
-                  ) : null}
-
                   <div className="max-h-[50vh] overflow-y-auto">
                     {isLoadingSegments ? (
                       <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
@@ -158,17 +158,25 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {segments.map((segment) => (
-                          <div
-                            key={segment.id}
-                            className="rounded-md border border-border bg-muted/20 px-4 py-3"
-                          >
-                            <span className="mr-2 text-xs font-medium text-primary">
-                              {formatTimestamp(segment.start_ms)}&ndash;{formatTimestamp(segment.end_ms)}
-                            </span>
-                            <span className="text-sm text-foreground">{segment.text}</span>
-                          </div>
-                        ))}
+                        {segments.map((segment) => {
+                          const highlighted = isCitedSegment(segment);
+                          return (
+                            <div
+                              key={segment.id}
+                              ref={highlighted ? highlightRef : null}
+                              className={
+                                highlighted
+                                  ? 'rounded-md border border-primary bg-primary/10 px-4 py-3 ring-1 ring-primary'
+                                  : 'rounded-md border border-border bg-muted/20 px-4 py-3'
+                              }
+                            >
+                              <span className="mr-2 text-xs font-medium text-primary">
+                                {formatTimestamp(segment.start_ms)}&ndash;{formatTimestamp(segment.end_ms)}
+                              </span>
+                              <span className="text-sm text-foreground">{segment.text}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

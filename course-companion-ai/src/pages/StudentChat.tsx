@@ -39,7 +39,6 @@ export default function StudentChat() {
     currentConversationId,
     selectedCourseId,
     selectedDocumentIds,
-    documentScopeSummary,
     deletingConversationId,
     changeSelectedCourse,
     toggleSelectedDocument,
@@ -181,11 +180,9 @@ export default function StudentChat() {
                 onClearSelection={clearSelectedDocuments}
               />
             )}
-            documentScopeSummary={documentScopeSummary}
             documentHint={selectedCourseId && !isLoadingDocuments && availableDocuments.length === 0
               ? 'No processed documents are available for this course yet.'
               : null}
-            footerText={`EduChat grounds answers in ${documentScopeSummary === 'All course documents' ? 'the selected course materials' : `the selected documents: ${documentScopeSummary}`}`}
           />
         </div>
 

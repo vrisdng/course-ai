@@ -1,5 +1,5 @@
 export const INLINE_GEMINI_MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
-export const OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25MB — video sent directly to Whisper API
+export const VIDEO_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5GB — AssemblyAI limit
 export const AUDIO_CHUNK_MAX_BYTES = 20 * 1024 * 1024;
 export const LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES = 200 * 1024 * 1024;
 export const TEXT_INGEST_MAX_CHARACTERS = 500_000;
@@ -62,8 +62,8 @@ export function getImmediateUploadValidationError(candidate: Pick<File, 'name' |
     return `File too large (${formatFileSizeMb(candidate.size)}). PDF, DOC, and image files must be 15MB or smaller.`;
   }
 
-  if (isVideoUpload(candidate) && candidate.size > OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES) {
-    return `File too large (${formatFileSizeMb(candidate.size)}). Video files must be 25MB or smaller.`;
+  if (isVideoUpload(candidate) && candidate.size > VIDEO_MAX_FILE_SIZE_BYTES) {
+    return `File too large (${formatFileSizeMb(candidate.size)}). Video files must be 5GB or smaller.`;
   }
 
   return null;

@@ -363,12 +363,38 @@ export function useMaterials(courseId: string | null) {
     }
   };
 
+  const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
+
+  const reindexMaterial = async (materialId: string) => {
+    setReindexingIds((prev) => new Set(prev).add(materialId));
+    try {
+      const { data, error } = await supabase.functions.invoke('transcribe-video', {
+        body: { materialId, refinalize: true },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success('Re-indexing started — this may take a few minutes.');
+      await fetchMaterials();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Re-index failed';
+      toast.error(message);
+    } finally {
+      setReindexingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(materialId);
+        return next;
+      });
+    }
+  };
+
   return {
     materials,
     isLoading,
     uploads,
     uploadFile,
     deleteMaterial,
+    reindexMaterial,
+    reindexingIds,
     refreshMaterials: fetchMaterials,
     acceptedExtensions: ACCEPTED_EXTENSIONS,
   };

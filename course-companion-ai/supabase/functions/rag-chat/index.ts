@@ -1275,6 +1275,14 @@ serve(async (req) => {
 
     throwIfAborted(requestAbortController.signal);
 
+    // Detect broad summary/overview queries — needs wider retrieval with lower thresholds
+    const isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
+
+    const matchThreshold = isSummaryQuery ? 0.40 : HIGH_RECALL_MATCH_THRESHOLD;
+    const matchCount     = isSummaryQuery ? 30   : HIGH_RECALL_MATCH_COUNT;
+    const relevanceFloor = isSummaryQuery ? 0.40 : RELEVANCE_FLOOR;
+    const finalCount     = isSummaryQuery ? 10   : FINAL_MATCH_COUNT;
+
     const retrievedChunkGroups = await Promise.all(
       embeddings.map((embedding) =>
         retrieveChunkCandidates({
@@ -1282,8 +1290,8 @@ serve(async (req) => {
           userId: user.id,
           courseId: activeCourseId,
           embedding,
-          threshold: HIGH_RECALL_MATCH_THRESHOLD,
-          count: HIGH_RECALL_MATCH_COUNT,
+          threshold: matchThreshold,
+          count: matchCount,
           selectedMaterialIds,
         })
       )
@@ -1292,13 +1300,36 @@ serve(async (req) => {
     throwIfAborted(requestAbortController.signal);
 
     const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
-    const rerankedChunks = rerankRetrievedChunks(
+    let rerankedChunks = rerankRetrievedChunks(
       highRecallChunks,
       rewrittenQuery || trimmedMessage,
-      FINAL_MATCH_COUNT
+      finalCount
     );
+
+    // For summary queries on video materials: spread chunks across the full timeline
+    // by dropping chunks whose time windows heavily overlap an already-selected chunk
+    if (isSummaryQuery) {
+      const spread: typeof rerankedChunks = [];
+      const OVERLAP_THRESHOLD_MS = 60_000; // 1 minute
+      for (const chunk of rerankedChunks) {
+        if (typeof chunk.start_ms !== "number") {
+          spread.push(chunk);
+          continue;
+        }
+        const chunkStart = chunk.start_ms!;
+        const overlaps = spread.some(
+          (c) =>
+            typeof c.start_ms === "number" &&
+            c.start_ms !== null &&
+            Math.abs(c.start_ms - chunkStart) < OVERLAP_THRESHOLD_MS
+        );
+        if (!overlaps) spread.push(chunk);
+      }
+      rerankedChunks = spread;
+    }
+
     const retrievedChunks = rerankedChunks.filter(
-      (c) => c.relevance_score >= RELEVANCE_FLOOR
+      (c) => c.relevance_score >= relevanceFloor
     );
 
     console.log(
@@ -1338,9 +1369,14 @@ serve(async (req) => {
       ? "No relevant excerpts were found in the selected documents for this query. Tell the student the answer is not available in the selected documents."
       : "No relevant course materials were found for this query.";
 
+    const summaryInstruction = isSummaryQuery
+      ? "\nSUMMARY MODE: The student is asking for a broad summary or overview. Use ALL provided sources to give comprehensive coverage across the full material. Organise your response with clear ## sections for each major topic. Do not focus only on the most similar source — synthesise across all citations.\n"
+      : "";
+
     const systemPrompt = `You are EduChat, an AI learning assistant for university students.
 
 Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
+${summaryInstruction}
 
 FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text — use **bold** for headings. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data
 

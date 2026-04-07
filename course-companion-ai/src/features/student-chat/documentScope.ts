@@ -56,5 +56,11 @@ export function getDocumentSelectorLabel(
     return "No processed documents";
   }
 
-  return getDocumentScopeSummary(documents, selectedDocumentIds);
+  const selectedDocuments = getSelectedDocuments(documents, selectedDocumentIds);
+
+  if (selectedDocuments.length === 0 || selectedDocuments.length === documents.length) {
+    return 'All materials selected';
+  }
+
+  return `${selectedDocuments.length} material${selectedDocuments.length === 1 ? '' : 's'} selected`;
 }

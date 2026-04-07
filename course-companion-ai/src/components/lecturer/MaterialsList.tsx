@@ -7,6 +7,7 @@ import {
   Clock,
   AlertCircle,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +26,8 @@ interface Material {
 interface MaterialsListProps {
   materials: Material[];
   onDelete: (id: string) => void;
+  onReindex?: (id: string) => void;
+  reindexingIds?: Set<string>;
 }
 
 function getFileIcon(type: string) {
@@ -74,7 +77,7 @@ function formatFileSize(bytes: number | null) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function MaterialsList({ materials, onDelete }: MaterialsListProps) {
+export function MaterialsList({ materials, onDelete, onReindex, reindexingIds }: MaterialsListProps) {
   if (materials.length === 0) return null;
 
   return (
@@ -106,6 +109,17 @@ export function MaterialsList({ materials, onDelete }: MaterialsListProps) {
                 {getStatusIcon(material.processing_status)}
                 <span>{material.processing_status}</span>
               </Badge>
+              {onReindex && material.file_type === 'video' && (material.processing_status === 'completed' || material.processing_status === 'failed') && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Re-index transcript"
+                  disabled={reindexingIds?.has(material.id)}
+                  onClick={() => onReindex(material.id)}
+                >
+                  <RefreshCw className={`h-4 w-4 ${reindexingIds?.has(material.id) ? 'animate-spin' : ''}`} />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
