@@ -43,7 +43,6 @@ import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
@@ -115,7 +114,6 @@ type AcademicTerm = {
 
 type MaterialStatus = 'pending' | 'processing' | 'completed' | 'failed';
 type AccessScope = 'course' | 'public' | 'private';
-type InviteStatus = 'created' | 'existing_invite' | 'already_enrolled' | 'invalid_email';
 
 type Material = {
   id: string;
@@ -137,12 +135,6 @@ type Material = {
   created_at: string;
 };
 
-type InviteResult = {
-  email: string;
-  status: InviteStatus;
-  inviteCode: string | null;
-  inviteLink: string | null;
-};
 
 type TranscriptSegment = {
   id: string;
@@ -249,10 +241,9 @@ export default function AdminDashboard() {
   const [isCreatingTerm, setIsCreatingTerm] = useState(false);
   const [activatingTermId, setActivatingTermId] = useState<string | null>(null);
   const [addStudentsCourse, setAddStudentsCourse] = useState<Course | null>(null);
-  const [inviteEmailsInput, setInviteEmailsInput] = useState('');
   const [isGeneratingInvites, setIsGeneratingInvites] = useState(false);
-  const [generatedInviteResults, setGeneratedInviteResults] = useState<InviteResult[]>([]);
-  const [inviteExpiresAt, setInviteExpiresAt] = useState<string | null>(null);
+  const [generatedCourseCode, setGeneratedCourseCode] = useState<string | null>(null);
+  const [courseCodeExpiresAt, setCourseCodeExpiresAt] = useState<string | null>(null);
   const [transcriptMaterial, setTranscriptMaterial] = useState<Material | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
@@ -1252,22 +1243,10 @@ export default function AdminDashboard() {
     );
   };
 
-  const parsedInviteEmails = useMemo(() => {
-    return Array.from(
-      new Set(
-        inviteEmailsInput
-          .split(/[\s,;]+/)
-          .map((value) => value.trim().toLowerCase())
-          .filter((value) => value.length > 0)
-      )
-    );
-  }, [inviteEmailsInput]);
-
   const closeAddStudentsDialog = () => {
     setAddStudentsCourse(null);
-    setInviteEmailsInput('');
-    setGeneratedInviteResults([]);
-    setInviteExpiresAt(null);
+    setGeneratedCourseCode(null);
+    setCourseCodeExpiresAt(null);
     setIsGeneratingInvites(false);
   };
 
@@ -1280,101 +1259,27 @@ export default function AdminDashboard() {
     }
   };
 
-  const inviteStatusLabel = (status: InviteStatus) => {
-    if (status === 'created') return 'Invite ready';
-    if (status === 'existing_invite') return 'Invite already exists';
-    if (status === 'already_enrolled') return 'Already enrolled';
-    return 'Invalid email';
-  };
-
-  const inviteStatusVariant = (status: InviteStatus): 'default' | 'secondary' | 'destructive' | 'outline' => {
-    if (status === 'created') return 'default';
-    if (status === 'existing_invite') return 'secondary';
-    if (status === 'already_enrolled') return 'outline';
-    return 'destructive';
-  };
-
-  const handleGenerateInvites = async () => {
-    if (!addStudentsCourse) {
-      return;
-    }
-    if (parsedInviteEmails.length === 0) {
-      toast.error('Enter at least one email');
-      return;
-    }
+  const handleGenerateCourseCode = async () => {
+    if (!addStudentsCourse) return;
 
     setIsGeneratingInvites(true);
-    setGeneratedInviteResults([]);
-    setInviteExpiresAt(null);
+    setGeneratedCourseCode(null);
+    setCourseCodeExpiresAt(null);
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const accessToken = session?.access_token;
-    if (!accessToken) {
-      setIsGeneratingInvites(false);
-      toast.error('Please sign in again to generate invite codes');
-      return;
-    }
-
-    const { data, error } = await supabase.functions.invoke('manage-course-invites', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: {
-        courseId: addStudentsCourse.id,
-        emails: parsedInviteEmails,
-      },
+    const { data, error } = await supabase.functions.invoke('generate-course-code', {
+      body: { courseId: addStudentsCourse.id },
     });
 
-    if (error) {
-      setIsGeneratingInvites(false);
-      toast.error(error.message || 'Failed to create invite codes');
-      return;
-    }
-
-    if (data?.error) {
-      setIsGeneratingInvites(false);
-      toast.error(data.error);
-      return;
-    }
-
-    const expiresAt = typeof data?.expiresAt === 'string' ? data.expiresAt : null;
-    const baseUrl = window.location.origin;
-    const results = (Array.isArray(data?.results) ? data.results : []).map((item: any) => {
-      const inviteCode = typeof item?.inviteCode === 'string' ? item.inviteCode : null;
-      const email = typeof item?.email === 'string' ? item.email : '';
-      const inviteLink = inviteCode
-        ? `${baseUrl}/?invite=${encodeURIComponent(inviteCode)}&email=${encodeURIComponent(email)}`
-        : null;
-
-      return {
-        email,
-        status: item?.status as InviteStatus,
-        inviteCode,
-        inviteLink,
-      };
-    });
-
-    setInviteExpiresAt(expiresAt);
-    setGeneratedInviteResults(results);
     setIsGeneratingInvites(false);
 
-    const readyCount = results.filter((result) => result.status === 'created' || result.status === 'existing_invite').length;
-    toast.success(`Invite codes ready for ${readyCount} student${readyCount === 1 ? '' : 's'}`);
-  };
-
-  const handleCopyAllInviteLinks = async () => {
-    const lines = generatedInviteResults
-      .filter((item) => item.inviteLink)
-      .map((item) => `${item.email}, ${item.inviteLink}`);
-
-    if (lines.length === 0) {
-      toast.error('No invite links available to copy');
+    if (error || data?.error) {
+      toast.error(error?.message || data?.error || 'Failed to generate course code');
       return;
     }
 
-    await copyText(lines.join('\n'));
+    setGeneratedCourseCode(typeof data?.inviteCode === 'string' ? data.inviteCode : null);
+    setCourseCodeExpiresAt(typeof data?.expiresAt === 'string' ? data.expiresAt : null);
+    toast.success('Course code generated');
   };
 
   return (
@@ -1483,85 +1388,60 @@ export default function AdminDashboard() {
       </Dialog>
 
       <Dialog open={Boolean(addStudentsCourse)} onOpenChange={(open) => (open ? undefined : closeAddStudentsDialog())}>
-        <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Add Students</DialogTitle>
             <DialogDescription>
               {addStudentsCourse
-                ? `Generate invite links for ${addStudentsCourse.name}${addStudentsCourse.code ? ` (${addStudentsCourse.code})` : ''}.`
-                : 'Generate invite links for this course.'}
+                ? `Generate a course code for ${addStudentsCourse.name}${addStudentsCourse.code ? ` (${addStudentsCourse.code})` : ''}. Share this code with your students so they can self-enroll.`
+                : 'Generate a course code for students to self-enroll.'}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 overflow-y-auto pr-1">
-            <div className="space-y-2">
-              <Label htmlFor="invite-emails">Student emails</Label>
-              <Textarea
-                id="invite-emails"
-                value={inviteEmailsInput}
-                onChange={(event) => setInviteEmailsInput(event.target.value)}
-                placeholder={'student1@university.edu\nstudent2@university.edu'}
-                rows={6}
-                disabled={isGeneratingInvites}
-              />
-              <p className="text-xs text-muted-foreground">
-                Paste one email per line or separate by comma. {parsedInviteEmails.length} unique email
-                {parsedInviteEmails.length === 1 ? '' : 's'} detected.
-              </p>
-            </div>
-
-            {generatedInviteResults.length > 0 && (
-              <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">Generated invite results</p>
-                  <Button type="button" size="sm" variant="outline" onClick={handleCopyAllInviteLinks}>
-                    <Copy className="mr-2 h-4 w-4" />
-                    Copy All Links
-                  </Button>
+          <div className="space-y-4">
+            {generatedCourseCode ? (
+              <div className="space-y-3">
+                <div className="rounded-lg border border-border bg-muted/30 p-4 text-center">
+                  <p className="mb-1 text-xs text-muted-foreground">Course enrollment code</p>
+                  <p className="font-mono text-3xl font-bold tracking-widest text-primary">{generatedCourseCode}</p>
+                  {courseCodeExpiresAt && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Expires {new Date(courseCodeExpiresAt).toLocaleDateString()}
+                    </p>
+                  )}
                 </div>
-
-                {inviteExpiresAt && (
-                  <p className="text-xs text-muted-foreground">
-                    Expiry: {new Date(inviteExpiresAt).toLocaleString()}
-                  </p>
-                )}
-
-                <div className="max-h-72 space-y-2 overflow-y-auto">
-                  {generatedInviteResults.map((result) => (
-                    <div key={`${result.email}-${result.status}-${result.inviteCode ?? 'none'}`} className="rounded-md border border-border bg-background p-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-sm font-medium">{result.email}</p>
-                        <Badge variant={inviteStatusVariant(result.status)}>{inviteStatusLabel(result.status)}</Badge>
-                      </div>
-
-                      {result.inviteLink && (
-                        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                          <Input value={result.inviteLink} readOnly className="font-mono text-xs" />
-                          <Button type="button" size="sm" variant="outline" onClick={() => void copyText(result.inviteLink)}>
-                            <Copy className="mr-2 h-4 w-4" />
-                            Copy
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => void copyText(generatedCourseCode)}
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  Copy Code
+                </Button>
+                <p className="text-center text-xs text-muted-foreground">
+                  Students enter this code on the chat page to enroll in this course.
+                </p>
               </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Click the button below to generate a unique 8-character code. Any student who enters this code will be enrolled in the course.
+              </p>
             )}
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeAddStudentsDialog} disabled={isGeneratingInvites}>
+            <Button type="button" variant="outline" onClick={closeAddStudentsDialog}>
               Close
             </Button>
-            <Button type="button" onClick={() => void handleGenerateInvites()} disabled={isGeneratingInvites || parsedInviteEmails.length === 0}>
+            <Button type="button" onClick={() => void handleGenerateCourseCode()} disabled={isGeneratingInvites}>
               {isGeneratingInvites ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Generating...
                 </>
               ) : (
-                'Generate Invite Codes'
+                generatedCourseCode ? 'Generate New Code' : 'Generate Code'
               )}
             </Button>
           </DialogFooter>

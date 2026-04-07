@@ -1,9 +1,23 @@
-import { BookOpen } from 'lucide-react';
+import { BookOpen, Loader2, UserPlus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
 import { ConversationsSidebar } from '@/features/student-chat/ConversationsSidebar';
@@ -17,9 +31,13 @@ export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
+  const [isEnrollOpen, setIsEnrollOpen] = useState(false);
+  const [enrollCode, setEnrollCode] = useState('');
+  const [isEnrolling, setIsEnrolling] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
+  const { refreshProfile } = useAuth();
 
   const {
     activeVideoSource,
@@ -62,11 +80,7 @@ export default function StudentChat() {
 
   useEffect(() => {
     const targetPath = currentConversationId ? `/chat/${currentConversationId}` : '/chat';
-
-    if (location.pathname === targetPath) {
-      return;
-    }
-
+    if (location.pathname === targetPath) return;
     navigate(targetPath, { replace: true });
   }, [currentConversationId, location.pathname, navigate]);
 
@@ -75,6 +89,39 @@ export default function StudentChat() {
       navigate('/chat', { replace: true });
     }
     startNewConversation();
+  };
+
+  const handleEnroll = async () => {
+    const code = enrollCode.trim().toUpperCase();
+    if (!code) {
+      toast.error('Enter a course code');
+      return;
+    }
+
+    setIsEnrolling(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('redeem-course-invite', {
+        body: { inviteCode: code },
+      });
+
+      if (error || data?.error) {
+        toast.error(error?.message || data?.error || 'Invalid or expired code');
+        return;
+      }
+
+      await refreshProfile();
+      toast.success(
+        data?.status === 'already_enrolled'
+          ? 'You are already enrolled in this course.'
+          : 'Successfully enrolled!'
+      );
+      setIsEnrollOpen(false);
+      setEnrollCode('');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to enroll');
+    } finally {
+      setIsEnrolling(false);
+    }
   };
 
   const selectedCourse = availableCourses.find((course) => course.id === selectedCourseId);
@@ -102,10 +149,10 @@ export default function StudentChat() {
           onToggleCollapse={() => setIsSidebarCollapsed((c) => !c)}
           onSearchChange={setConversationSearch}
           onChangeCourse={changeSelectedCourse}
+          onEnrollCourse={() => setIsEnrollOpen(true)}
         />
 
         <div className="flex flex-1 flex-col">
-          {/* Top bar: current course context (read-only label) */}
           <div className="border-b border-border px-4 py-2">
             <div className="mx-auto flex max-w-3xl items-center gap-2">
               <BookOpen className="h-4 w-4 shrink-0 text-primary" />
@@ -163,6 +210,70 @@ export default function StudentChat() {
       </div>
 
       <VideoSourceDialog source={activeVideoSource} onClose={closeActiveVideoSource} />
+
+      <Dialog
+        open={isEnrollOpen}
+        onOpenChange={(open) => {
+          if (!isEnrolling) {
+            setIsEnrollOpen(open);
+            if (!open) setEnrollCode('');
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Enroll in a Course</DialogTitle>
+            <DialogDescription>
+              Enter the 8-character code provided by your instructor.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="enroll-code">Course code</Label>
+            <Input
+              id="enroll-code"
+              placeholder="e.g. AB3X7KM2"
+              value={enrollCode}
+              onChange={(e) => setEnrollCode(e.target.value.toUpperCase())}
+              maxLength={8}
+              className="font-mono text-lg tracking-widest"
+              disabled={isEnrolling}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void handleEnroll();
+                }
+              }}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setIsEnrollOpen(false); setEnrollCode(''); }}
+              disabled={isEnrolling}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleEnroll()}
+              disabled={isEnrolling || enrollCode.trim().length === 0}
+            >
+              {isEnrolling ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Enrolling...
+                </>
+              ) : (
+                <>
+                  <UserPlus className="mr-2 h-4 w-4" />
+                  Enroll
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </MainLayout>
   );
 }
