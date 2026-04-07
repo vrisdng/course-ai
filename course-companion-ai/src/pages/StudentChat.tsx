@@ -1,11 +1,9 @@
-import { BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
+import { BookOpen } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
-import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
 import { ConversationsSidebar } from '@/features/student-chat/ConversationsSidebar';
@@ -17,7 +15,8 @@ import { useStudentChat } from '@/features/student-chat/useStudentChat';
 
 export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [isCourseContextExpanded, setIsCourseContextExpanded] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [conversationSearch, setConversationSearch] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
   const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
@@ -92,62 +91,27 @@ export default function StudentChat() {
           conversations={conversations}
           currentConversationId={currentConversationId}
           deletingConversationId={deletingConversationId}
+          isCollapsed={isSidebarCollapsed}
+          searchQuery={conversationSearch}
+          availableCourses={availableCourses}
+          selectedCourseId={selectedCourseId}
+          isLoadingCourses={isLoadingCourses}
           onSelectConversation={selectConversation}
           onStartNewConversation={handleStartNewConversation}
           onDeleteConversation={deleteConversation}
+          onToggleCollapse={() => setIsSidebarCollapsed((c) => !c)}
+          onSearchChange={setConversationSearch}
+          onChangeCourse={changeSelectedCourse}
         />
 
         <div className="flex flex-1 flex-col">
-          <div className="border-b border-border px-4 py-3">
-            <div className="mx-auto flex max-w-3xl flex-col gap-3">
-              <button
-                type="button"
-                onClick={() => setIsCourseContextExpanded((current) => !current)}
-                className="flex items-center justify-between gap-3 rounded-md text-left outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <BookOpen className="h-4 w-4 shrink-0 text-primary" />
-                    <span className="truncate">Course Context: {selectedCourseLabel}</span>
-                  </div>
-                  {isCourseContextExpanded ? (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      New chats retrieve materials only from the selected course and optional document scope.
-                    </p>
-                  ) : null}
-                </div>
-                {isCourseContextExpanded ? (
-                  <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
-              </button>
-
-              {isCourseContextExpanded ? (
-                <>
-                  <div className="space-y-1">
-                    <Label htmlFor="chat-course-select" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Course
-                    </Label>
-                    <Select
-                      value={selectedCourseId ?? undefined}
-                      onValueChange={changeSelectedCourse}
-                      disabled={isLoadingCourses || availableCourses.length === 0}
-                    >
-                      <SelectTrigger id="chat-course-select">
-                        <SelectValue placeholder={isLoadingCourses ? 'Loading courses...' : 'Select a course'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableCourses.map((course) => (
-                          <SelectItem key={course.id} value={course.id}>
-                            {course.name} {course.code ? `(${course.code})` : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </>
-              ) : null}
+          {/* Top bar: current course context (read-only label) */}
+          <div className="border-b border-border px-4 py-2">
+            <div className="mx-auto flex max-w-3xl items-center gap-2">
+              <BookOpen className="h-4 w-4 shrink-0 text-primary" />
+              <span className="truncate text-sm text-muted-foreground">
+                {selectedCourseLabel}
+              </span>
             </div>
           </div>
 
