@@ -43,6 +43,7 @@ interface ConversationsSidebarProps {
   onSearchChange: (query: string) => void;
   onChangeCourse: (courseId: string) => void;
   onEnrollCourse: () => void;
+  showEnroll: boolean;
 }
 
 export function ConversationsSidebar({
@@ -61,6 +62,7 @@ export function ConversationsSidebar({
   onSearchChange,
   onChangeCourse,
   onEnrollCourse,
+  showEnroll,
 }: ConversationsSidebarProps) {
   const filteredConversations = searchQuery.trim()
     ? conversations.filter((c) =>
@@ -213,12 +215,14 @@ export function ConversationsSidebar({
           </div>
         </ScrollArea>
 
-        <div className="border-t border-border/60 p-3">
-          <Button variant="outline" className="w-full gap-2 text-sm" onClick={onEnrollCourse}>
-            <UserPlus className="h-4 w-4" />
-            Enroll in Course
-          </Button>
-        </div>
+        {showEnroll && (
+          <div className="border-t border-border/60 p-3">
+            <Button variant="outline" className="w-full gap-2 text-sm" onClick={onEnrollCourse}>
+              <UserPlus className="h-4 w-4" />
+              Enroll in Course
+            </Button>
+          </div>
+        )}
       </div>
     </aside>
   );

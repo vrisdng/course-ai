@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { supabase } from '@/integrations/supabase/client';
 
+import { groupSegmentsIntoParagraphs } from './groupTranscriptSegments';
 import { formatCitationLocator, formatTimestamp } from './time';
 
 export interface ActiveVideoSource {
@@ -23,14 +24,6 @@ export interface ActiveVideoSource {
   linkedUrl?: string | null;
 }
 
-interface TranscriptSegment {
-  id: string;
-  segment_index: number;
-  start_ms: number;
-  end_ms: number;
-  text: string;
-}
-
 interface VideoSourceDialogProps {
   source: ActiveVideoSource | null;
   onClose: () => void;
@@ -41,7 +34,7 @@ const CONTEXT_WINDOW_MS = 30_000; // 30s before and after the cited segment
 export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const highlightRef = useRef<HTMLDivElement | null>(null);
-  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [segments, setSegments] = useState<{ id: string; segment_index: number; start_ms: number; end_ms: number; text: string }[]>([]);
   const [isLoadingSegments, setIsLoadingSegments] = useState(false);
 
   // Fetch transcript segments windowed around the cited segment
@@ -67,7 +60,7 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) console.error('Failed to load transcript segments:', error);
-        setSegments((data || []) as TranscriptSegment[]);
+        setSegments(data || []);
         setIsLoadingSegments(false);
       });
 
@@ -96,11 +89,6 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
     return () => video.removeEventListener('loadedmetadata', seekToStart);
   }, [source]);
 
-  const isCitedSegment = (segment: TranscriptSegment) => {
-    if (!source) return false;
-    const endMs = source.endMs ?? source.startMs;
-    return segment.start_ms <= endMs + 500 && segment.end_ms >= source.startMs - 500;
-  };
 
   return (
     <Dialog open={Boolean(source)} onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -183,11 +171,14 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {segments.map((segment) => {
-                          const highlighted = isCitedSegment(segment);
+                        {groupSegmentsIntoParagraphs(segments).map((para) => {
+                          const highlighted = source
+                            ? para.startMs <= (source.endMs ?? source.startMs) + 500 &&
+                              para.endMs >= source.startMs - 500
+                            : false;
                           return (
                             <div
-                              key={segment.id}
+                              key={para.id}
                               ref={highlighted ? highlightRef : null}
                               className={
                                 highlighted
@@ -196,9 +187,9 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                               }
                             >
                               <span className="mr-2 text-xs font-medium text-primary">
-                                {formatTimestamp(segment.start_ms)}&ndash;{formatTimestamp(segment.end_ms)}
+                                {formatTimestamp(para.startMs)}&ndash;{formatTimestamp(para.endMs)}
                               </span>
-                              <span className="text-sm text-foreground">{segment.text}</span>
+                              <span className="text-sm text-foreground">{para.text}</span>
                             </div>
                           );
                         })}
