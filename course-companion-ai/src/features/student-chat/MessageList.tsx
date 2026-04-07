@@ -36,8 +36,7 @@ export function MessageList({
         </div>
         <h2 className="mb-2 text-xl font-semibold text-foreground">Welcome to EduChat</h2>
         <p className="mb-6 max-w-md text-muted-foreground">
-          Ask questions about your course materials and get answers with citations.
-          I'll show you exactly where the information comes from.
+          Select your course and ask me a question!
         </p>
 
         <div className="grid gap-2 sm:grid-cols-2">
