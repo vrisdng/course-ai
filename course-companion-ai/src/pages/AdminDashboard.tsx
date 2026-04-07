@@ -2319,8 +2319,14 @@ export default function AdminDashboard() {
                             <div className="flex justify-end">
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" aria-label={`Open actions for ${material.file_name}`}>
+                                  <Button variant="ghost" size="icon" aria-label={`Open actions for ${material.file_name}`} className="relative">
                                     <Ellipsis className="h-4 w-4" />
+                                    {material.file_type === 'video' && !material.linked_url && (
+                                      <span className="absolute right-1 top-1 flex h-2 w-2">
+                                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
+                                        <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
+                                      </span>
+                                    )}
                                   </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="w-48">
@@ -2329,9 +2335,16 @@ export default function AdminDashboard() {
                                       <DropdownMenuItem
                                         disabled={material.processing_status !== 'completed'}
                                         onClick={() => handleAttachLink(material)}
+                                        className="relative"
                                       >
                                         <FileText className="mr-2 h-4 w-4" />
                                         View attached URL
+                                        {!material.linked_url && (
+                                          <span className="ml-auto flex h-2 w-2 shrink-0">
+                                            <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-destructive opacity-75" />
+                                            <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
+                                          </span>
+                                        )}
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
                                         disabled={material.processing_status !== 'completed'}
