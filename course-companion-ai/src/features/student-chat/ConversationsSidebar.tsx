@@ -1,5 +1,5 @@
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import { BookOpen, ChevronLeft, ChevronRight, Loader2, MessageSquare, Plus, Search, Trash2, X } from 'lucide-react';
+import { BookOpen, ChevronLeft, ChevronRight, Loader2, MessageSquare, Plus, Search, Trash2, UserPlus, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -42,6 +42,7 @@ interface ConversationsSidebarProps {
   onToggleCollapse: () => void;
   onSearchChange: (query: string) => void;
   onChangeCourse: (courseId: string) => void;
+  onEnrollCourse: () => void;
 }
 
 export function ConversationsSidebar({
@@ -59,6 +60,7 @@ export function ConversationsSidebar({
   onToggleCollapse,
   onSearchChange,
   onChangeCourse,
+  onEnrollCourse,
 }: ConversationsSidebarProps) {
   const filteredConversations = searchQuery.trim()
     ? conversations.filter((c) =>
@@ -210,6 +212,13 @@ export function ConversationsSidebar({
             )}
           </div>
         </ScrollArea>
+
+        <div className="border-t border-border/60 p-3">
+          <Button variant="outline" className="w-full gap-2 text-sm" onClick={onEnrollCourse}>
+            <UserPlus className="h-4 w-4" />
+            Enroll in Course
+          </Button>
+        </div>
       </div>
     </aside>
   );

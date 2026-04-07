@@ -1441,26 +1441,30 @@ ${ragContext}`;
                 },
               });
 
-              const [userMessageResult, assistantMessageResult] = await Promise.all([
-                supabaseClient
-                  .from("messages")
-                  .insert({
-                    conversation_id: activeConversationId,
-                    role: "user",
-                    content: trimmedMessage,
-                  })
-                  .select("id")
-                  .single(),
-                supabaseClient
-                  .from("messages")
-                  .insert({
-                    conversation_id: activeConversationId,
-                    role: "assistant",
-                    content: answer,
-                  })
-                  .select("id")
-                  .single(),
-              ]);
+              const userMsgCreatedAt = new Date().toISOString();
+              const assistantMsgCreatedAt = new Date(Date.now() + 1).toISOString();
+
+              const userMessageResult = await supabaseClient
+                .from("messages")
+                .insert({
+                  conversation_id: activeConversationId,
+                  role: "user",
+                  content: trimmedMessage,
+                  created_at: userMsgCreatedAt,
+                })
+                .select("id")
+                .single();
+
+              const assistantMessageResult = await supabaseClient
+                .from("messages")
+                .insert({
+                  conversation_id: activeConversationId,
+                  role: "assistant",
+                  content: answer,
+                  created_at: assistantMsgCreatedAt,
+                })
+                .select("id")
+                .single();
 
               if (!userMessageResult.error && userMessageResult.data && !assistantMessageResult.error && assistantMessageResult.data) {
                 const queryCategory = classifyQueryCategory(trimmedMessage);
@@ -1560,27 +1564,32 @@ ${ragContext}`;
 
             // --- Persist to database (best-effort after client has received the answer) ---
 
-            // Insert both messages in parallel (no FK dependency between them)
-            const [userMessageResult, assistantMessageResult] = await Promise.all([
-              supabaseClient
-                .from("messages")
-                .insert({
-                  conversation_id: activeConversationId,
-                  role: "user",
-                  content: trimmedMessage,
-                })
-                .select("id")
-                .single(),
-              supabaseClient
-                .from("messages")
-                .insert({
-                  conversation_id: activeConversationId,
-                  role: "assistant",
-                  content: answer,
-                })
-                .select("id")
-                .single(),
-            ]);
+            // Insert user message first with explicit timestamps 1ms apart so that
+            // ordering by created_at always returns user before assistant.
+            const userMsgCreatedAt = new Date().toISOString();
+            const assistantMsgCreatedAt = new Date(Date.now() + 1).toISOString();
+
+            const userMessageResult = await supabaseClient
+              .from("messages")
+              .insert({
+                conversation_id: activeConversationId,
+                role: "user",
+                content: trimmedMessage,
+                created_at: userMsgCreatedAt,
+              })
+              .select("id")
+              .single();
+
+            const assistantMessageResult = await supabaseClient
+              .from("messages")
+              .insert({
+                conversation_id: activeConversationId,
+                role: "assistant",
+                content: answer,
+                created_at: assistantMsgCreatedAt,
+              })
+              .select("id")
+              .single();
 
             if (userMessageResult.error || !userMessageResult.data) {
               console.error(`Failed to save user message: ${userMessageResult.error?.message || "Unknown error"}`);
