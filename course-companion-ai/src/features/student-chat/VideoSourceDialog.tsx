@@ -20,6 +20,7 @@ export interface ActiveVideoSource {
   startMs: number;
   endMs?: number;
   excerpt?: string;
+  linkedUrl?: string | null;
 }
 
 interface TranscriptSegment {
@@ -142,9 +143,33 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
               ) : (
                 /* Transcript-only mode */
                 <>
-                  <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center text-xs text-muted-foreground">
-                    The original video is not stored online. Contact your lecturer to access the original material.
-                  </div>
+                  {source.linkedUrl ? (
+                    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+                      <span className="text-xs text-muted-foreground">Original video available externally.</span>
+                      <Button asChild variant="outline" size="sm">
+                        <a
+                          href={(() => {
+                            try {
+                              const url = new URL(source.linkedUrl);
+                              url.searchParams.set('t', String(Math.floor(source.startMs / 1000)));
+                              return url.toString();
+                            } catch {
+                              return source.linkedUrl;
+                            }
+                          })()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink className="mr-2 h-3 w-3" />
+                          Go to original video
+                        </a>
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center text-xs text-muted-foreground">
+                      The original video is not stored online. Contact your lecturer to access the original material.
+                    </div>
+                  )}
 
                   <div className="max-h-[50vh] overflow-y-auto">
                     {isLoadingSegments ? (
