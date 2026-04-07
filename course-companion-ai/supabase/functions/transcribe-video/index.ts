@@ -52,30 +52,46 @@ const EMBEDDING_URL =
 const TARGET_CHUNK_CHARACTERS = 1200;
 const MIN_CHUNK_CHARACTERS = 200;
 const SEGMENT_OVERLAP = 1;
-const MAX_SEGMENT_DURATION_MS = 30_000;
+const PARAGRAPH_DURATION_MS = 60_000; // target ~1 minute per paragraph
 const SENTENCE_ENDERS = new Set([".", "?", "!"]);
 
 // ---------- Word → segment grouping ----------
+//
+// Groups words into paragraph-sized segments of ~1 minute each.
+// When the 1-minute window is reached, the cut is deferred to the next
+// sentence boundary (word ending in ".", "?" or "!") so paragraphs always
+// end cleanly. If no sentence boundary is found within a 30-second grace
+// period, the paragraph is cut at the nearest word anyway.
 
 function groupWordsIntoSegments(words: AssemblyAIWord[]): TranscriptSegment[] {
   if (words.length === 0) return [];
 
+  const GRACE_MS = 30_000; // max extra time to wait for a sentence boundary
+
   const segments: TranscriptSegment[] = [];
   let currentWords: AssemblyAIWord[] = [];
   let currentStart = words[0].start;
+  let hardCutAt: number | null = null; // timestamp after which we force a cut
 
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     currentWords.push(word);
 
-    const lastChar = word.text.slice(-1);
-    const isSentenceEnd = SENTENCE_ENDERS.has(lastChar);
     const duration = word.end - currentStart;
-    const nextWord = words[i + 1];
-    const hasLargeGap = nextWord && (nextWord.start - word.end) > 1500;
     const isLast = i === words.length - 1;
+    const isSentenceEnd = SENTENCE_ENDERS.has(word.text.slice(-1));
 
-    if (isSentenceEnd || duration >= MAX_SEGMENT_DURATION_MS || hasLargeGap || isLast) {
+    // Once we hit 1 minute, arm the hard-cut deadline (1 min + 30 s grace)
+    if (hardCutAt === null && duration >= PARAGRAPH_DURATION_MS) {
+      hardCutAt = currentStart + PARAGRAPH_DURATION_MS + GRACE_MS;
+    }
+
+    const shouldCut =
+      isLast ||
+      (hardCutAt !== null && isSentenceEnd) ||      // sentence boundary inside the window
+      (hardCutAt !== null && word.end >= hardCutAt); // grace period exhausted — cut now
+
+    if (shouldCut) {
       const text = currentWords.map((w) => w.text).join(" ").trim();
       if (text) {
         const avgConfidence =
@@ -88,9 +104,11 @@ function groupWordsIntoSegments(words: AssemblyAIWord[]): TranscriptSegment[] {
           speakerLabel: currentWords[0].speaker ?? null,
         });
       }
+      const nextWord = words[i + 1];
       if (nextWord) {
         currentWords = [];
         currentStart = nextWord.start;
+        hardCutAt = null;
       }
     }
   }
