@@ -1,7 +1,6 @@
 import { ReactNode, useEffect, useRef } from 'react';
 import { Send, Square } from 'lucide-react';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -16,7 +15,6 @@ interface ChatComposerProps {
   placeholder?: string;
   footerText?: string;
   documentSelector?: ReactNode;
-  documentScopeSummary?: string;
   documentHint?: string | null;
 }
 
@@ -30,7 +28,6 @@ export function ChatComposer({
   placeholder = 'Ask a question about your course materials...',
   footerText = 'EduChat uses RAG to ground answers in your course materials',
   documentSelector,
-  documentScopeSummary,
   documentHint,
 }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -52,14 +49,9 @@ export function ChatComposer({
   return (
     <div className="border-t border-border bg-background p-4">
       <div className="mx-auto max-w-3xl space-y-3">
-        {documentSelector || documentScopeSummary || documentHint ? (
+        {documentSelector || documentHint ? (
           <div className="flex flex-wrap items-center gap-2">
             {documentSelector}
-            {documentScopeSummary ? (
-              <Badge variant="secondary" className="max-w-full truncate px-2 py-1 font-medium">
-                {documentScopeSummary}
-              </Badge>
-            ) : null}
             {documentHint ? (
               <span className="text-xs text-muted-foreground">{documentHint}</span>
             ) : null}

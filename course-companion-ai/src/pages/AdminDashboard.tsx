@@ -11,6 +11,7 @@ import {
   Loader2,
   Lock,
   Pencil,
+  RefreshCw,
   Search,
   Trash2,
   UploadCloud,
@@ -1108,6 +1109,30 @@ export default function AdminDashboard() {
     toast.success('Filename updated');
   };
 
+  const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
+
+  const handleReindexMaterial = async (material: Material) => {
+    setReindexingIds((prev) => new Set(prev).add(material.id));
+    try {
+      const { data, error } = await supabase.functions.invoke('transcribe-video', {
+        body: { materialId: material.id, refinalize: true },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success(`Re-indexing "${material.file_name}" — this may take a few minutes.`);
+      await fetchMaterials();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Re-index failed';
+      toast.error(message);
+    } finally {
+      setReindexingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(material.id);
+        return next;
+      });
+    }
+  };
+
   const handleDeleteMaterial = async (material: Material) => {
     const shouldDelete = window.confirm(`Delete ${material.file_name}? This cannot be undone.`);
     if (!shouldDelete) {
@@ -2203,13 +2228,22 @@ export default function AdminDashboard() {
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="w-48">
                                   {material.file_type === 'video' ? (
-                                    <DropdownMenuItem
-                                      disabled={material.processing_status !== 'completed'}
-                                      onClick={() => handleOpenTranscript(material)}
-                                    >
-                                      <FileText className="mr-2 h-4 w-4" />
-                                      View transcript
-                                    </DropdownMenuItem>
+                                    <>
+                                      <DropdownMenuItem
+                                        disabled={material.processing_status !== 'completed'}
+                                        onClick={() => handleOpenTranscript(material)}
+                                      >
+                                        <FileText className="mr-2 h-4 w-4" />
+                                        View transcript
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        disabled={material.processing_status === 'processing' || reindexingIds.has(material.id)}
+                                        onClick={() => handleReindexMaterial(material)}
+                                      >
+                                        <RefreshCw className={`mr-2 h-4 w-4 ${reindexingIds.has(material.id) ? 'animate-spin' : ''}`} />
+                                        {reindexingIds.has(material.id) ? 'Re-indexing...' : 'Re-index transcript'}
+                                      </DropdownMenuItem>
+                                    </>
                                   ) : null}
                                   <DropdownMenuItem onClick={() => openEditFileNameDialog(material)}>
                                     <Pencil className="mr-2 h-4 w-4" />

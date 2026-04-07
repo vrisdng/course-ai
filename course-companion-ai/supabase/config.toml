@@ -9,6 +9,9 @@ verify_jwt = false
 [functions.parse-document]
 verify_jwt = false
 
+[functions.upload-video]
+verify_jwt = false
+
 [functions.transcribe-video]
 verify_jwt = false
 

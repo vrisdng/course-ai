@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 
 import { markdownWithCitationLinks } from './citations';
+import { formatTimestamp } from './time';
 import type { Message } from './types';
 
 const SUGGESTIONS = [
@@ -92,18 +93,25 @@ export function MessageList({
                             );
                           }
 
+                          const isVideo = citation.documentType === 'video';
+                          const timestampHint = isVideo && typeof citation.startMs === 'number'
+                            ? ` @ ${formatTimestamp(citation.startMs)}`
+                            : '';
+
                           return (
                             <button
                               type="button"
-                              title={`Source ${citationNumber}: ${citation.documentName}`}
-                              className="mx-0.5 inline-flex items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary hover:bg-primary/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              title={`Source ${citationNumber}: ${citation.documentName}${timestampHint}`}
+                              className="mx-0.5 inline-flex items-center gap-0.5 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary hover:bg-primary/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 onCitationClick(message, citationNumber);
                               }}
                             >
-                              [{citationNumber}]
+                              [{citationNumber}]{isVideo && typeof citation.startMs === 'number' && (
+                                <span className="opacity-70">{formatTimestamp(citation.startMs)}</span>
+                              )}
                             </button>
                           );
                         }

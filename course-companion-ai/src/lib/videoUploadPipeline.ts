@@ -1,5 +1,4 @@
 import { supabase } from '@/integrations/supabase/client';
-import { uploadToStorageWithProgress } from './uploadWithProgress';
 
 export interface VideoUploadProgress {
   stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
@@ -15,10 +14,34 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * Upload a video file directly to Supabase Storage, then invoke
- * the transcribe-video edge function. The Whisper API accepts
- * video files (mp4, webm) natively — no client-side FFmpeg needed.
+ * Animates progress from `from` to `to` over `durationMs` milliseconds,
+ * calling `onProgress` on each tick. Returns a cancel function.
  */
+function animateProgress(
+  from: number,
+  to: number,
+  durationMs: number,
+  onProgress: (value: number) => void
+): () => void {
+  const startTime = performance.now();
+  let rafId: number;
+
+  const tick = () => {
+    const elapsed = performance.now() - startTime;
+    const fraction = Math.min(elapsed / durationMs, 1);
+    // Ease-out so it slows down near the target (never quite reaches it)
+    const eased = 1 - Math.pow(1 - fraction, 2);
+    const value = Math.round(from + eased * (to - from));
+    onProgress(value);
+    if (fraction < 1) {
+      rafId = requestAnimationFrame(tick);
+    }
+  };
+
+  rafId = requestAnimationFrame(tick);
+  return () => cancelAnimationFrame(rafId);
+}
+
 export async function uploadVideoForTranscription(opts: {
   file: File;
   courseId: string;
@@ -35,38 +58,55 @@ export async function uploadVideoForTranscription(opts: {
 
   console.log(LOG_PREFIX, `Starting video upload for "${file.name}" (${formatBytes(file.size)})`);
 
-  // --- 1. Upload video to Supabase Storage ---
-  const timestamp = Date.now();
-  const ext = file.name.split('.').pop()?.toLowerCase() || 'mp4';
-  const storagePath = `${courseId}/videos/${timestamp}-${file.name}`;
+  // --- 1. Upload video to AssemblyAI via edge function proxy ---
+  console.log(LOG_PREFIX, `[${elapsed()}] Step 1: Upload video to AssemblyAI`);
 
-  console.log(LOG_PREFIX, `[${elapsed()}] Step 1: Upload video to storage`);
-  onProgress({
-    stage: 'uploading',
-    progress: 5,
-    statusText: `Uploading video (${formatBytes(file.size)})... 0%`,
+  // Start fake progress animation: 0 → 85% over 60 seconds
+  let cancelAnimation = animateProgress(0, 85, 60_000, (value) => {
+    onProgress({
+      stage: 'uploading',
+      progress: value,
+      statusText: `Uploading video (${formatBytes(file.size)})...`,
+    });
   });
 
   checkCancelled();
 
-  await uploadToStorageWithProgress({
-    bucket: 'course-materials',
-    path: storagePath,
-    body: file,
-    contentType: file.type || `video/${ext}`,
-    signal,
-    onProgress: (fraction) => {
-      const pct = Math.round(fraction * 100);
-      onProgress({
-        stage: 'uploading',
-        progress: 5 + Math.round(fraction * 25), // 5–30%
-        statusText: `Uploading video (${formatBytes(file.size)})... ${pct}%`,
-      });
-    },
-  });
+  let uploadUrl: string;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
 
-  console.log(LOG_PREFIX, `[${elapsed()}] Video uploaded to ${storagePath}`);
+    const response = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-video`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': file.type || 'video/mp4',
+          'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: file,
+        signal,
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      throw new Error(err.error || `Upload failed: ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (!result.uploadUrl) throw new Error('No upload URL returned from server');
+    uploadUrl = result.uploadUrl;
+  } finally {
+    cancelAnimation();
+  }
+
+  console.log(LOG_PREFIX, `[${elapsed()}] Video uploaded to AssemblyAI — got URL`);
   checkCancelled();
+
+  onProgress({ stage: 'uploading', progress: 90, statusText: 'Creating material record...' });
 
   // --- 2. Create material record ---
   console.log(LOG_PREFIX, `[${elapsed()}] Step 2: Create material record`);
@@ -75,7 +115,7 @@ export async function uploadVideoForTranscription(opts: {
     .insert({
       course_id: courseId,
       file_name: file.name,
-      file_path: storagePath,
+      file_path: '',           // no local storage
       file_type: 'video' as any,
       file_size: file.size,
       processing_status: 'pending' as any,
@@ -84,54 +124,41 @@ export async function uploadVideoForTranscription(opts: {
     .single();
 
   if (materialError || !material) {
-    console.error(LOG_PREFIX, `[${elapsed()}] Failed to create material record:`, materialError);
     throw new Error(`Failed to create material record: ${materialError?.message}`);
   }
 
   console.log(LOG_PREFIX, `[${elapsed()}] Material record created: ${material.id}`);
 
+  onProgress({ stage: 'parsing', progress: 93, statusText: 'Starting transcription...' });
+
   // --- 3. Invoke transcribe-video edge function ---
-  console.log(LOG_PREFIX, `[${elapsed()}] Step 3: Invoke transcribe-video edge function`);
-  onProgress({
-    stage: 'parsing',
-    progress: 35,
-    statusText: 'Starting transcription...',
-  });
+  console.log(LOG_PREFIX, `[${elapsed()}] Step 3: Invoke transcribe-video`);
 
   const { data: result, error: invokeError } = await supabase.functions.invoke(
     'transcribe-video',
     {
       body: {
         materialId: material.id,
-        filePath: storagePath,
-        bucketName: 'course-materials',
+        audioUrl: uploadUrl,   // AssemblyAI upload URL — no signed URL needed
       },
     }
   );
 
   if (invokeError) {
-    console.error(LOG_PREFIX, `[${elapsed()}] Edge function error:`, invokeError);
     throw new Error(`Transcription failed: ${invokeError.message}`);
   }
 
   if (result?.error) {
-    console.error(LOG_PREFIX, `[${elapsed()}] Edge function returned error:`, result.error);
     throw new Error(result.error);
   }
 
   console.log(LOG_PREFIX, `[${elapsed()}] Edge function returned:`, result);
 
-  const isDone = !result?.queued;
-
   onProgress({
-    stage: isDone ? 'done' : 'parsing',
-    progress: isDone ? 100 : 40,
-    statusText: isDone
-      ? 'Ready for student questions'
-      : 'Transcribing in background...',
+    stage: 'parsing',
+    progress: 95,
+    statusText: 'Transcribing in background...',
   });
-
-  console.log(LOG_PREFIX, `[${elapsed()}] Pipeline complete — materialId=${material.id}`);
 
   return { materialId: material.id };
 }

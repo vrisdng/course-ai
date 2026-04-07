@@ -9,29 +9,14 @@ const corsHeaders = {
 
 // ---------- Request types ----------
 
-interface SingleFileRequest {
+interface TranscribeRequest {
   materialId: string;
-  filePath: string;
-  bucketName?: string;
+  audioUrl: string; // AssemblyAI upload URL returned by upload-video function
 }
 
-interface ChunkMeta {
-  filePath: string;
-  index: number;
-  offsetMs: number;
-}
-
-interface MultiChunkRequest {
+interface RefinalizeRequest {
   materialId: string;
-  chunks: ChunkMeta[];
-  totalChunks: number;
-  currentChunkIndex?: number; // set on self-invocation
-}
-
-type TranscribeRequest = SingleFileRequest | MultiChunkRequest;
-
-function isMultiChunkRequest(body: TranscribeRequest): body is MultiChunkRequest {
-  return Array.isArray((body as MultiChunkRequest).chunks);
+  refinalize: true; // Re-run chunking + embedding from existing transcript segments
 }
 
 // ---------- Internal types ----------
@@ -44,102 +29,76 @@ interface TranscriptSegment {
   speakerLabel?: string | null;
 }
 
-interface TranscriptionResult {
-  durationMs: number | null;
-  language: string | null;
-  provider: string;
-  segments: TranscriptSegment[];
-}
-
 interface TranscriptChunk {
   text: string;
   startMs: number;
   endMs: number;
 }
 
+interface AssemblyAIWord {
+  text: string;
+  start: number; // ms
+  end: number;   // ms
+  confidence: number;
+  speaker?: string | null;
+}
+
 // ---------- Constants ----------
 
-const WHISPER_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
-const DEFAULT_BUCKET = "course-materials";
-const DEFAULT_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions";
-const DEFAULT_TRANSCRIPTION_MODEL = "whisper-1";
+const ASSEMBLYAI_API_URL = "https://api.assemblyai.com/v2";
+const ASSEMBLYAI_POLL_INTERVAL_MS = 5000;
 const EMBEDDING_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
 const TARGET_CHUNK_CHARACTERS = 1200;
 const MIN_CHUNK_CHARACTERS = 200;
 const SEGMENT_OVERLAP = 1;
-const SUPPORTED_AUDIO_EXTENSIONS = new Set(["mp3", "mp4", "webm", "m4a", "wav", "ogg"]);
+const MAX_SEGMENT_DURATION_MS = 30_000;
+const SENTENCE_ENDERS = new Set([".", "?", "!"]);
 
-// ---------- Helpers ----------
+// ---------- Word → segment grouping ----------
 
-function formatFileSizeMb(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
-}
+function groupWordsIntoSegments(words: AssemblyAIWord[]): TranscriptSegment[] {
+  if (words.length === 0) return [];
 
-function getFileExtension(filePath: string): string {
-  return filePath.split(".").pop()?.toLowerCase() || "";
-}
+  const segments: TranscriptSegment[] = [];
+  let currentWords: AssemblyAIWord[] = [];
+  let currentStart = words[0].start;
 
-function getMimeTypeForFile(filePath: string): string {
-  const ext = getFileExtension(filePath);
-  const map: Record<string, string> = {
-    mp3: "audio/mpeg",
-    mp4: "video/mp4",
-    webm: "video/webm",
-    m4a: "audio/mp4",
-    wav: "audio/wav",
-    ogg: "audio/ogg",
-  };
-  return map[ext] || "application/octet-stream";
-}
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    currentWords.push(word);
 
-function normalizeTranscriptSegments(
-  segments: unknown[],
-  offsetMs = 0
-): TranscriptSegment[] {
-  const normalized = segments
-    .map((segment) => {
-      if (!segment || typeof segment !== "object") return null;
+    const lastChar = word.text.slice(-1);
+    const isSentenceEnd = SENTENCE_ENDERS.has(lastChar);
+    const duration = word.end - currentStart;
+    const nextWord = words[i + 1];
+    const hasLargeGap = nextWord && (nextWord.start - word.end) > 1500;
+    const isLast = i === words.length - 1;
 
-      const candidate = segment as Record<string, unknown>;
-      const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
-      const startSeconds = typeof candidate.start === "number" ? candidate.start : null;
-      const endSeconds = typeof candidate.end === "number" ? candidate.end : null;
-
-      if (!text || startSeconds === null || endSeconds === null) return null;
-
-      const startMs = Math.max(0, Math.round(startSeconds * 1000) + offsetMs);
-      const endMs = Math.max(startMs, Math.round(endSeconds * 1000) + offsetMs);
-
-      return {
-        startMs,
-        endMs,
-        text,
-        confidence:
-          typeof candidate.avg_logprob === "number" ? candidate.avg_logprob : null,
-        speakerLabel: null,
-      } satisfies TranscriptSegment;
-    })
-    .filter((s): s is TranscriptSegment => Boolean(s))
-    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
-
-  const deduped: TranscriptSegment[] = [];
-  for (const segment of normalized) {
-    const prev = deduped[deduped.length - 1];
-    if (
-      prev &&
-      prev.startMs === segment.startMs &&
-      prev.endMs === segment.endMs &&
-      prev.text === segment.text
-    ) {
-      continue;
+    if (isSentenceEnd || duration >= MAX_SEGMENT_DURATION_MS || hasLargeGap || isLast) {
+      const text = currentWords.map((w) => w.text).join(" ").trim();
+      if (text) {
+        const avgConfidence =
+          currentWords.reduce((sum, w) => sum + w.confidence, 0) / currentWords.length;
+        segments.push({
+          startMs: currentStart,
+          endMs: word.end,
+          text,
+          confidence: avgConfidence,
+          speakerLabel: currentWords[0].speaker ?? null,
+        });
+      }
+      if (nextWord) {
+        currentWords = [];
+        currentStart = nextWord.start;
+      }
     }
-    if (prev && segment.startMs < prev.startMs) continue;
-    deduped.push(segment);
   }
 
-  return deduped;
+  return segments;
 }
+
+// ---------- Transcript chunking ----------
 
 function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[] {
   if (segments.length === 0) return [];
@@ -189,6 +148,8 @@ function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[]
   return chunks;
 }
 
+// ---------- Embedding ----------
+
 async function embedText(text: string, geminiApiKey: string): Promise<number[]> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch(EMBEDDING_URL, {
@@ -226,76 +187,68 @@ async function embedText(text: string, geminiApiKey: string): Promise<number[]> 
   throw new Error("Embedding API error: retries exhausted");
 }
 
-async function transcribeWithOpenAiCompatible(input: {
-  bytes: Uint8Array;
-  fileName: string;
-  mimeType: string;
-  offsetMs?: number;
-}): Promise<TranscriptionResult> {
-  const apiKey = Deno.env.get("OPENAI_API_KEY");
-  const apiUrl =
-    Deno.env.get("OPENAI_TRANSCRIPTION_API_URL") || DEFAULT_TRANSCRIPTION_URL;
-  const model =
-    Deno.env.get("OPENAI_TRANSCRIPTION_MODEL") || DEFAULT_TRANSCRIPTION_MODEL;
+// ---------- AssemblyAI ----------
 
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+async function submitToAssemblyAI(audioUrl: string, apiKey: string): Promise<string> {
+  const response = await fetch(`${ASSEMBLYAI_API_URL}/transcript`, {
+    method: "POST",
+    headers: {
+      Authorization: apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      audio_url: audioUrl,
+      speech_models: ["universal-2"],
+    }),
+  });
 
-  const formData = new FormData();
-  formData.append(
-    "file",
-    new Blob([input.bytes], { type: input.mimeType }),
-    input.fileName
-  );
-  formData.append("model", model);
-  formData.append("response_format", "verbose_json");
-  formData.append("timestamp_granularities[]", "segment");
-
-  let payload: any = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: formData,
-    });
-
-    if (response.ok) {
-      payload = await response.json();
-      break;
-    }
-
+  if (!response.ok) {
     const errorText = await response.text();
-    if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      continue;
-    }
-
-    throw new Error(
-      `Transcription API error: ${response.status} - ${errorText || "Unknown error"}`
-    );
+    throw new Error(`AssemblyAI submit error: ${response.status} - ${errorText}`);
   }
 
-  const segments = Array.isArray(payload.segments) ? payload.segments : [];
-  const normalizedSegments = normalizeTranscriptSegments(
-    segments,
-    input.offsetMs ?? 0
-  );
-
-  if (normalizedSegments.length === 0) {
-    throw new Error("The transcription service returned no timestamped segments");
-  }
-
-  return {
-    durationMs:
-      typeof payload.duration === "number"
-        ? Math.round(payload.duration * 1000) + (input.offsetMs ?? 0)
-        : normalizedSegments[normalizedSegments.length - 1]?.endMs ?? null,
-    language: typeof payload.language === "string" ? payload.language : null,
-    provider: "openai-whisper-compatible",
-    segments: normalizedSegments,
-  };
+  const payload = await response.json();
+  if (!payload.id) throw new Error("AssemblyAI did not return a transcript ID");
+  return payload.id as string;
 }
 
-// ---------- Core processing: finalize (chunk + embed + store) ----------
+async function pollAssemblyAI(
+  transcriptId: string,
+  apiKey: string
+): Promise<{ words: AssemblyAIWord[]; audioDurationMs: number | null; language: string | null }> {
+  while (true) {
+    const response = await fetch(`${ASSEMBLYAI_API_URL}/transcript/${transcriptId}`, {
+      headers: { Authorization: apiKey },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`AssemblyAI poll error: ${response.status} - ${errorText}`);
+    }
+
+    const payload = await response.json();
+
+    if (payload.status === "completed") {
+      return {
+        words: Array.isArray(payload.words) ? payload.words : [],
+        audioDurationMs:
+          typeof payload.audio_duration === "number"
+            ? Math.round(payload.audio_duration * 1000)
+            : null,
+        language:
+          typeof payload.language_code === "string" ? payload.language_code : null,
+      };
+    }
+
+    if (payload.status === "error") {
+      throw new Error(`AssemblyAI transcription failed: ${payload.error || "Unknown error"}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, ASSEMBLYAI_POLL_INTERVAL_MS));
+  }
+}
+
+// ---------- Finalize (chunk + embed + store) ----------
 
 async function finalizeTranscription(opts: {
   materialId: string;
@@ -304,17 +257,8 @@ async function finalizeTranscription(opts: {
   language: string | null;
   adminClient: any;
   geminiApiKey: string;
-  chunkStoragePaths?: string[];
 }) {
-  const {
-    materialId,
-    allSegments,
-    durationMs,
-    language,
-    adminClient,
-    geminiApiKey,
-    chunkStoragePaths,
-  } = opts;
+  const { materialId, allSegments, durationMs, language, adminClient, geminiApiKey } = opts;
 
   const transcriptChunks = buildTranscriptChunks(allSegments);
   if (transcriptChunks.length === 0) {
@@ -323,18 +267,12 @@ async function finalizeTranscription(opts: {
 
   await adminClient
     .from("materials")
-    .update({
-      processing_status: "processing",
-      processing_stage: "chunking",
-      processing_progress: 72,
-    })
+    .update({ processing_status: "processing", processing_stage: "chunking", processing_progress: 72 })
     .eq("id", materialId);
 
-  // Clear previous data
   await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
   await adminClient.from("chunks").delete().eq("material_id", materialId);
 
-  // Insert transcript segments
   const transcriptRows = allSegments.map((segment, index) => ({
     material_id: materialId,
     segment_index: index,
@@ -346,36 +284,19 @@ async function finalizeTranscription(opts: {
   }));
 
   for (let i = 0; i < transcriptRows.length; i += 250) {
-    const batch = transcriptRows.slice(i, i + 250);
     const { error } = await adminClient
       .from("material_transcript_segments")
-      .insert(batch);
+      .insert(transcriptRows.slice(i, i + 250));
     if (error) throw new Error(`Failed to insert transcript segments: ${error.message}`);
   }
 
-  // Generate embeddings
   await adminClient
     .from("materials")
-    .update({
-      processing_status: "processing",
-      processing_stage: "embedding",
-      processing_progress: 80,
-    })
+    .update({ processing_status: "processing", processing_stage: "embedding", processing_progress: 80 })
     .eq("id", materialId);
 
-  const chunkRows: Array<{
-    material_id: string;
-    chunk_index: number;
-    chunk_text: string;
-    embedding: number[];
-    start_position: number;
-    end_position: number;
-    start_ms: number;
-    end_ms: number;
-    page_number: null;
-  }> = [];
-
-  for (let i = 0; i < transcriptChunks.length; i += 1) {
+  const chunkRows = [];
+  for (let i = 0; i < transcriptChunks.length; i++) {
     const chunk = transcriptChunks[i];
     const embedding = await embedText(chunk.text, geminiApiKey);
     chunkRows.push({
@@ -392,19 +313,10 @@ async function finalizeTranscription(opts: {
   }
 
   for (let i = 0; i < chunkRows.length; i += 100) {
-    const batch = chunkRows.slice(i, i + 100);
-    const { error } = await adminClient.from("chunks").insert(batch);
+    const { error } = await adminClient.from("chunks").insert(chunkRows.slice(i, i + 100));
     if (error) throw new Error(`Failed to insert transcript chunks: ${error.message}`);
   }
 
-  // Clean up audio chunks from storage
-  if (chunkStoragePaths && chunkStoragePaths.length > 0) {
-    await adminClient.storage
-      .from(DEFAULT_BUCKET)
-      .remove(chunkStoragePaths);
-  }
-
-  // Mark completed — clear file_path since original video is not stored
   await adminClient
     .from("materials")
     .update({
@@ -413,7 +325,7 @@ async function finalizeTranscription(opts: {
       processing_stage: "completed",
       processing_progress: 100,
       duration_ms: durationMs,
-      transcription_provider: "openai-whisper-compatible",
+      transcription_provider: "assemblyai",
       transcription_language: language,
       thumbnail_path: null,
       file_path: "",
@@ -421,6 +333,176 @@ async function finalizeTranscription(opts: {
     .eq("id", materialId);
 
   return { segmentsInserted: transcriptRows.length, chunksInserted: chunkRows.length };
+}
+
+// ---------- Background worker ----------
+
+async function processTranscription(opts: {
+  materialId: string;
+  audioUrl: string;
+  assemblyApiKey: string;
+  geminiApiKey: string;
+  supabaseUrl: string;
+  serviceRoleKey: string;
+}) {
+  const { materialId, audioUrl, assemblyApiKey, geminiApiKey, supabaseUrl, serviceRoleKey } = opts;
+  const adminClient = createClient(supabaseUrl, serviceRoleKey);
+
+  try {
+    await adminClient
+      .from("materials")
+      .update({ processing_status: "processing", processing_stage: "transcribing", processing_progress: 30 })
+      .eq("id", materialId);
+
+    const transcriptId = await submitToAssemblyAI(audioUrl, assemblyApiKey);
+    console.log(`[transcribe] AssemblyAI job submitted: ${transcriptId}`);
+
+    await adminClient
+      .from("materials")
+      .update({ external_transcript_id: transcriptId, processing_progress: 35 })
+      .eq("id", materialId);
+
+    const result = await pollAssemblyAI(transcriptId, assemblyApiKey);
+    console.log(`[transcribe] AssemblyAI completed — ${result.words.length} words`);
+
+    const segments = groupWordsIntoSegments(result.words);
+    if (segments.length === 0) {
+      throw new Error("AssemblyAI returned no usable words for transcription");
+    }
+
+    const finalResult = await finalizeTranscription({
+      materialId,
+      allSegments: segments,
+      durationMs: result.audioDurationMs,
+      language: result.language,
+      adminClient,
+      geminiApiKey,
+    });
+
+    console.log(`[transcribe] Done — ${finalResult.segmentsInserted} segments, ${finalResult.chunksInserted} chunks`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "An unexpected error occurred";
+    console.error("[transcribe] Background processing failed:", error);
+    await adminClient
+      .from("materials")
+      .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
+      .eq("id", materialId);
+  }
+}
+
+// ---------- Re-finalize: re-chunk + re-embed from existing transcript segments ----------
+
+async function refinalizeTranscription(opts: {
+  materialId: string;
+  geminiApiKey: string;
+  supabaseUrl: string;
+  serviceRoleKey: string;
+}) {
+  const { materialId, geminiApiKey, supabaseUrl, serviceRoleKey } = opts;
+  const adminClient = createClient(supabaseUrl, serviceRoleKey);
+
+  try {
+    await adminClient
+      .from("materials")
+      .update({ processing_status: "processing", processing_error: null, processing_stage: "chunking", processing_progress: 70 })
+      .eq("id", materialId);
+
+    // Load all existing transcript segments
+    const { data: segmentRows, error: segError } = await adminClient
+      .from("material_transcript_segments")
+      .select("start_ms, end_ms, text, confidence, speaker_label")
+      .eq("material_id", materialId)
+      .order("start_ms", { ascending: true });
+
+    if (segError) throw new Error(`Failed to fetch segments: ${segError.message}`);
+    if (!segmentRows || segmentRows.length === 0) {
+      throw new Error("No transcript segments found — cannot re-finalize");
+    }
+
+    console.log(`[refinalize] Loaded ${segmentRows.length} transcript segments`);
+
+    const allSegments: TranscriptSegment[] = segmentRows.map((row: any) => ({
+      startMs: row.start_ms,
+      endMs: row.end_ms,
+      text: row.text,
+      confidence: row.confidence,
+      speakerLabel: row.speaker_label,
+    }));
+
+    // Fetch material for duration + language
+    const { data: material } = await adminClient
+      .from("materials")
+      .select("duration_ms, transcription_language")
+      .eq("id", materialId)
+      .single();
+
+    // Delete only chunks (keep transcript segments intact)
+    await adminClient.from("chunks").delete().eq("material_id", materialId);
+
+    const transcriptChunks = buildTranscriptChunks(allSegments);
+    if (transcriptChunks.length === 0) {
+      throw new Error("Transcript did not produce any chunks");
+    }
+
+    console.log(`[refinalize] Building ${transcriptChunks.length} chunks and embedding...`);
+
+    await adminClient
+      .from("materials")
+      .update({ processing_stage: "embedding", processing_progress: 80 })
+      .eq("id", materialId);
+
+    const chunkRows = [];
+    for (let i = 0; i < transcriptChunks.length; i++) {
+      const chunk = transcriptChunks[i];
+      const embedding = await embedText(chunk.text, geminiApiKey);
+      chunkRows.push({
+        material_id: materialId,
+        chunk_index: i,
+        chunk_text: chunk.text,
+        embedding,
+        start_position: 0,
+        end_position: chunk.text.length,
+        start_ms: chunk.startMs,
+        end_ms: chunk.endMs,
+        page_number: null,
+      });
+
+      // Update progress incrementally
+      if (i % 10 === 0) {
+        await adminClient
+          .from("materials")
+          .update({ processing_progress: 80 + Math.round((i / transcriptChunks.length) * 18) })
+          .eq("id", materialId);
+      }
+    }
+
+    for (let i = 0; i < chunkRows.length; i += 100) {
+      const { error } = await adminClient.from("chunks").insert(chunkRows.slice(i, i + 100));
+      if (error) throw new Error(`Failed to insert chunks: ${error.message}`);
+    }
+
+    await adminClient
+      .from("materials")
+      .update({
+        processing_status: "completed",
+        processing_error: null,
+        processing_stage: "completed",
+        processing_progress: 100,
+        duration_ms: material?.duration_ms ?? null,
+        transcription_provider: "assemblyai",
+        transcription_language: material?.transcription_language ?? null,
+      })
+      .eq("id", materialId);
+
+    console.log(`[refinalize] Done — ${chunkRows.length} chunks embedded`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected error";
+    console.error("[refinalize] Failed:", error);
+    await adminClient
+      .from("materials")
+      .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
+      .eq("id", materialId);
+  }
 }
 
 // ---------- Main handler ----------
@@ -444,16 +526,19 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const assemblyApiKey = Deno.env.get("ASSEMBLY_API_KEY");
 
     if (!geminiApiKey) {
       return new Response(
-        JSON.stringify({
-          error: "Embedding service is not configured. Please add GEMINI_API_KEY.",
-        }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: "GEMINI_API_KEY is not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!assemblyApiKey) {
+      return new Response(
+        JSON.stringify({ error: "ASSEMBLY_API_KEY is not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -462,10 +547,9 @@ serve(async (req) => {
     });
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabaseClient.auth.getUser(authHeader.replace("Bearer ", ""));
+    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(
+      authHeader.replace("Bearer ", "")
+    );
 
     if (userError || !user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -487,261 +571,74 @@ serve(async (req) => {
       });
     }
 
-    const body = (await req.json()) as TranscribeRequest;
+    const body = (await req.json()) as TranscribeRequest | RefinalizeRequest;
     materialIdForError = body.materialId;
 
     if (!body.materialId) {
       return new Response(
         JSON.stringify({ error: "materialId is required" }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // ===== Multi-chunk mode =====
-    if (isMultiChunkRequest(body)) {
-      const { materialId, chunks, totalChunks } = body;
-      const currentChunkIndex = body.currentChunkIndex ?? 0;
-
-      await adminClient
-        .from("materials")
-        .update({
-          processing_status: "processing",
-          processing_error: null,
-          processing_stage: "transcribing",
-          processing_progress: 35 + Math.round((currentChunkIndex / totalChunks) * 35),
-        })
-        .eq("id", materialId);
-
-      // Transcribe the current chunk
-      const chunkMeta = chunks[currentChunkIndex];
-      const { data: fileData, error: downloadError } = await adminClient.storage
-        .from(DEFAULT_BUCKET)
-        .download(chunkMeta.filePath);
-
-      if (downloadError || !fileData) {
-        throw new Error(
-          `Failed to download audio chunk ${currentChunkIndex}: ${downloadError?.message || "No data"}`
-        );
-      }
-
-      const fileBytes = new Uint8Array(await fileData.arrayBuffer());
-      if (fileBytes.length > WHISPER_MAX_FILE_SIZE_BYTES) {
-        throw new Error(
-          `Audio chunk ${currentChunkIndex} (${formatFileSizeMb(fileBytes.length)}) exceeds the 25MB Whisper limit.`
-        );
-      }
-
-      const mimeType = getMimeTypeForFile(chunkMeta.filePath);
-      const transcription = await transcribeWithOpenAiCompatible({
-        bytes: fileBytes,
-        fileName: chunkMeta.filePath.split("/").pop() || `chunk_${currentChunkIndex}.mp3`,
-        mimeType,
-        offsetMs: chunkMeta.offsetMs,
-      });
-
-      // Store this chunk's segments immediately
-      const segmentRows = transcription.segments.map((seg, i) => ({
-        material_id: materialId,
-        segment_index: currentChunkIndex * 10000 + i, // offset to avoid index collision across chunks
-        start_ms: seg.startMs,
-        end_ms: seg.endMs,
-        text: seg.text,
-        confidence: seg.confidence ?? null,
-        speaker_label: seg.speakerLabel ?? null,
-      }));
-
-      for (let i = 0; i < segmentRows.length; i += 250) {
-        const batch = segmentRows.slice(i, i + 250);
-        const { error } = await adminClient
-          .from("material_transcript_segments")
-          .insert(batch);
-        if (error) throw new Error(`Failed to insert transcript segments: ${error.message}`);
-      }
-
-      const nextIndex = currentChunkIndex + 1;
-
-      if (nextIndex < totalChunks) {
-        // More chunks to process — self-invoke for the next chunk
-        await adminClient
-          .from("materials")
-          .update({
-            processing_progress: 35 + Math.round((nextIndex / totalChunks) * 35),
-          })
-          .eq("id", materialId);
-
-        // Fire-and-forget self-invocation
-        const selfInvokeBody: MultiChunkRequest = {
-          materialId,
-          chunks,
-          totalChunks,
-          currentChunkIndex: nextIndex,
-        };
-
-        // Use EdgeRuntime.waitUntil to not block the response
-        const selfInvokePromise = fetch(
-          `${supabaseUrl}/functions/v1/transcribe-video`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: authHeader,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(selfInvokeBody),
-          }
-        ).catch((err) => console.error("Self-invoke failed:", err));
-
-        // @ts-ignore — Deno EdgeRuntime global
-        if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-          // @ts-ignore
-          EdgeRuntime.waitUntil(selfInvokePromise);
-        } else {
-          // Fallback: await it (will block response but still works)
-          await selfInvokePromise;
-        }
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            status: "processing",
-            processedChunk: currentChunkIndex,
-            nextChunk: nextIndex,
-            totalChunks,
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // All chunks transcribed — now read all segments back, build chunks, embed
-      const { data: allSegmentRows, error: segFetchError } = await adminClient
-        .from("material_transcript_segments")
-        .select("start_ms, end_ms, text, confidence, speaker_label")
-        .eq("material_id", materialId)
-        .order("start_ms", { ascending: true });
-
-      if (segFetchError) {
-        throw new Error(`Failed to fetch accumulated segments: ${segFetchError.message}`);
-      }
-
-      const allSegments: TranscriptSegment[] = (allSegmentRows || []).map((row: any) => ({
-        startMs: row.start_ms,
-        endMs: row.end_ms,
-        text: row.text,
-        confidence: row.confidence,
-        speakerLabel: row.speaker_label,
-      }));
-
-      // Clear segments (will be re-inserted with proper indices by finalizeTranscription)
-      await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
-
-      const chunkStoragePaths = chunks.map((c) => c.filePath);
-      const maxDurationMs = allSegments.length > 0
-        ? allSegments[allSegments.length - 1].endMs
-        : transcription.durationMs;
-
-      const result = await finalizeTranscription({
-        materialId,
-        allSegments,
-        durationMs: maxDurationMs,
-        language: transcription.language,
-        adminClient,
+    // Re-finalize mode: re-chunk + re-embed from existing transcript segments
+    if ("refinalize" in body && body.refinalize) {
+      const backgroundPromise = refinalizeTranscription({
+        materialId: body.materialId,
         geminiApiKey,
-        chunkStoragePaths,
+        supabaseUrl,
+        serviceRoleKey,
       });
+
+      // @ts-ignore — Deno EdgeRuntime global
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(backgroundPromise);
+      } else {
+        await backgroundPromise;
+      }
 
       return new Response(
-        JSON.stringify({
-          success: true,
-          provider: "openai-whisper-compatible",
-          language: transcription.language,
-          durationMs: maxDurationMs,
-          segmentsInserted: result.segmentsInserted,
-          chunksInserted: result.chunksInserted,
-          totalChunksProcessed: totalChunks,
-        }),
+        JSON.stringify({ success: true, queued: true, mode: "refinalize", materialId: body.materialId }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // ===== Single-file mode (original behavior) =====
-    const { filePath, bucketName } = body as SingleFileRequest;
-
-    if (!filePath) {
+    if (!("audioUrl" in body) || !body.audioUrl) {
       return new Response(
-        JSON.stringify({ error: "filePath is required" }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: "audioUrl is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
-    }
-
-    const extension = getFileExtension(filePath);
-    if (!SUPPORTED_AUDIO_EXTENSIONS.has(extension)) {
-      throw new Error(`Unsupported file type: ${extension || "unknown"}`);
     }
 
     await adminClient
       .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_error: null,
-        processing_stage: "transcribing",
-        processing_progress: 25,
-      })
+      .update({ processing_status: "processing", processing_error: null, processing_stage: "transcribing", processing_progress: 25 })
       .eq("id", body.materialId);
 
-    const { data: fileData, error: downloadError } = await adminClient.storage
-      .from(bucketName || DEFAULT_BUCKET)
-      .download(filePath);
-
-    if (downloadError || !fileData) {
-      throw new Error(
-        `Failed to download file: ${downloadError?.message || "No data"}`
-      );
-    }
-
-    const fileBytes = new Uint8Array(await fileData.arrayBuffer());
-    if (fileBytes.length > WHISPER_MAX_FILE_SIZE_BYTES) {
-      throw new Error(
-        `File size (${formatFileSizeMb(fileBytes.length)}) exceeds the 25MB transcription limit.`
-      );
-    }
-
-    const mimeType = getMimeTypeForFile(filePath);
-
-    const transcription = await transcribeWithOpenAiCompatible({
-      bytes: fileBytes,
-      fileName: filePath.split("/").pop() || `upload.${extension}`,
-      mimeType,
-    });
-
-    const result = await finalizeTranscription({
+    const backgroundPromise = processTranscription({
       materialId: body.materialId,
-      allSegments: transcription.segments,
-      durationMs: transcription.durationMs,
-      language: transcription.language,
-      adminClient,
+      audioUrl: body.audioUrl,
+      assemblyApiKey,
       geminiApiKey,
-      chunkStoragePaths: [filePath], // clean up the single audio file too
+      supabaseUrl,
+      serviceRoleKey,
     });
+
+    // @ts-ignore — Deno EdgeRuntime global
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(backgroundPromise);
+    } else {
+      await backgroundPromise;
+    }
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        provider: transcription.provider,
-        language: transcription.language,
-        durationMs: transcription.durationMs,
-        segmentsInserted: result.segmentsInserted,
-        chunksInserted: result.chunksInserted,
-      }),
+      JSON.stringify({ success: true, queued: true, materialId: body.materialId }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "An unexpected error occurred";
+    const message = error instanceof Error ? error.message : "An unexpected error occurred";
     console.error("Transcribe video error:", error);
 
     if (materialIdForError) {
@@ -751,16 +648,9 @@ serve(async (req) => {
         const adminClient = createClient(supabaseUrl, serviceRoleKey);
         await adminClient
           .from("materials")
-          .update({
-            processing_status: "failed",
-            processing_error: message,
-            processing_stage: "failed",
-            processing_progress: null,
-          })
+          .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
           .eq("id", materialIdForError);
-      } catch (updateError) {
-        console.error("Failed to update material error state:", updateError);
-      }
+      } catch {}
     }
 
     return new Response(JSON.stringify({ error: message }), {

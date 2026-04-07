@@ -35,4 +35,11 @@ describe('documentScope helpers', () => {
     expect(getDocumentSelectorLabel(documents, [], true)).toBe('Loading documents...');
     expect(getDocumentSelectorLabel([], [], false)).toBe('No processed documents');
   });
+
+  it('uses count-based selector labels for the main chat dropdown', () => {
+    expect(getDocumentSelectorLabel(documents, [], false)).toBe('All materials selected');
+    expect(getDocumentSelectorLabel(documents, ['doc-2'], false)).toBe('1 material selected');
+    expect(getDocumentSelectorLabel(documents, ['doc-1', 'doc-2'], false)).toBe('2 materials selected');
+    expect(getDocumentSelectorLabel(documents, ['doc-1', 'doc-2', 'doc-3'], false)).toBe('All materials selected');
+  });
 });

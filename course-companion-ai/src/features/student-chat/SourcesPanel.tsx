@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink, FileText, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, ExternalLink, FileText, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import { getCitationKey } from './citations';
-import { formatCitationLocator } from './time';
+import { formatCitationLocator, formatTimestamp } from './time';
 import type { Citation, Message } from './types';
 
 interface SourcesPanelProps {
@@ -99,14 +99,25 @@ export function SourcesPanel({
                           </div>
 
                           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-                            <FileText className="h-3 w-3" />
-                            <span>
-                              {formatCitationLocator({
-                                pageNumber: citation.pageNumber,
-                                startMs: citation.startMs,
-                                endMs: citation.endMs,
-                              })}
-                            </span>
+                            {citation.documentType === 'video' ? (
+                              <Clock className="h-3 w-3 shrink-0" />
+                            ) : (
+                              <FileText className="h-3 w-3 shrink-0" />
+                            )}
+                            {citation.documentType === 'video' && typeof citation.startMs === 'number' ? (
+                              <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-medium text-primary">
+                                {formatTimestamp(citation.startMs)}
+                                {typeof citation.endMs === 'number' && ` – ${formatTimestamp(citation.endMs)}`}
+                              </span>
+                            ) : (
+                              <span>
+                                {formatCitationLocator({
+                                  pageNumber: citation.pageNumber,
+                                  startMs: citation.startMs,
+                                  endMs: citation.endMs,
+                                })}
+                              </span>
+                            )}
                           </div>
 
                           <p
@@ -131,7 +142,9 @@ export function SourcesPanel({
                             {isOpening
                               ? 'Opening source...'
                               : citation.documentType === 'video'
-                                ? 'View transcript'
+                                ? typeof citation.startMs === 'number'
+                                  ? `Jump to ${formatTimestamp(citation.startMs)}`
+                                  : 'View transcript'
                                 : 'View original file'}
                           </button>
                         </div>
