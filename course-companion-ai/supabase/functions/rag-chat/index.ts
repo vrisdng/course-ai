@@ -7,8 +7,44 @@ const corsHeaders = {
 };
 
 const EMBEDDING_MODEL = "gemini-embedding-001";
-const CHAT_MODEL = "gpt-4o-mini";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
+
+type ChatModelTier = "fast" | "smart" | "pro";
+
+interface ChatModelConfig {
+  modelId: string;
+  apiBaseUrl: string;
+  apiKeyEnvVar: string;
+  displayName: string;
+}
+
+const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
+  fast: {
+    modelId: "gpt-4o-mini",
+    apiBaseUrl: "https://api.openai.com/v1",
+    apiKeyEnvVar: "OPENAI_API_KEY",
+    displayName: "Fast (ChatGPT)",
+  },
+  smart: {
+    modelId: "gemini-2.5-flash-preview-04-17",
+    apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKeyEnvVar: "GEMINI_API_KEY",
+    displayName: "Smart (Gemini 2.5 Flash)",
+  },
+  pro: {
+    modelId: "gemini-2.5-pro-preview-03-25",
+    apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKeyEnvVar: "GEMINI_API_KEY",
+    displayName: "Pro (Gemini 2.5 Pro)",
+  },
+};
+
+function resolveChatModelTier(raw: unknown): ChatModelTier {
+  if (raw === "fast" || raw === "smart" || raw === "pro") {
+    return raw;
+  }
+  return "fast";
+}
 const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
 const HIGH_RECALL_MATCH_COUNT = 18;
 const FINAL_MATCH_COUNT = 6;
@@ -26,6 +62,7 @@ interface ChatRequest {
   conversationId?: string;
   courseId?: string;
   selectedDocumentIds?: string[];
+  model?: string;
 }
 
 interface RetrievedChunk {
@@ -81,7 +118,8 @@ interface OpenAIChatMessage {
 }
 
 interface ChatTextGenerationOptions {
-  openAiApiKey: string;
+  modelConfig: ChatModelConfig;
+  apiKey: string;
   systemPrompt: string;
   userPrompt: string;
   historyTurns?: ConversationHistoryTurn[];
@@ -577,15 +615,15 @@ function formatSseEvent(event: string, payload: unknown): string {
 }
 
 async function generateGeminiText(options: ChatTextGenerationOptions): Promise<string> {
-  const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+  const aiResponse = await fetch(`${options.modelConfig.apiBaseUrl}/chat/completions`, {
     method: "POST",
     signal: options.signal,
     headers: {
-      Authorization: `Bearer ${options.openAiApiKey}`,
+      Authorization: `Bearer ${options.apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: CHAT_MODEL,
+      model: options.modelConfig.modelId,
       messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
       temperature: options.temperature ?? 0.4,
       max_tokens: options.maxOutputTokens ?? 2000,
@@ -594,7 +632,7 @@ async function generateGeminiText(options: ChatTextGenerationOptions): Promise<s
 
   if (!aiResponse.ok) {
     const errorText = await aiResponse.text();
-    console.error("OpenAI Chat API error:", aiResponse.status, errorText);
+    console.error("Chat API error:", aiResponse.status, errorText);
 
     if (aiResponse.status === 429) {
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
@@ -608,15 +646,15 @@ async function generateGeminiText(options: ChatTextGenerationOptions): Promise<s
 }
 
 async function generateGeminiTextStream(options: ChatStreamGenerationOptions): Promise<string> {
-  const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+  const aiResponse = await fetch(`${options.modelConfig.apiBaseUrl}/chat/completions`, {
     method: "POST",
     signal: options.signal,
     headers: {
-      Authorization: `Bearer ${options.openAiApiKey}`,
+      Authorization: `Bearer ${options.apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: CHAT_MODEL,
+      model: options.modelConfig.modelId,
       messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
       temperature: options.temperature ?? 0.4,
       max_tokens: options.maxOutputTokens ?? 2000,
@@ -626,7 +664,7 @@ async function generateGeminiTextStream(options: ChatStreamGenerationOptions): P
 
   if (!aiResponse.ok) {
     const errorText = await aiResponse.text();
-    console.error("OpenAI Chat Stream API error:", aiResponse.status, errorText);
+    console.error("Chat Stream API error:", aiResponse.status, errorText);
 
     if (aiResponse.status === 429) {
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
@@ -717,7 +755,8 @@ async function generateGeminiTextStream(options: ChatStreamGenerationOptions): P
 }
 
 async function rewriteQueryForRetrieval(options: {
-  openAiApiKey: string;
+  modelConfig: ChatModelConfig;
+  apiKey: string;
   studentQuestion: string;
   historyContext: string;
   signal?: AbortSignal;
@@ -744,7 +783,8 @@ Standalone retrieval query:`;
 
   try {
     const rewritten = await generateGeminiText({
-      openAiApiKey: options.openAiApiKey,
+      modelConfig: options.modelConfig,
+      apiKey: options.apiKey,
       systemPrompt: rewriteSystemPrompt,
       userPrompt: rewriteUserPrompt,
       temperature: 0,
@@ -876,7 +916,8 @@ async function insertQueryEvent(
 }
 
 async function formatAnswerWithReliableCitations(options: {
-  openAiApiKey: string;
+  modelConfig: ChatModelConfig;
+  apiKey: string;
   question: string;
   rawAnswer: string;
   chunks: RetrievedChunk[];
@@ -916,7 +957,8 @@ Allowed sources:
 ${buildCitationRewriteSourceContext(options.chunks)}`;
 
     const rewrittenAnswer = await generateGeminiText({
-      openAiApiKey: options.openAiApiKey,
+      modelConfig: options.modelConfig,
+      apiKey: options.apiKey,
       systemPrompt: citationRewriteSystemPrompt,
       userPrompt: citationRewriteUserPrompt,
       temperature: 0.1,
@@ -1185,6 +1227,10 @@ serve(async (req) => {
       );
     }
 
+    // Resolved after parsing the request body below; declared here for closure access in the stream.
+    let chatModelConfig: ChatModelConfig = CHAT_MODEL_CONFIGS.fast;
+    let chatApiKey: string = openAiApiKey;
+
     const supabaseClient = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -1207,9 +1253,14 @@ serve(async (req) => {
       conversationId,
       courseId,
       selectedDocumentIds: rawSelectedDocumentIds,
+      model: rawModel,
     } = await req.json() as ChatRequest;
     const trimmedMessage = message?.trim();
     const selectedDocumentIds = normalizeSelectedDocumentIds(rawSelectedDocumentIds);
+
+    const modelTier = resolveChatModelTier(rawModel);
+    chatModelConfig = CHAT_MODEL_CONFIGS[modelTier];
+    chatApiKey = chatModelConfig.apiKeyEnvVar === "OPENAI_API_KEY" ? openAiApiKey : (geminiApiKey ?? openAiApiKey);
 
     if (!trimmedMessage) {
       return new Response(
@@ -1265,7 +1316,8 @@ serve(async (req) => {
     throwIfAborted(requestAbortController.signal);
 
     const rewrittenQuery = await rewriteQueryForRetrieval({
-      openAiApiKey,
+      modelConfig: chatModelConfig,
+      apiKey: chatApiKey,
       studentQuestion: trimmedMessage,
       historyContext,
       signal: requestAbortController.signal,
@@ -1441,7 +1493,7 @@ ${ragContext}`;
                 citations: [],
                 conversationId: activeConversationId,
                 meta: {
-                  chatModel: CHAT_MODEL,
+                  chatModel: chatModelConfig.modelId,
                   embeddingModel: EMBEDDING_MODEL,
                   citationPipelineVersion: CITATION_PIPELINE_VERSION,
                 },
@@ -1515,7 +1567,8 @@ ${ragContext}`;
             }
 
             const rawAnswer = await generateGeminiTextStream({
-              openAiApiKey,
+              modelConfig: chatModelConfig,
+              apiKey: chatApiKey,
               systemPrompt,
               userPrompt: trimmedMessage,
               historyTurns,
@@ -1531,7 +1584,8 @@ ${ragContext}`;
             ensureStreamActive();
 
             const { answer, citedChunks } = await formatAnswerWithReliableCitations({
-              openAiApiKey,
+              modelConfig: chatModelConfig,
+              apiKey: chatApiKey,
               question: trimmedMessage,
               rawAnswer,
               chunks: retrievedChunks,

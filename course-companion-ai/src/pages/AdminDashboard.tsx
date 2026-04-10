@@ -44,6 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
+import { groupSegmentsIntoParagraphs } from '@/features/student-chat/groupTranscriptSegments';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
 import {
@@ -54,7 +55,6 @@ import {
   isVideoUpload,
 } from '@/lib/materialUpload';
 import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
-import { groupSegmentsIntoParagraphs } from '@/features/student-chat/groupTranscriptSegments';
 import { cn } from '@/lib/utils';
 import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
 
@@ -243,8 +243,10 @@ export default function AdminDashboard() {
   const [activatingTermId, setActivatingTermId] = useState<string | null>(null);
   const [addStudentsCourse, setAddStudentsCourse] = useState<Course | null>(null);
   const [isGeneratingInvites, setIsGeneratingInvites] = useState(false);
+  const [isLoadingCourseCode, setIsLoadingCourseCode] = useState(false);
   const [generatedCourseCode, setGeneratedCourseCode] = useState<string | null>(null);
   const [courseCodeExpiresAt, setCourseCodeExpiresAt] = useState<string | null>(null);
+  const [enrollmentCodeByCourseId, setEnrollmentCodeByCourseId] = useState<Record<string, string>>({});
   const [transcriptMaterial, setTranscriptMaterial] = useState<Material | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
@@ -282,17 +284,27 @@ export default function AdminDashboard() {
 
   const fetchCourses = useCallback(async () => {
     setIsLoadingCourses(true);
-    const { data, error } = await supabase.from('courses').select('id, name, code').order('name');
+    const [coursesResult, codesResult] = await Promise.all([
+      supabase.from('courses').select('id, name, code').order('name'),
+      supabase.from('course_invites').select('course_id, invite_code').eq('is_course_code', true),
+    ]);
 
-    if (error) {
+    if (coursesResult.error) {
       toast.error('Failed to load courses');
       setIsLoadingCourses(false);
       return;
     }
 
-    const nextCourses = (data || []) as Course[];
+    const nextCourses = (coursesResult.data || []) as Course[];
     setCourses(nextCourses);
     setUploadCourseId((current) => (current && nextCourses.some((course) => course.id === current) ? current : ''));
+
+    const codeMap: Record<string, string> = {};
+    for (const row of codesResult.data || []) {
+      codeMap[row.course_id] = row.invite_code;
+    }
+    setEnrollmentCodeByCourseId(codeMap);
+
     setIsLoadingCourses(false);
   }, []);
 
@@ -1009,16 +1021,6 @@ export default function AdminDashboard() {
     resetUploadSelection();
   };
 
-  const handleOpenMaterial = async (material: Material) => {
-    const { data, error } = await supabase.storage.from('course-materials').createSignedUrl(material.file_path, 120);
-
-    if (error || !data?.signedUrl) {
-      toast.error(error?.message || 'Failed to open document');
-      return;
-    }
-
-    window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
-  };
 
   const handleAttachLink = (material: Material) => {
     setLinkedUrlMaterial(material);
@@ -1249,6 +1251,35 @@ export default function AdminDashboard() {
     setGeneratedCourseCode(null);
     setCourseCodeExpiresAt(null);
     setIsGeneratingInvites(false);
+    setIsLoadingCourseCode(false);
+  };
+
+  const openAddStudentsDialog = async (course: Course) => {
+    setAddStudentsCourse(course);
+    setGeneratedCourseCode(null);
+    setCourseCodeExpiresAt(null);
+    setIsLoadingCourseCode(true);
+
+    const { data, error } = await supabase
+      .from('course_invites')
+      .select('invite_code, expires_at')
+      .eq('course_id', course.id)
+      .eq('is_course_code', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    setIsLoadingCourseCode(false);
+
+    if (error) {
+      console.error('Failed to load existing course code:', error);
+      return;
+    }
+
+    if (data) {
+      setGeneratedCourseCode(data.invite_code);
+      setCourseCodeExpiresAt(data.expires_at);
+    }
   };
 
   const copyText = async (value: string) => {
@@ -1264,8 +1295,6 @@ export default function AdminDashboard() {
     if (!addStudentsCourse) return;
 
     setIsGeneratingInvites(true);
-    setGeneratedCourseCode(null);
-    setCourseCodeExpiresAt(null);
 
     const { data, error } = await supabase.functions.invoke('generate-course-code', {
       body: { courseId: addStudentsCourse.id },
@@ -1278,8 +1307,12 @@ export default function AdminDashboard() {
       return;
     }
 
-    setGeneratedCourseCode(typeof data?.inviteCode === 'string' ? data.inviteCode : null);
+    const newCode = typeof data?.inviteCode === 'string' ? data.inviteCode : null;
+    setGeneratedCourseCode(newCode);
     setCourseCodeExpiresAt(typeof data?.expiresAt === 'string' ? data.expiresAt : null);
+    if (newCode && addStudentsCourse) {
+      setEnrollmentCodeByCourseId((prev) => ({ ...prev, [addStudentsCourse.id]: newCode }));
+    }
     toast.success('Course code generated');
   };
 
@@ -1390,16 +1423,20 @@ export default function AdminDashboard() {
       <Dialog open={Boolean(addStudentsCourse)} onOpenChange={(open) => (open ? undefined : closeAddStudentsDialog())}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add Students</DialogTitle>
+            <DialogTitle>Enrollment Code</DialogTitle>
             <DialogDescription>
               {addStudentsCourse
-                ? `Generate a course code for ${addStudentsCourse.name}${addStudentsCourse.code ? ` (${addStudentsCourse.code})` : ''}. Share this code with your students so they can self-enroll.`
-                : 'Generate a course code for students to self-enroll.'}
+                ? `Share this code with students to let them self-enroll in ${addStudentsCourse.name}${addStudentsCourse.code ? ` (${addStudentsCourse.code})` : ''}.`
+                : 'Share this code with students so they can self-enroll.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
-            {generatedCourseCode ? (
+            {isLoadingCourseCode ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : generatedCourseCode ? (
               <div className="space-y-3">
                 <div className="rounded-lg border border-border bg-muted/30 p-4 text-center">
                   <p className="mb-1 text-xs text-muted-foreground">Course enrollment code</p>
@@ -1425,7 +1462,7 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Click the button below to generate a unique 8-character code. Any student who enters this code will be enrolled in the course.
+                No enrollment code exists for this course yet. Generate one to share with your students.
               </p>
             )}
           </div>
@@ -1434,16 +1471,41 @@ export default function AdminDashboard() {
             <Button type="button" variant="outline" onClick={closeAddStudentsDialog}>
               Close
             </Button>
-            <Button type="button" onClick={() => void handleGenerateCourseCode()} disabled={isGeneratingInvites}>
-              {isGeneratingInvites ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                generatedCourseCode ? 'Generate New Code' : 'Generate Code'
-              )}
-            </Button>
+            {generatedCourseCode ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void handleGenerateCourseCode()}
+                disabled={isGeneratingInvites || isLoadingCourseCode}
+              >
+                {isGeneratingInvites ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Regenerating...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Regenerate Code
+                  </>
+                )}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                onClick={() => void handleGenerateCourseCode()}
+                disabled={isGeneratingInvites || isLoadingCourseCode}
+              >
+                {isGeneratingInvites ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate Code'
+                )}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1574,7 +1636,7 @@ export default function AdminDashboard() {
                     <TableRow>
                       <TableHead>Course Name</TableHead>
                       <TableHead>Code</TableHead>
-                      <TableHead>Course ID</TableHead>
+                      <TableHead>Enrollment Code</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1599,11 +1661,11 @@ export default function AdminDashboard() {
                         <TableRow key={course.id}>
                           <TableCell className="font-medium">{course.name}</TableCell>
                           <TableCell>{course.code || '-'}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{course.id}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{enrollmentCodeByCourseId[course.id] ?? 'N/A'}</TableCell>
                           <TableCell>
                             <div className="flex justify-end">
-                              <Button type="button" size="sm" variant="outline" onClick={() => setAddStudentsCourse(course)}>
-                                Add Students
+                              <Button type="button" size="sm" variant="outline" onClick={() => void openAddStudentsDialog(course)}>
+                                Generate Code
                               </Button>
                             </div>
                           </TableCell>

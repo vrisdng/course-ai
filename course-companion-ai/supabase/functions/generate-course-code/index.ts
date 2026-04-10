@@ -87,6 +87,17 @@ serve(async (req) => {
       .eq("user_id", user.id)
       .maybeSingle();
 
+    // Delete all previous course codes for this course before generating a new one
+    const { error: deleteError } = await supabaseClient
+      .from("course_invites")
+      .delete()
+      .eq("course_id", courseId)
+      .eq("is_course_code", true);
+
+    if (deleteError) {
+      throw new Error(`Failed to clear previous course codes: ${deleteError.message}`);
+    }
+
     const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
     // Try up to 5 times to generate a unique code

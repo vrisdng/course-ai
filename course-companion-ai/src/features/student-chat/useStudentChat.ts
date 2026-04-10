@@ -72,10 +72,19 @@ function parseMaybeJson(value: string): unknown {
   }
 }
 
+export type ChatModelTier = 'fast' | 'smart' | 'pro';
+
+export const CHAT_MODEL_OPTIONS: { value: ChatModelTier; label: string }[] = [
+  { value: 'fast', label: 'Fast' },
+  { value: 'smart', label: 'Smart' },
+  { value: 'pro', label: 'Pro' },
+];
+
 export function useStudentChat(routeConversationId: string | null = null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<ChatModelTier>('fast');
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
   const [showSidePanel, setShowSidePanel] = useState(true);
   const [highlightedCitationKey, setHighlightedCitationKey] = useState<string | null>(null);
@@ -476,6 +485,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           conversationId: currentConversationId,
           courseId: selectedCourseId,
           selectedDocumentIds,
+          model: selectedModel,
         }),
       });
 
@@ -638,7 +648,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setIsLoading(false);
       }
     }
-  }, [currentConversationId, fetchConversations, input, isLoading, selectedCourseId, selectedDocumentIds]);
+  }, [currentConversationId, fetchConversations, input, isLoading, selectedCourseId, selectedDocumentIds, selectedModel]);
 
   const stopGenerating = useCallback(() => {
     const activeAssistantMessageId = activeAssistantMessageIdRef.current;
@@ -900,6 +910,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
     selectedDocumentIds,
     documentScopeSummary,
     deletingConversationId,
+    selectedModel,
+    setSelectedModel,
     changeSelectedCourse,
     toggleSelectedDocument,
     clearSelectedDocuments,

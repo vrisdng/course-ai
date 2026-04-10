@@ -56,6 +56,8 @@ export default function StudentChat() {
     currentConversationId,
     selectedCourseId,
     selectedDocumentIds,
+    selectedModel,
+    setSelectedModel,
     deletingConversationId,
     changeSelectedCourse,
     toggleSelectedDocument,
@@ -181,6 +183,8 @@ export default function StudentChat() {
             onInputChange={setInput}
             onSend={handleSend}
             onStop={stopGenerating}
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
             documentSelector={(
               <DocumentScopeSelector
                 documents={availableDocuments}
