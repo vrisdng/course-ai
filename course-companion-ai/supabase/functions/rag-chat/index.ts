@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 const EMBEDDING_MODEL = "gemini-embedding-001";
-const CHAT_MODEL = "gemini-3-flash-preview";
+const CHAT_MODEL = "gpt-4o-mini";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
 const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
 const HIGH_RECALL_MATCH_COUNT = 18;
@@ -75,13 +75,13 @@ interface ResolvedSelectedMaterial {
   fileName: string;
 }
 
-interface GeminiContentTurn {
-  role: "user" | "model";
-  parts: Array<{ text: string }>;
+interface OpenAIChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
 }
 
-interface GeminiTextGenerationOptions {
-  geminiApiKey: string;
+interface ChatTextGenerationOptions {
+  openAiApiKey: string;
   systemPrompt: string;
   userPrompt: string;
   historyTurns?: ConversationHistoryTurn[];
@@ -90,7 +90,7 @@ interface GeminiTextGenerationOptions {
   signal?: AbortSignal;
 }
 
-interface GeminiStreamGenerationOptions extends GeminiTextGenerationOptions {
+interface ChatStreamGenerationOptions extends ChatTextGenerationOptions {
   onTextDelta?: (delta: string) => Promise<void> | void;
 }
 
@@ -283,21 +283,21 @@ function buildHistoryContext(historyTurns: ConversationHistoryTurn[]): string {
     .join("\n");
 }
 
-function buildGeminiConversationContents(
+function buildOpenAIConversationMessages(
+  systemPrompt: string,
   userPrompt: string,
   historyTurns: ConversationHistoryTurn[] = []
-): GeminiContentTurn[] {
-  const contents = historyTurns.map((turn) => ({
-    role: turn.role === "assistant" ? "model" : "user",
-    parts: [{ text: turn.content }],
-  }));
+): OpenAIChatMessage[] {
+  const messages: OpenAIChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...historyTurns.map((turn) => ({
+      role: turn.role === "assistant" ? ("assistant" as const) : ("user" as const),
+      content: turn.content,
+    })),
+    { role: "user" as const, content: userPrompt },
+  ];
 
-  contents.push({
-    role: "user",
-    parts: [{ text: userPrompt }],
-  });
-
-  return contents;
+  return messages;
 }
 
 function sourceLabel(chunk: RetrievedChunk): string {
@@ -541,51 +541,60 @@ function buildCitationRewriteSourceContext(chunks: RetrievedChunk[]): string {
     .join("\n\n");
 }
 
-function extractGeminiText(aiData: unknown): string {
+function extractOpenAIText(aiData: unknown): string {
   if (!aiData || typeof aiData !== "object") {
     return "";
   }
 
-  const candidates = (aiData as { candidates?: unknown[] }).candidates;
-  if (!Array.isArray(candidates) || candidates.length === 0) {
+  const choices = (aiData as {
+    choices?: Array<{
+      message?: {
+        content?: string | Array<{ type?: string; text?: string }>;
+      };
+    }>;
+  }).choices;
+
+  if (!Array.isArray(choices) || choices.length === 0) {
     return "";
   }
 
-  const firstCandidate = candidates[0] as { content?: { parts?: Array<{ text?: string }> } };
-  const parts = firstCandidate.content?.parts || [];
+  const content = choices[0]?.message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
 
-  return parts
-    .map((part) => part.text || "")
-    .join("");
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part?.text === "string" ? part.text : ""))
+      .join("");
+  }
+
+  return "";
 }
 
 function formatSseEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-async function generateGeminiText(options: GeminiTextGenerationOptions): Promise<string> {
-  const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:generateContent`, {
+async function generateGeminiText(options: ChatTextGenerationOptions): Promise<string> {
+  const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     signal: options.signal,
     headers: {
-      "x-goog-api-key": options.geminiApiKey,
+      Authorization: `Bearer ${options.openAiApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      system_instruction: {
-        parts: [{ text: options.systemPrompt }],
-      },
-      contents: buildGeminiConversationContents(options.userPrompt, options.historyTurns),
-      generationConfig: {
-        temperature: options.temperature ?? 0.4,
-        maxOutputTokens: options.maxOutputTokens ?? 2000,
-      },
+      model: CHAT_MODEL,
+      messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
+      temperature: options.temperature ?? 0.4,
+      max_tokens: options.maxOutputTokens ?? 2000,
     }),
   });
 
   if (!aiResponse.ok) {
     const errorText = await aiResponse.text();
-    console.error("Gemini Chat API error:", aiResponse.status, errorText);
+    console.error("OpenAI Chat API error:", aiResponse.status, errorText);
 
     if (aiResponse.status === 429) {
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
@@ -595,32 +604,29 @@ async function generateGeminiText(options: GeminiTextGenerationOptions): Promise
   }
 
   const aiData = await aiResponse.json() as unknown;
-  return extractGeminiText(aiData).trim() || "I couldn't generate a response.";
+  return extractOpenAIText(aiData).trim() || "I couldn't generate a response.";
 }
 
-async function generateGeminiTextStream(options: GeminiStreamGenerationOptions): Promise<string> {
-  const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`, {
+async function generateGeminiTextStream(options: ChatStreamGenerationOptions): Promise<string> {
+  const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     signal: options.signal,
     headers: {
-      "x-goog-api-key": options.geminiApiKey,
+      Authorization: `Bearer ${options.openAiApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      system_instruction: {
-        parts: [{ text: options.systemPrompt }],
-      },
-      contents: buildGeminiConversationContents(options.userPrompt, options.historyTurns),
-      generationConfig: {
-        temperature: options.temperature ?? 0.4,
-        maxOutputTokens: options.maxOutputTokens ?? 2000,
-      },
+      model: CHAT_MODEL,
+      messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
+      temperature: options.temperature ?? 0.4,
+      max_tokens: options.maxOutputTokens ?? 2000,
+      stream: true,
     }),
   });
 
   if (!aiResponse.ok) {
     const errorText = await aiResponse.text();
-    console.error("Gemini Chat Stream API error:", aiResponse.status, errorText);
+    console.error("OpenAI Chat Stream API error:", aiResponse.status, errorText);
 
     if (aiResponse.status === 429) {
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
@@ -637,8 +643,6 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
   const decoder = new TextDecoder();
   let buffer = "";
   let fullText = "";
-  let latestSnapshot = "";
-
   const processRawSseEvent = async (rawEvent: string) => {
     throwIfAborted(options.signal);
 
@@ -668,28 +672,21 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
       return;
     }
 
-    const chunkText = extractGeminiText(parsedPayload);
+    const chunkText = (parsedPayload as {
+      choices?: Array<{
+        delta?: {
+          content?: string;
+        };
+      }>;
+    }).choices?.[0]?.delta?.content || "";
+
     if (!chunkText) {
       return;
     }
 
-    let delta = chunkText;
-    if (chunkText.startsWith(latestSnapshot)) {
-      delta = chunkText.slice(latestSnapshot.length);
-      latestSnapshot = chunkText;
-    } else if (latestSnapshot.endsWith(chunkText)) {
-      delta = "";
-    } else {
-      latestSnapshot += chunkText;
-    }
-
-    if (!delta) {
-      return;
-    }
-
-    fullText += delta;
+    fullText += chunkText;
     if (options.onTextDelta) {
-      await options.onTextDelta(delta);
+      await options.onTextDelta(chunkText);
     }
   };
 
@@ -720,7 +717,7 @@ async function generateGeminiTextStream(options: GeminiStreamGenerationOptions):
 }
 
 async function rewriteQueryForRetrieval(options: {
-  geminiApiKey: string;
+  openAiApiKey: string;
   studentQuestion: string;
   historyContext: string;
   signal?: AbortSignal;
@@ -747,7 +744,7 @@ Standalone retrieval query:`;
 
   try {
     const rewritten = await generateGeminiText({
-      geminiApiKey: options.geminiApiKey,
+      openAiApiKey: options.openAiApiKey,
       systemPrompt: rewriteSystemPrompt,
       userPrompt: rewriteUserPrompt,
       temperature: 0,
@@ -879,7 +876,7 @@ async function insertQueryEvent(
 }
 
 async function formatAnswerWithReliableCitations(options: {
-  geminiApiKey: string;
+  openAiApiKey: string;
   question: string;
   rawAnswer: string;
   chunks: RetrievedChunk[];
@@ -919,7 +916,7 @@ Allowed sources:
 ${buildCitationRewriteSourceContext(options.chunks)}`;
 
     const rewrittenAnswer = await generateGeminiText({
-      geminiApiKey: options.geminiApiKey,
+      openAiApiKey: options.openAiApiKey,
       systemPrompt: citationRewriteSystemPrompt,
       userPrompt: citationRewriteUserPrompt,
       temperature: 0.1,
@@ -1170,11 +1167,20 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
 
     if (!geminiApiKey) {
       console.error("GEMINI_API_KEY is not configured");
       return new Response(
         JSON.stringify({ error: "Embedding service is not configured. Please add GEMINI_API_KEY secret." }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!openAiApiKey) {
+      console.error("OPENAI_API_KEY is not configured");
+      return new Response(
+        JSON.stringify({ error: "Chat service is not configured. Please add OPENAI_API_KEY secret." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -1259,7 +1265,7 @@ serve(async (req) => {
     throwIfAborted(requestAbortController.signal);
 
     const rewrittenQuery = await rewriteQueryForRetrieval({
-      geminiApiKey,
+      openAiApiKey,
       studentQuestion: trimmedMessage,
       historyContext,
       signal: requestAbortController.signal,
@@ -1378,7 +1384,7 @@ serve(async (req) => {
 Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 ${summaryInstruction}
 
-FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text — use **bold** for headings. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data
+FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
 CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that correspond to provided sources.
 
@@ -1509,7 +1515,7 @@ ${ragContext}`;
             }
 
             const rawAnswer = await generateGeminiTextStream({
-              geminiApiKey,
+              openAiApiKey,
               systemPrompt,
               userPrompt: trimmedMessage,
               historyTurns,
@@ -1525,7 +1531,7 @@ ${ragContext}`;
             ensureStreamActive();
 
             const { answer, citedChunks } = await formatAnswerWithReliableCitations({
-              geminiApiKey,
+              openAiApiKey,
               question: trimmedMessage,
               rawAnswer,
               chunks: retrievedChunks,

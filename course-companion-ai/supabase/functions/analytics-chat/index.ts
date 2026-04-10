@@ -7,7 +7,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const CHAT_MODEL = "gemini-3-flash-preview";
+const CHAT_MODEL = "gpt-4o-mini";
 const HISTORY_LIMIT = 10;
 const DEFAULT_DATA_WINDOW_DAYS = 30;
 
@@ -24,9 +24,9 @@ interface ConversationHistoryTurn {
   content: string;
 }
 
-interface GeminiContentTurn {
-  role: "user" | "model";
-  parts: Array<{ text: string }>;
+interface OpenAIChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
 }
 
 class HttpError extends Error {
@@ -54,25 +54,20 @@ function formatSseEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-function extractGeminiText(aiData: unknown): string {
-  if (!aiData || typeof aiData !== "object") return "";
-  const candidates = (aiData as { candidates?: unknown[] }).candidates;
-  if (!Array.isArray(candidates) || candidates.length === 0) return "";
-  const firstCandidate = candidates[0] as { content?: { parts?: Array<{ text?: string }> } };
-  const parts = firstCandidate.content?.parts || [];
-  return parts.map((part) => part.text || "").join("");
-}
-
-function buildGeminiConversationContents(
+function buildOpenAIConversationMessages(
+  systemPrompt: string,
   userPrompt: string,
   historyTurns: ConversationHistoryTurn[] = []
-): GeminiContentTurn[] {
-  const contents = historyTurns.map((turn) => ({
-    role: turn.role === "assistant" ? "model" as const : "user" as const,
-    parts: [{ text: turn.content }],
-  }));
-  contents.push({ role: "user", parts: [{ text: userPrompt }] });
-  return contents;
+): OpenAIChatMessage[] {
+  const messages: OpenAIChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...historyTurns.map((turn) => ({
+      role: turn.role === "assistant" ? ("assistant" as const) : ("user" as const),
+      content: turn.content,
+    })),
+    { role: "user" as const, content: userPrompt },
+  ];
+  return messages;
 }
 
 function startAtIso(days: number): string {
@@ -231,10 +226,10 @@ function formatAnalyticsContext(data: AnalyticsData, rangeLabel: string): string
   return lines.join("\n");
 }
 
-// ── Gemini streaming ──────────────────────────────────────────────────
+// ── Chat streaming ────────────────────────────────────────────────────
 
-async function streamGeminiResponse(options: {
-  geminiApiKey: string;
+async function streamChatResponse(options: {
+  openAiApiKey: string;
   systemPrompt: string;
   userPrompt: string;
   historyTurns: ConversationHistoryTurn[];
@@ -242,25 +237,27 @@ async function streamGeminiResponse(options: {
   onTextDelta: (delta: string) => void;
 }): Promise<string> {
   const aiResponse = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:streamGenerateContent?alt=sse`,
+    "https://api.openai.com/v1/chat/completions",
     {
       method: "POST",
       signal: options.signal,
       headers: {
-        "x-goog-api-key": options.geminiApiKey,
+        Authorization: `Bearer ${options.openAiApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: options.systemPrompt }] },
-        contents: buildGeminiConversationContents(options.userPrompt, options.historyTurns),
-        generationConfig: { temperature: 0.3, maxOutputTokens: 2000 },
+        model: CHAT_MODEL,
+        messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
+        temperature: 0.3,
+        max_tokens: 2000,
+        stream: true,
       }),
     },
   );
 
   if (!aiResponse.ok) {
     const errorText = await aiResponse.text();
-    console.error("Gemini stream API error:", aiResponse.status, errorText);
+    console.error("OpenAI stream API error:", aiResponse.status, errorText);
     if (aiResponse.status === 429) {
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
     }
@@ -275,7 +272,6 @@ async function streamGeminiResponse(options: {
   const decoder = new TextDecoder();
   let buffer = "";
   let fullText = "";
-  let latestSnapshot = "";
 
   const processRawSseEvent = (rawEvent: string) => {
     throwIfAborted(options.signal);
@@ -294,22 +290,18 @@ async function streamGeminiResponse(options: {
     let parsed: unknown;
     try { parsed = JSON.parse(payload); } catch { return; }
 
-    const chunkText = extractGeminiText(parsed);
+    const chunkText = (parsed as {
+      choices?: Array<{
+        delta?: {
+          content?: string;
+        };
+      }>;
+    }).choices?.[0]?.delta?.content || "";
+
     if (!chunkText) return;
 
-    let delta = chunkText;
-    if (chunkText.startsWith(latestSnapshot)) {
-      delta = chunkText.slice(latestSnapshot.length);
-      latestSnapshot = chunkText;
-    } else if (latestSnapshot.endsWith(chunkText)) {
-      delta = "";
-    } else {
-      latestSnapshot += chunkText;
-    }
-
-    if (!delta) return;
-    fullText += delta;
-    options.onTextDelta(delta);
+    fullText += chunkText;
+    options.onTextDelta(chunkText);
   };
 
   while (true) {
@@ -365,11 +357,11 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
 
-    if (!geminiApiKey) {
+    if (!openAiApiKey) {
       return new Response(
-        JSON.stringify({ error: "GEMINI_API_KEY is not configured" }),
+        JSON.stringify({ error: "OPENAI_API_KEY is not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -440,6 +432,7 @@ When answering:
 - Highlight actionable insights and trends.
 - When suggesting improvements, base them on data gaps (e.g., unresolved questions suggest missing materials, frequently asked topics with low coverage suggest materials need improvement).
 - Format your response in clean markdown with **bold** headings, **bold** for key metrics, bullet points for lists, and markdown tables when presenting comparative or tabular data.
+- Add readable spacing: include one blank line after each heading and one blank line between major sections or paragraphs.
 - If the data doesn't contain information to answer the question, say so clearly.
 
 ${analyticsContext}`;
@@ -464,8 +457,8 @@ ${analyticsContext}`;
           try {
             throwIfAborted(requestAbortController.signal);
 
-            const answer = await streamGeminiResponse({
-              geminiApiKey,
+            const answer = await streamChatResponse({
+              openAiApiKey,
               systemPrompt,
               userPrompt: trimmedMessage,
               historyTurns,
