@@ -26,13 +26,13 @@ const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
     displayName: "Fast (ChatGPT)",
   },
   smart: {
-    modelId: "gemini-2.5-flash-preview-04-17",
+    modelId: "gemini-2.5-flash",
     apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     apiKeyEnvVar: "GEMINI_API_KEY",
     displayName: "Smart (Gemini 2.5 Flash)",
   },
   pro: {
-    modelId: "gemini-2.5-pro-preview-03-25",
+    modelId: "gemini-2.5-pro",
     apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     apiKeyEnvVar: "GEMINI_API_KEY",
     displayName: "Pro (Gemini 2.5 Pro)",
@@ -638,7 +638,7 @@ async function generateGeminiText(options: ChatTextGenerationOptions): Promise<s
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
     }
 
-    throw new Error(`Chat API error: ${aiResponse.status}`);
+    throw new Error(`Chat API error: ${aiResponse.status}${errorText ? ` - ${clipText(errorText, 240)}` : ""}`);
   }
 
   const aiData = await aiResponse.json() as unknown;
@@ -670,7 +670,7 @@ async function generateGeminiTextStream(options: ChatStreamGenerationOptions): P
       throw new HttpError(429, "Rate limit exceeded. Please try again later.");
     }
 
-    throw new Error(`Chat stream API error: ${aiResponse.status}`);
+    throw new Error(`Chat stream API error: ${aiResponse.status}${errorText ? ` - ${clipText(errorText, 240)}` : ""}`);
   }
 
   if (!aiResponse.body) {
@@ -1614,7 +1614,7 @@ ${ragContext}`;
               citations,
               conversationId: activeConversationId,
               meta: {
-                chatModel: CHAT_MODEL,
+                chatModel: chatModelConfig.modelId,
                 embeddingModel: EMBEDDING_MODEL,
                 citationPipelineVersion: CITATION_PIPELINE_VERSION,
               },

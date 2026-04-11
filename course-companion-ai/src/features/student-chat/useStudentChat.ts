@@ -74,10 +74,10 @@ function parseMaybeJson(value: string): unknown {
 
 export type ChatModelTier = 'fast' | 'smart' | 'pro';
 
-export const CHAT_MODEL_OPTIONS: { value: ChatModelTier; label: string }[] = [
-  { value: 'fast', label: 'Fast' },
-  { value: 'smart', label: 'Smart' },
-  { value: 'pro', label: 'Pro' },
+export const CHAT_MODEL_OPTIONS: { value: ChatModelTier; label: string; description: string }[] = [
+  { value: 'fast', label: 'Fast', description: 'Fastest speed' },
+  { value: 'smart', label: 'Smart', description: 'Balance between speed and quality' },
+  { value: 'pro', label: 'Pro', description: 'Best quality answers' },
 ];
 
 export function useStudentChat(routeConversationId: string | null = null) {
@@ -99,6 +99,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(routeConversationId);
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+  const [isClearingConversations, setIsClearingConversations] = useState(false);
   const initialPreferredConversationIdRef = useRef<string | null>(
     routeConversationId
   );
@@ -106,6 +107,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeRequestIdRef = useRef(0);
   const activeAssistantMessageIdRef = useRef<string | null>(null);
+  const conversationLoadRequestIdRef = useRef(0);
+  const conversationRetryTimeoutRef = useRef<number | null>(null);
 
   const cancelActiveRequest = useCallback(() => {
     activeRequestIdRef.current += 1;
@@ -177,7 +180,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }));
 
     setAvailableDocuments(nextDocuments);
-    setSelectedDocumentIds((current) => sanitizeSelectedDocumentIds(current, nextDocuments));
+    setSelectedDocumentIds((current) => {
+      const sanitized = sanitizeSelectedDocumentIds(current, nextDocuments);
+      if (sanitized.length === 0 && nextDocuments.length > 0) {
+        return nextDocuments.map((document) => document.id);
+      }
+      return sanitized;
+    });
     setIsLoadingDocuments(false);
   }, []);
 
@@ -221,12 +230,26 @@ export function useStudentChat(routeConversationId: string | null = null) {
     });
   }, []);
 
-  const loadConversationMessages = useCallback(async (conversationId: string) => {
+  const loadConversationMessages = useCallback(async (
+    conversationId: string,
+    options?: { attempt?: number; requestId?: number }
+  ) => {
+    const attempt = options?.attempt ?? 0;
+    const requestId = options?.requestId ?? (conversationLoadRequestIdRef.current + 1);
+
+    if (!options?.requestId) {
+      conversationLoadRequestIdRef.current = requestId;
+    }
+
     const { data: messageRows, error: messagesError } = await supabase
       .from('messages')
       .select('id, role, content, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: true });
+
+    if (conversationLoadRequestIdRef.current !== requestId) {
+      return;
+    }
 
     if (messagesError) {
       console.error('Failed to load messages:', messagesError);
@@ -236,6 +259,24 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
     const rows = messageRows || [];
     if (rows.length === 0) {
+      if (attempt < 4) {
+        if (conversationRetryTimeoutRef.current !== null) {
+          window.clearTimeout(conversationRetryTimeoutRef.current);
+        }
+
+        conversationRetryTimeoutRef.current = window.setTimeout(() => {
+          if (conversationLoadRequestIdRef.current !== requestId) {
+            return;
+          }
+
+          void loadConversationMessages(conversationId, {
+            attempt: attempt + 1,
+            requestId,
+          });
+        }, 350);
+        return;
+      }
+
       setMessages([]);
       setSelectedMessage(null);
       setHighlightedCitationKey(null);
@@ -419,8 +460,18 @@ export function useStudentChat(routeConversationId: string | null = null) {
   }, [availableCourses, conversations, currentConversationId, selectedCourseId]);
 
   useEffect(() => {
+    conversationLoadRequestIdRef.current += 1;
+    if (conversationRetryTimeoutRef.current !== null) {
+      window.clearTimeout(conversationRetryTimeoutRef.current);
+      conversationRetryTimeoutRef.current = null;
+    }
+
+    setMessages([]);
+    setSelectedMessage(null);
+    setHighlightedCitationKey(null);
+    setActiveVideoSource(null);
+
     if (!currentConversationId) {
-      setMessages([]);
       return;
     }
 
@@ -431,6 +482,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
     if (!input.trim() || isLoading) return;
     if (!currentConversationId && !selectedCourseId) {
       toast.error('Select a course before starting a new chat');
+      return;
+    }
+    if (availableDocuments.length > 0 && selectedDocumentIds.length === 0) {
+      toast.error('Select at least one document or use Select All');
       return;
     }
 
@@ -484,7 +539,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           message: userMessage.content,
           conversationId: currentConversationId,
           courseId: selectedCourseId,
-          selectedDocumentIds,
+          selectedDocumentIds: selectedDocumentIds.length === availableDocuments.length ? [] : selectedDocumentIds,
           model: selectedModel,
         }),
       });
@@ -648,7 +703,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setIsLoading(false);
       }
     }
-  }, [currentConversationId, fetchConversations, input, isLoading, selectedCourseId, selectedDocumentIds, selectedModel]);
+  }, [availableDocuments.length, currentConversationId, fetchConversations, input, isLoading, selectedCourseId, selectedDocumentIds, selectedModel]);
 
   const stopGenerating = useCallback(() => {
     const activeAssistantMessageId = activeAssistantMessageIdRef.current;
@@ -720,6 +775,14 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setSelectedDocumentIds([]);
   }, []);
 
+  const selectAllDocuments = useCallback(() => {
+    setSelectedDocumentIds(availableDocuments.map((document) => document.id));
+  }, [availableDocuments]);
+
+  const applySelectedDocuments = useCallback((documentIds: string[]) => {
+    setSelectedDocumentIds(sanitizeSelectedDocumentIds(documentIds, availableDocuments));
+  }, [availableDocuments]);
+
   const deleteConversation = useCallback(async (conversationId: string) => {
     const conversation = conversations.find((item) => item.id === conversationId);
     const conversationTitle = conversation?.title || 'this conversation';
@@ -755,6 +818,47 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
   }, [conversations, currentConversationId, fetchConversations]);
 
+  const clearAllConversations = useCallback(async () => {
+    if (conversations.length === 0 || isClearingConversations) {
+      return;
+    }
+
+    const shouldDelete = window.confirm('Delete all chat history? This cannot be undone.');
+    if (!shouldDelete) {
+      return;
+    }
+
+    cancelActiveRequest();
+    setIsClearingConversations(true);
+
+    try {
+      const conversationIds = conversations.map((conversation) => conversation.id);
+      const { error } = await supabase
+        .from('conversations')
+        .delete()
+        .in('id', conversationIds);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      await fetchConversations(null);
+      setCurrentConversationId(null);
+      setMessages([]);
+      setSelectedMessage(null);
+      setHighlightedCitationKey(null);
+      setOpeningCitationKey(null);
+      setActiveVideoSource(null);
+      toast.success('Chat history cleared');
+    } catch (error) {
+      console.error('Failed to clear chat history:', error);
+      const message = error instanceof Error ? error.message : 'Failed to clear chat history.';
+      toast.error(message);
+    } finally {
+      setIsClearingConversations(false);
+    }
+  }, [cancelActiveRequest, conversations, fetchConversations, isClearingConversations]);
+
   const openSourcesForMessage = useCallback((message: Message) => {
     setSelectedMessage(message);
     setShowSidePanel(true);
@@ -763,6 +867,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   useEffect(() => () => {
     abortControllerRef.current?.abort();
+    if (conversationRetryTimeoutRef.current !== null) {
+      window.clearTimeout(conversationRetryTimeoutRef.current);
+    }
   }, []);
 
   const focusCitation = useCallback((message: Message, citationNumber: number) => {
@@ -910,11 +1017,14 @@ export function useStudentChat(routeConversationId: string | null = null) {
     selectedDocumentIds,
     documentScopeSummary,
     deletingConversationId,
+    isClearingConversations,
     selectedModel,
     setSelectedModel,
     changeSelectedCourse,
     toggleSelectedDocument,
     clearSelectedDocuments,
+    selectAllDocuments,
+    applySelectedDocuments,
     setInput,
     setShowSidePanel,
     setHighlightedCitationKey,
@@ -923,6 +1033,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     startNewConversation,
     selectConversation,
     deleteConversation,
+    clearAllConversations,
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
