@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef } from 'react';
-import { ChevronDown, Send, Square } from 'lucide-react';
+import { Bot, ChevronDown, Send, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -41,7 +41,8 @@ export function ChatComposer({
   selectedModel,
   onModelChange,
 }: ChatComposerProps) {
-  const selectedModelLabel = CHAT_MODEL_OPTIONS.find((m) => m.value === selectedModel)?.label ?? 'Fast';
+  const selectedModelOption = CHAT_MODEL_OPTIONS.find((modelOption) => modelOption.value === selectedModel);
+  const selectedModelLabel = selectedModelOption?.label ?? 'Fast';
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -88,20 +89,30 @@ export function ChatComposer({
                   variant="ghost"
                   size="sm"
                   className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  disabled={isLoading}
+                  disabled={isLoading || disabled}
                 >
+                  <Bot className="h-3 w-3" />
                   {selectedModelLabel}
                   <ChevronDown className="h-3 w-3" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top">
+              <DropdownMenuContent align="start" side="top" className="w-56">
                 {CHAT_MODEL_OPTIONS.map((option) => (
                   <DropdownMenuItem
                     key={option.value}
                     onSelect={() => onModelChange(option.value)}
-                    className={cn(selectedModel === option.value && 'font-medium')}
+                    className={cn(
+                      'items-start gap-2 py-2',
+                      selectedModel === option.value && 'font-medium'
+                    )}
                   >
-                    {option.label}
+                    <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="space-y-0.5">
+                      <div>{option.label}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {option.description}
+                      </div>
+                    </div>
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

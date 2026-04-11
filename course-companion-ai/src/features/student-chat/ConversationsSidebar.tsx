@@ -31,6 +31,7 @@ interface ConversationsSidebarProps {
   conversations: Conversation[];
   currentConversationId: string | null;
   deletingConversationId: string | null;
+  isClearingConversations: boolean;
   isCollapsed: boolean;
   searchQuery: string;
   availableCourses: Course[];
@@ -39,6 +40,7 @@ interface ConversationsSidebarProps {
   onSelectConversation: (conversationId: string) => void;
   onStartNewConversation: () => void;
   onDeleteConversation: (conversationId: string) => void;
+  onClearHistory: () => void;
   onToggleCollapse: () => void;
   onSearchChange: (query: string) => void;
   onChangeCourse: (courseId: string) => void;
@@ -50,6 +52,7 @@ export function ConversationsSidebar({
   conversations,
   currentConversationId,
   deletingConversationId,
+  isClearingConversations,
   isCollapsed,
   searchQuery,
   availableCourses,
@@ -58,6 +61,7 @@ export function ConversationsSidebar({
   onSelectConversation,
   onStartNewConversation,
   onDeleteConversation,
+  onClearHistory,
   onToggleCollapse,
   onSearchChange,
   onChangeCourse,
@@ -134,7 +138,7 @@ export function ConversationsSidebar({
           <Select
             value={selectedCourseId ?? undefined}
             onValueChange={onChangeCourse}
-            disabled={isLoadingCourses || availableCourses.length === 0}
+            disabled={isLoadingCourses || availableCourses.length === 0 || isClearingConversations}
           >
             <SelectTrigger className="h-8 w-full gap-2 text-sm">
               <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -148,6 +152,27 @@ export function ConversationsSidebar({
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="px-3 pb-3">
+          <Button
+            variant="outline"
+            className="w-full gap-2 text-sm"
+            onClick={onClearHistory}
+            disabled={conversations.length === 0 || isClearingConversations || deletingConversationId !== null}
+          >
+            {isClearingConversations ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Clearing...
+              </>
+            ) : (
+              <>
+                <Trash2 className="h-4 w-4" />
+                Clear History
+              </>
+            )}
+          </Button>
         </div>
 
         <div className="mx-3 mb-2 border-t border-border/60" />
@@ -184,7 +209,7 @@ export function ConversationsSidebar({
                         type="button"
                         variant="ghost"
                         size="icon"
-                        disabled={deletingConversationId === conversation.id}
+                        disabled={deletingConversationId === conversation.id || isClearingConversations}
                         className="h-7 w-7 shrink-0 text-muted-foreground"
                         aria-label={`More actions for ${conversation.title}`}
                         onClick={(event) => event.stopPropagation()}

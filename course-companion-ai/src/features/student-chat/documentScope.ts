@@ -28,8 +28,16 @@ export function getDocumentScopeSummary(
 ): string {
   const selectedDocuments = getSelectedDocuments(documents, selectedDocumentIds);
 
-  if (selectedDocuments.length === 0) {
+  if (selectedDocuments.length === 0 && documents.length === 0) {
     return "All course documents";
+  }
+
+  if (selectedDocuments.length === documents.length) {
+    return "All course documents";
+  }
+
+  if (selectedDocuments.length === 0) {
+    return "No documents selected";
   }
 
   if (selectedDocuments.length === 1) {
@@ -58,8 +66,12 @@ export function getDocumentSelectorLabel(
 
   const selectedDocuments = getSelectedDocuments(documents, selectedDocumentIds);
 
-  if (selectedDocuments.length === 0 || selectedDocuments.length === documents.length) {
+  if (selectedDocuments.length === documents.length) {
     return 'All materials selected';
+  }
+
+  if (selectedDocuments.length === 0) {
+    return 'No materials selected';
   }
 
   return `${selectedDocuments.length} material${selectedDocuments.length === 1 ? '' : 's'} selected`;

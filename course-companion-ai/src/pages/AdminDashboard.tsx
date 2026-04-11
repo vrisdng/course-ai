@@ -21,7 +21,7 @@ import {
   Video,
   X
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -96,6 +96,8 @@ const SUPPORTED_EXTENSIONS = new Set([
   'mp4',
   'webm',
 ]);
+
+const MATERIALS_PAGE_SIZE = 10;
 
 type Course = {
   id: string;
@@ -225,6 +227,9 @@ export default function AdminDashboard() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
   const [accessFilter, setAccessFilter] = useState('all');
+  const [documentTypeFilter, setDocumentTypeFilter] = useState('all');
+  const [materialsPage, setMaterialsPage] = useState(1);
+  const [totalMaterialsCount, setTotalMaterialsCount] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -260,6 +265,7 @@ export default function AdminDashboard() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cancelUploadRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const supabaseAbortable = useMemo(
     () =>
@@ -338,18 +344,89 @@ export default function AdminDashboard() {
       setIsLoadingMaterials(true);
     }
 
-    const { data, error } = await supabase
+    const rangeFrom = (materialsPage - 1) * MATERIALS_PAGE_SIZE;
+    const rangeTo = rangeFrom + MATERIALS_PAGE_SIZE - 1;
+    const normalizedSearchQuery = deferredSearchQuery.trim();
+    const createdAfter = (() => {
+      const now = new Date();
+      if (dateFilter === 'last_7_days') {
+        now.setDate(now.getDate() - 7);
+        return now.toISOString();
+      }
+      if (dateFilter === 'last_30_days') {
+        now.setDate(now.getDate() - 30);
+        return now.toISOString();
+      }
+      if (dateFilter === 'this_year') {
+        return new Date(now.getFullYear(), 0, 1).toISOString();
+      }
+      return null;
+    })();
+
+    let query: any = supabase
       .from('materials')
-      .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at')
-      .order('created_at', { ascending: false })
-      .limit(200);
+      .select(
+        'id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at',
+        { count: 'exact' }
+      )
+      .order('created_at', { ascending: false });
+
+    if (courseFilter !== 'all') {
+      query = query.eq('course_id', courseFilter);
+    }
+    if (academicTermFilter !== 'all') {
+      query = query.eq('academic_term_id', academicTermFilter);
+    }
+    if (statusFilter !== 'all') {
+      query = query.eq('processing_status', statusFilter);
+    }
+    if (accessFilter !== 'all') {
+      query = query.eq('access_scope', accessFilter);
+    }
+    if (documentTypeFilter === 'video') {
+      query = query.eq('file_type', 'video');
+    } else if (documentTypeFilter === 'notes') {
+      query = query.in('file_type', ['notes', 'pdf', 'slides']);
+    }
+    if (createdAfter) {
+      query = query.gte('created_at', createdAfter);
+    }
+    if (normalizedSearchQuery) {
+      const escapedSearch = normalizedSearchQuery.replace(/[%_,]/g, (character) => `\\${character}`);
+      query = query.or(`file_name.ilike.%${escapedSearch}%,topic.ilike.%${escapedSearch}%`);
+    }
+
+    const { data, error, count } = await query.range(rangeFrom, rangeTo);
 
     if (error) {
-      const fallback = await supabase
+      let fallbackQuery: any = supabase
         .from('materials')
-        .select('id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, is_public, created_at')
-        .order('created_at', { ascending: false })
-        .limit(200);
+        .select(
+          'id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, is_public, created_at',
+          { count: 'exact' }
+        )
+        .order('created_at', { ascending: false });
+
+      if (courseFilter !== 'all') {
+        fallbackQuery = fallbackQuery.eq('course_id', courseFilter);
+      }
+      if (statusFilter !== 'all') {
+        fallbackQuery = fallbackQuery.eq('processing_status', statusFilter);
+      }
+      if (documentTypeFilter === 'video') {
+        fallbackQuery = fallbackQuery.eq('file_type', 'video');
+      } else if (documentTypeFilter === 'notes') {
+        fallbackQuery = fallbackQuery.in('file_type', ['notes', 'pdf', 'slides']);
+      }
+      if (createdAfter) {
+        fallbackQuery = fallbackQuery.gte('created_at', createdAfter);
+      }
+      if (normalizedSearchQuery) {
+        const escapedSearch = normalizedSearchQuery.replace(/[%_,]/g, (character) => `\\${character}`);
+        fallbackQuery = fallbackQuery.or(`file_name.ilike.%${escapedSearch}%,topic.ilike.%${escapedSearch}%`);
+      }
+
+      const fallback = await fallbackQuery.range(rangeFrom, rangeTo);
 
       if (fallback.error) {
         toast.error('Failed to load materials');
@@ -366,6 +443,7 @@ export default function AdminDashboard() {
       })) as Material[];
 
       setMaterials(fallbackMaterials);
+      setTotalMaterialsCount(fallback.count || 0);
       if (!options?.silent) {
         setIsLoadingMaterials(false);
       }
@@ -373,16 +451,29 @@ export default function AdminDashboard() {
     }
 
     setMaterials((data || []) as Material[]);
+    setTotalMaterialsCount(count || 0);
     if (!options?.silent) {
       setIsLoadingMaterials(false);
     }
-  }, []);
+  }, [
+    academicTermFilter,
+    accessFilter,
+    courseFilter,
+    dateFilter,
+    deferredSearchQuery,
+    documentTypeFilter,
+    materialsPage,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     void fetchCourses();
     void fetchAcademicTerms();
+  }, [fetchAcademicTerms, fetchCourses]);
+
+  useEffect(() => {
     void fetchMaterials();
-  }, [fetchAcademicTerms, fetchCourses, fetchMaterials]);
+  }, [fetchMaterials]);
 
   const courseLabelById = useMemo(() => {
     return courses.reduce<Record<string, string>>((acc, course) => {
@@ -441,39 +532,26 @@ export default function AdminDashboard() {
     },
   ];
 
-  const filteredMaterials = useMemo(() => {
-    const now = new Date();
-
-    return materials.filter((material) => {
-      const haystack = `${material.file_name} ${material.topic || ''}`.toLowerCase();
-      const searchMatch = !searchQuery.trim() || haystack.includes(searchQuery.trim().toLowerCase());
-      const courseMatch = courseFilter === 'all' || material.course_id === courseFilter;
-      const academicTermMatch = academicTermFilter === 'all' || material.academic_term_id === academicTermFilter;
-      const statusMatch = statusFilter === 'all' || material.processing_status === statusFilter;
-      const accessMatch = accessFilter === 'all' || material.access_scope === accessFilter;
-
-      let dateMatch = true;
-      if (dateFilter !== 'all') {
-        const created = new Date(material.created_at);
-        if (dateFilter === 'last_7_days') {
-          const dayDiff = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
-          dateMatch = dayDiff <= 7;
-        } else if (dateFilter === 'last_30_days') {
-          const dayDiff = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
-          dateMatch = dayDiff <= 30;
-        } else if (dateFilter === 'this_year') {
-          dateMatch = created.getFullYear() === now.getFullYear();
-        }
-      }
-
-      return searchMatch && courseMatch && academicTermMatch && statusMatch && accessMatch && dateMatch;
-    });
-  }, [accessFilter, academicTermFilter, courseFilter, dateFilter, materials, searchQuery, statusFilter]);
+  const totalMaterialPages = Math.max(1, Math.ceil(totalMaterialsCount / MATERIALS_PAGE_SIZE));
+  const visibleMaterialRangeStart = totalMaterialsCount === 0 ? 0 : (materialsPage - 1) * MATERIALS_PAGE_SIZE + 1;
+  const visibleMaterialRangeEnd = totalMaterialsCount === 0
+    ? 0
+    : Math.min(materialsPage * MATERIALS_PAGE_SIZE, totalMaterialsCount);
 
   const hasBackgroundProcessing = useMemo(
     () => materials.some((material) => material.processing_status === 'processing'),
     [materials]
   );
+
+  useEffect(() => {
+    setMaterialsPage(1);
+  }, [academicTermFilter, accessFilter, courseFilter, dateFilter, documentTypeFilter, searchQuery, statusFilter]);
+
+  useEffect(() => {
+    if (materialsPage > totalMaterialPages) {
+      setMaterialsPage(totalMaterialPages);
+    }
+  }, [materialsPage, totalMaterialPages]);
 
   useEffect(() => {
     if (!hasBackgroundProcessing) {
@@ -734,7 +812,8 @@ export default function AdminDashboard() {
     courseId: string,
     accessScope: AccessScope,
     uploaderId: string,
-    academicTermId: string
+    academicTermId: string,
+    uploadController: AbortController
   ): Promise<UploadOutcome> => {
     const extension = targetFile.name.split('.').pop()?.toLowerCase() || '';
     const isSupported = targetFile.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
@@ -749,11 +828,8 @@ export default function AdminDashboard() {
 
     // Video files use client-side audio extraction — handle separately
     if (isVideoUpload(targetFile)) {
-      if (cancelUploadRef.current) throw new Error('Upload cancelled');
-
-      // Use the AbortController already set by the upload loop
-      if (!abortControllerRef.current) {
-        abortControllerRef.current = new AbortController();
+      if (cancelUploadRef.current || uploadController.signal.aborted) {
+        throw new Error('Upload cancelled');
       }
 
       await uploadVideoForTranscription({
@@ -763,7 +839,7 @@ export default function AdminDashboard() {
           setCurrentUploadStatusText(update.statusText);
           setCurrentUploadProgress(update.progress);
         },
-        signal: abortControllerRef.current.signal,
+        signal: uploadController.signal,
       });
       return 'processing';
     }
@@ -779,7 +855,7 @@ export default function AdminDashboard() {
       bucket: 'course-materials',
       path: filePath,
       body: targetFile,
-      signal: abortControllerRef.current?.signal,
+      signal: uploadController.signal,
       onProgress: (fraction) => {
         const pct = Math.round(fraction * 100);
         setCurrentUploadStatusText(`Uploading ${targetFile.name}... ${pct}%`);
@@ -789,7 +865,7 @@ export default function AdminDashboard() {
 
     console.log('[admin-upload]', `Upload complete in ${((performance.now() - uploadStart) / 1000).toFixed(1)}s`);
 
-    if (cancelUploadRef.current) {
+    if (cancelUploadRef.current || uploadController.signal.aborted) {
       throw new Error('Upload cancelled');
     }
 
@@ -822,7 +898,7 @@ export default function AdminDashboard() {
       throw new Error(insertError?.message || 'Failed to create material record');
     }
 
-    if (cancelUploadRef.current) {
+    if (cancelUploadRef.current || uploadController.signal.aborted) {
       throw new Error('Upload cancelled');
     }
 
@@ -834,7 +910,7 @@ export default function AdminDashboard() {
           materialId: material.id,
           text,
         },
-        signal: abortControllerRef.current?.signal,
+        signal: uploadController.signal,
       });
 
       if (ingestError) {
@@ -853,7 +929,7 @@ export default function AdminDashboard() {
         filePath,
         fileType: extension,
       },
-      signal: abortControllerRef.current?.signal,
+      signal: uploadController.signal,
     });
 
     if (parseError) {
@@ -914,10 +990,18 @@ export default function AdminDashboard() {
         setCurrentUploadProgress(null);
         setCurrentUploadFileSize(targetFile.size);
         setCurrentUploadIndex({ current: index + 1, total: queue.length });
-        abortControllerRef.current = new AbortController();
+        const uploadController = new AbortController();
+        abortControllerRef.current = uploadController;
 
         try {
-          const outcome = await uploadSingleFile(targetFile, courseId, accessScope, uploaderId, academicTermId);
+          const outcome = await uploadSingleFile(
+            targetFile,
+            courseId,
+            accessScope,
+            uploaderId,
+            academicTermId,
+            uploadController
+          );
           if (outcome === 'processing') {
             processingCount += 1;
           } else {
@@ -925,7 +1009,7 @@ export default function AdminDashboard() {
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Upload failed';
-          const isAborted = abortControllerRef.current?.signal.aborted;
+          const isAborted = uploadController.signal.aborted;
           if (message === 'Upload cancelled' || cancelUploadRef.current || isAborted) {
             break;
           }
@@ -933,7 +1017,9 @@ export default function AdminDashboard() {
           failedFiles.push(targetFile);
           toast.error(`${targetFile.name}: ${message}`);
         } finally {
-          abortControllerRef.current = null;
+          if (abortControllerRef.current === uploadController) {
+            abortControllerRef.current = null;
+          }
         }
       }
 
@@ -970,10 +1056,10 @@ export default function AdminDashboard() {
       cancelUploadRef.current = false;
       abortControllerRef.current = null;
       setCurrentUploadFileName(null);
-    setCurrentUploadStatusText(null);
-    setCurrentUploadProgress(null);
-    setCurrentUploadFileSize(null);
-    setCurrentUploadIndex(null);
+      setCurrentUploadStatusText(null);
+      setCurrentUploadProgress(null);
+      setCurrentUploadFileSize(null);
+      setCurrentUploadIndex(null);
     }
   };
 
@@ -2121,7 +2207,7 @@ export default function AdminDashboard() {
                 </div>
 
                 {showFilters && (
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                     <Select value={courseFilter} onValueChange={setCourseFilter}>
                       <SelectTrigger>
                         <SelectValue placeholder="All Courses" />
@@ -2159,6 +2245,17 @@ export default function AdminDashboard() {
                             {term.label}
                           </SelectItem>
                         ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Document Type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Document Type</SelectItem>
+                        <SelectItem value="video">Video (MP4/WEBM)</SelectItem>
+                        <SelectItem value="notes">Notes (DOCX/PDF/PPTX)</SelectItem>
                       </SelectContent>
                     </Select>
 
@@ -2214,7 +2311,7 @@ export default function AdminDashboard() {
                           </div>
                         </TableCell>
                       </TableRow>
-                    ) : filteredMaterials.length === 0 ? (
+                    ) : materials.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={7}>
                           <div className="flex flex-col items-center justify-center py-6 text-center text-sm text-muted-foreground">
@@ -2224,7 +2321,7 @@ export default function AdminDashboard() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredMaterials.map((material) => (
+                      materials.map((material) => (
                         <TableRow key={material.id}>
                           <TableCell className="font-medium">
                             <div className="flex items-center gap-2">
@@ -2324,6 +2421,33 @@ export default function AdminDashboard() {
                     )}
                   </TableBody>
                   </Table>
+                </div>
+
+                <div className="flex flex-col gap-3 border-t pt-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                  <p>
+                    Showing {visibleMaterialRangeStart}-{visibleMaterialRangeEnd} of {totalMaterialsCount} materials
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMaterialsPage((current) => Math.max(1, current - 1))}
+                      disabled={materialsPage <= 1 || isLoadingMaterials}
+                    >
+                      Prev
+                    </Button>
+                    <span>
+                      Page {materialsPage} of {totalMaterialPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMaterialsPage((current) => Math.min(totalMaterialPages, current + 1))}
+                      disabled={materialsPage >= totalMaterialPages || isLoadingMaterials}
+                    >
+                      Next
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

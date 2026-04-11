@@ -29,6 +29,7 @@ import { useStudentChat } from '@/features/student-chat/useStudentChat';
 
 export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previousRouteConversationIdRef = useRef<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
   const [isEnrollOpen, setIsEnrollOpen] = useState(false);
@@ -59,9 +60,12 @@ export default function StudentChat() {
     selectedModel,
     setSelectedModel,
     deletingConversationId,
+    isClearingConversations,
     changeSelectedCourse,
     toggleSelectedDocument,
     clearSelectedDocuments,
+    selectAllDocuments,
+    applySelectedDocuments,
     setInput,
     setShowSidePanel,
     setHighlightedCitationKey,
@@ -70,6 +74,7 @@ export default function StudentChat() {
     startNewConversation,
     selectConversation,
     deleteConversation,
+    clearAllConversations,
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
@@ -81,10 +86,22 @@ export default function StudentChat() {
   }, [messages]);
 
   useEffect(() => {
+    const normalizedRouteConversationId = routeConversationId || null;
+    const previousRouteConversationId = previousRouteConversationIdRef.current;
+    const routeConversationChanged = normalizedRouteConversationId !== previousRouteConversationId;
+
+    if (routeConversationChanged && currentConversationId !== normalizedRouteConversationId) {
+      return;
+    }
+
     const targetPath = currentConversationId ? `/chat/${currentConversationId}` : '/chat';
     if (location.pathname === targetPath) return;
     navigate(targetPath, { replace: true });
-  }, [currentConversationId, location.pathname, navigate]);
+  }, [currentConversationId, location.pathname, navigate, routeConversationId]);
+
+  useEffect(() => {
+    previousRouteConversationIdRef.current = routeConversationId || null;
+  }, [routeConversationId]);
 
   const handleStartNewConversation = () => {
     if (location.pathname !== '/chat') {
@@ -140,6 +157,7 @@ export default function StudentChat() {
           conversations={conversations}
           currentConversationId={currentConversationId}
           deletingConversationId={deletingConversationId}
+          isClearingConversations={isClearingConversations}
           isCollapsed={isSidebarCollapsed}
           searchQuery={conversationSearch}
           availableCourses={availableCourses}
@@ -148,6 +166,7 @@ export default function StudentChat() {
           onSelectConversation={selectConversation}
           onStartNewConversation={handleStartNewConversation}
           onDeleteConversation={deleteConversation}
+          onClearHistory={clearAllConversations}
           onToggleCollapse={() => setIsSidebarCollapsed((c) => !c)}
           onSearchChange={setConversationSearch}
           onChangeCourse={changeSelectedCourse}
@@ -169,6 +188,7 @@ export default function StudentChat() {
             <div className="mx-auto max-w-3xl space-y-6">
               <MessageList
                 messages={messages}
+                showEmptyState={!currentConversationId}
                 onSuggestionClick={setInput}
                 onOpenSources={openSourcesForMessage}
                 onCitationClick={focusCitation}
@@ -192,8 +212,9 @@ export default function StudentChat() {
                 isLoading={isLoadingDocuments}
                 disabled={!selectedCourseId}
                 buttonClassName="w-auto max-w-full justify-between gap-3 px-3 text-left font-normal"
-                onToggleDocument={toggleSelectedDocument}
+                onSelectAllDocuments={selectAllDocuments}
                 onClearSelection={clearSelectedDocuments}
+                onApplySelection={applySelectedDocuments}
               />
             )}
             documentHint={selectedCourseId && !isLoadingDocuments && availableDocuments.length === 0

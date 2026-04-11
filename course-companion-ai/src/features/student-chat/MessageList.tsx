@@ -16,6 +16,7 @@ const SUGGESTIONS = [
 
 interface MessageListProps {
   messages: Message[];
+  showEmptyState?: boolean;
   onSuggestionClick: (suggestion: string) => void;
   onOpenSources: (message: Message) => void;
   onCitationClick: (message: Message, citationNumber: number) => void;
@@ -23,11 +24,16 @@ interface MessageListProps {
 
 export function MessageList({
   messages,
+  showEmptyState = true,
   onSuggestionClick,
   onOpenSources,
   onCitationClick,
 }: MessageListProps) {
   if (messages.length === 0) {
+    if (!showEmptyState) {
+      return null;
+    }
+
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="mb-4 rounded-full bg-primary/10 p-4">
