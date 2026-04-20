@@ -1,0 +1,40 @@
+wing: course_companion_ai
+rooms:
+- name: plans
+  description: Files from plans/
+  keywords:
+  - plans
+  - plans
+- name: supabase
+  description: Files from supabase/
+  keywords:
+  - supabase
+  - supabase
+- name: public
+  description: Files from public/
+  keywords:
+  - public
+  - public
+- name: external
+  description: Files from external/
+  keywords:
+  - external
+  - external
+- name: src
+  description: Files from src/
+  keywords:
+  - src
+  - src
+- name: testing
+  description: Files from test/
+  keywords:
+  - testing
+  - test
+- name: frontend
+  description: Files from components/
+  keywords:
+  - frontend
+  - components
+- name: general
+  description: Files that don't fit other rooms
+  keywords: []

@@ -1,0 +1,401 @@
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
+import { getDeferredUploadValidationError, isTextLikeUpload, isVideoUpload } from '@/lib/materialUpload';
+import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
+
+interface Material {
+  id: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number | null;
+  processing_status: string;
+  processing_error: string | null;
+  course_id: string;
+  topic: string | null;
+  week_number: number | null;
+  created_at: string;
+}
+
+interface UploadProgress {
+  fileName: string;
+  stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
+  progress: number; // 0–100
+  error?: string;
+  statusText?: string;
+}
+
+const ACCEPTED_TYPES: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'image/png': 'other',
+  'image/jpeg': 'other',
+  'image/webp': 'other',
+  'image/gif': 'other',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'notes',
+  'application/msword': 'notes',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'slides',
+  'video/mp4': 'video',
+  'video/webm': 'video',
+};
+
+const ACCEPTED_EXTENSIONS = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.pptx,.mp4,.webm';
+
+export function useMaterials(courseId: string | null) {
+  const { session } = useAuth();
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [uploads, setUploads] = useState<Map<string, UploadProgress>>(new Map());
+
+  const fetchMaterials = useCallback(async (options?: { silent?: boolean }) => {
+    if (!courseId) {
+      setMaterials([]);
+      setIsLoading(false);
+      return;
+    }
+
+    if (!options?.silent) {
+      setIsLoading(true);
+    }
+
+    const { data, error } = await supabase
+      .from('materials')
+      .select('*')
+      .eq('course_id', courseId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching materials:', error);
+      toast.error('Failed to load materials');
+    } else {
+      setMaterials(data || []);
+    }
+    if (!options?.silent) {
+      setIsLoading(false);
+    }
+  }, [courseId]);
+
+  useEffect(() => {
+    fetchMaterials();
+  }, [fetchMaterials]);
+
+  useEffect(() => {
+    if (!materials.some((material) => material.processing_status === 'processing')) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void fetchMaterials({ silent: true });
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [fetchMaterials, materials]);
+
+  const updateUpload = (id: string, update: Partial<UploadProgress>) => {
+    setUploads((prev) => {
+      const next = new Map(prev);
+      const current = next.get(id);
+      if (current) {
+        next.set(id, { ...current, ...update });
+      }
+      return next;
+    });
+  };
+
+  const uploadFile = async (file: File) => {
+    if (!courseId || !session) {
+      toast.error('No course selected or not logged in');
+      return;
+    }
+
+    const extension = file.name.split('.').pop()?.toLowerCase() || '';
+    const typeFromExtension: Record<string, string> = {
+      pdf: 'pdf',
+      png: 'other',
+      jpg: 'other',
+      jpeg: 'other',
+      webp: 'other',
+      gif: 'other',
+      doc: 'notes',
+      docx: 'notes',
+      pptx: 'slides',
+      md: 'notes',
+      markdown: 'notes',
+      txt: 'notes',
+      csv: 'notes',
+      json: 'notes',
+      ts: 'code',
+      tsx: 'code',
+      js: 'code',
+      jsx: 'code',
+      py: 'code',
+      java: 'code',
+      go: 'code',
+      rb: 'code',
+      rs: 'code',
+      c: 'code',
+      cpp: 'code',
+      sql: 'code',
+      mp4: 'video',
+      webm: 'video',
+    };
+
+    const fileType = ACCEPTED_TYPES[file.type] || typeFromExtension[extension];
+    if (!fileType) {
+      const label = file.type ? file.type : extension || 'unknown';
+      toast.error(`Unsupported file type: ${label}`);
+      return;
+    }
+
+    const uploadValidationError = await getDeferredUploadValidationError(file);
+    if (uploadValidationError) {
+      toast.error(uploadValidationError);
+      return;
+    }
+
+    const uploadId = `${file.name}-${Date.now()}`;
+    let processingHintTimeouts: ReturnType<typeof setTimeout>[] = [];
+    setUploads((prev) => {
+      const next = new Map(prev);
+      next.set(uploadId, {
+        fileName: file.name,
+        stage: 'uploading',
+        progress: 5,
+        statusText: isVideoUpload(file) ? 'Uploading video...' : 'Collecting your file...',
+      });
+      return next;
+    });
+
+    try {
+      // --- Video files: use the client-side extraction pipeline ---
+      if (isVideoUpload(file)) {
+        await uploadVideoForTranscription({
+          file,
+          courseId,
+          onProgress: (update) => {
+            updateUpload(uploadId, {
+              stage: update.stage,
+              progress: update.progress,
+              statusText: update.statusText,
+            });
+          },
+        });
+
+        const isBackground = true; // multi-chunk or single — server continues in background
+        updateUpload(uploadId, {
+          stage: 'parsing',
+          progress: 40,
+          statusText: 'Transcribing in background...',
+        });
+        toast.success(`${file.name} is being transcribed. This may take a few minutes.`);
+        await fetchMaterials();
+
+        setTimeout(() => {
+          setUploads((prev) => {
+            const next = new Map(prev);
+            next.delete(uploadId);
+            return next;
+          });
+        }, 3000);
+        return;
+      }
+
+      // --- Non-video files: existing flow ---
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'bin';
+      const storagePath = `${courseId}/${Date.now()}-${file.name}`;
+
+      const { error: storageError } = await supabase.storage
+        .from('course-materials')
+        .upload(storagePath, file);
+
+      if (storageError) throw new Error(`Upload failed: ${storageError.message}`);
+
+      updateUpload(uploadId, {
+        stage: 'uploading',
+        progress: 40,
+        statusText: 'Saving your file...',
+      });
+
+      // Create material record
+      const { data: material, error: materialError } = await supabase
+        .from('materials')
+        .insert({
+          course_id: courseId,
+          file_name: file.name,
+          file_path: storagePath,
+          file_type: fileType as any,
+          file_size: file.size,
+          processing_status: 'pending' as any,
+        })
+        .select()
+        .single();
+
+      if (materialError || !material) {
+        throw new Error(`Failed to create material record: ${materialError?.message}`);
+      }
+
+      updateUpload(uploadId, {
+        stage: 'parsing',
+        progress: 50,
+        statusText: 'Reading the material...',
+      });
+
+      processingHintTimeouts = [
+        setTimeout(() => {
+          updateUpload(uploadId, {
+            stage: 'parsing',
+            progress: 62,
+            statusText: 'Organizing the content...',
+          });
+        }, 1200),
+        setTimeout(() => {
+          updateUpload(uploadId, {
+            stage: 'embedding',
+            progress: 78,
+            statusText: 'Synthesizing it for quick answers...',
+          });
+        }, 2800),
+        setTimeout(() => {
+          updateUpload(uploadId, {
+            stage: 'embedding',
+            progress: 90,
+            statusText: 'Finishing up...',
+          });
+        }, 5000),
+      ];
+
+      const processingFunction = isTextLikeUpload(file)
+        ? 'ingest-material'
+        : 'parse-document';
+      const { data: parseResult, error: parseError } = await supabase.functions.invoke(
+        processingFunction,
+        {
+          body: isTextLikeUpload(file)
+            ? {
+                materialId: material.id,
+                text: await file.text(),
+              }
+            : {
+                materialId: material.id,
+                filePath: storagePath,
+                fileType: ext,
+              },
+        }
+      );
+      processingHintTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+
+      if (parseError) {
+        throw new Error(`Processing failed: ${parseError.message}`);
+      }
+
+      if (parseResult?.error) {
+        throw new Error(parseResult.error);
+      }
+
+      const isQueuedForBackgroundProcessing =
+        processingFunction === 'parse-document' && parseResult?.queued;
+
+      updateUpload(uploadId, {
+        stage: isQueuedForBackgroundProcessing ? 'parsing' : 'done',
+        progress: isQueuedForBackgroundProcessing ? 70 : 100,
+        statusText: isQueuedForBackgroundProcessing
+          ? 'Queued for background processing...'
+          : 'Ready for student questions',
+      });
+      toast.success(
+        isQueuedForBackgroundProcessing
+          ? `${file.name} was uploaded and queued for background processing`
+          : `${file.name} is ready for questions`
+      );
+
+      // Refresh materials list
+      await fetchMaterials();
+
+      // Remove upload from tracker after a short delay
+      setTimeout(() => {
+        setUploads((prev) => {
+          const next = new Map(prev);
+          next.delete(uploadId);
+          return next;
+        });
+      }, 3000);
+    } catch (error) {
+      processingHintTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+      const message = error instanceof Error ? error.message : 'Upload failed';
+      console.error('Upload error:', error);
+      updateUpload(uploadId, { stage: 'error', progress: 0, error: message });
+      toast.error(message);
+    }
+  };
+
+  const deleteMaterial = async (materialId: string) => {
+    const material = materials.find((m) => m.id === materialId);
+    if (!material) return;
+
+    try {
+      // Delete chunks first
+      const { error: chunksError } = await supabase
+        .from('chunks')
+        .delete()
+        .eq('material_id', materialId);
+
+      if (chunksError) {
+        console.error('Error deleting chunks:', chunksError);
+      }
+
+      // Delete material record
+      const { error: materialError } = await supabase
+        .from('materials')
+        .delete()
+        .eq('id', materialId);
+
+      if (materialError) throw materialError;
+
+      // Delete from storage
+      await supabase.storage.from('course-materials').remove([material.file_path]);
+
+      toast.success(`${material.file_name} deleted`);
+      await fetchMaterials();
+    } catch (error) {
+      console.error('Delete error:', error);
+      toast.error('Failed to delete material');
+    }
+  };
+
+  const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
+
+  const reindexMaterial = async (materialId: string) => {
+    setReindexingIds((prev) => new Set(prev).add(materialId));
+    try {
+      const { data, error } = await supabase.functions.invoke('transcribe-video', {
+        body: { materialId, refinalize: true },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success('Re-indexing started — this may take a few minutes.');
+      await fetchMaterials();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Re-index failed';
+      toast.error(message);
+    } finally {
+      setReindexingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(materialId);
+        return next;
+      });
+    }
+  };
+
+  return {
+    materials,
+    isLoading,
+    uploads,
+    uploadFile,
+    deleteMaterial,
+    reindexMaterial,
+    reindexingIds,
+    refreshMaterials: fetchMaterials,
+    acceptedExtensions: ACCEPTED_EXTENSIONS,
+  };
+}

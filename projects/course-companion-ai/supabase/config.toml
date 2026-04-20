@@ -1,0 +1,34 @@
+project_id = "ksthojmoifnunsatmday"
+
+[functions.rag-chat]
+verify_jwt = false
+
+[functions.ingest-material]
+verify_jwt = false
+
+[functions.parse-document]
+verify_jwt = false
+
+[functions.upload-video]
+verify_jwt = false
+
+[functions.transcribe-video]
+verify_jwt = false
+
+[functions.process-material-job]
+verify_jwt = false
+
+[functions.manage-course-invites]
+verify_jwt = false
+
+[functions.check-course-invite]
+verify_jwt = false
+
+[functions.redeem-course-invite]
+verify_jwt = false
+
+[functions.analytics-chat]
+verify_jwt = false
+
+[functions.generate-course-code]
+verify_jwt = false
