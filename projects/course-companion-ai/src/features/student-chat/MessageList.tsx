@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 
 import { cn } from '@/lib/utils';
 
-import { markdownWithCitationLinks } from './citations';
+import { groupAdjacentCitations, isWebcastCitation, markdownWithCitationLinks, normalizeHeadings } from './citations';
 import type { Message } from './types';
 
 const SUGGESTIONS = [
@@ -105,35 +105,44 @@ export function MessageList({
                     ),
                     a: ({ href, children }) => {
                       if (href?.startsWith('citation:')) {
-                        const citationNumber = Number(href.split(':')[1]);
-                        const citation = message.citations?.[citationNumber - 1];
+                        const key = href.split(':')[1];
+                        const nums = key.split('+').map(Number);
+                        const resolvedCitations = nums
+                          .map((n) => message.citations?.[n - 1])
+                          .filter(Boolean) as NonNullable<typeof message.citations>[number][];
 
-                        if (Number.isFinite(citationNumber)) {
-                          if (!citation) {
+                        if (nums.every(Number.isFinite)) {
+                          const displayNum = nums.join('·');
+
+                          if (resolvedCitations.length === 0) {
                             return (
                               <span className="mx-0.5 inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                                [{citationNumber}]
+                                [{displayNum}]
                               </span>
                             );
                           }
 
-                          const WEBCAST_TYPES = new Set(['video', 'transcript', 'mp4', 'webm']);
-                          const docType = citation.documentType?.toLowerCase() ?? '';
-                          const isWebcast = WEBCAST_TYPES.has(docType);
-                          const docLabel = isWebcast ? 'Webcast' : 'Notes';
+                          const anyWebcast = resolvedCitations.some(isWebcastCitation);
+                          const anyNotes = resolvedCitations.some((c) => !isWebcastCitation(c));
+                          const sourceLabel = [
+                            anyWebcast ? 'Webcast' : null,
+                            anyNotes ? 'Notes' : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ');
 
                           return (
                             <button
                               type="button"
-                              title={`Source ${citationNumber}: ${citation.documentName}`}
+                              title={resolvedCitations.map((c) => c.documentName).join(' + ')}
                               className="mx-0.5 inline-flex items-center gap-0.5 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary hover:bg-primary/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                onCitationClick(message, citationNumber);
+                                onCitationClick(message, nums[0]);
                               }}
                             >
-                              [{citationNumber}] <span className="opacity-70">{docLabel}</span>
+                              [{displayNum}] <span className="opacity-70">{sourceLabel}</span>
                             </button>
                           );
                         }
@@ -157,7 +166,13 @@ export function MessageList({
                     },
                   }}
                 >
-                  {markdownWithCitationLinks(message.content, message.citations?.length)}
+                  {markdownWithCitationLinks(
+                    groupAdjacentCitations(
+                      normalizeHeadings(message.content),
+                      message.citations ?? []
+                    ),
+                    message.citations?.length
+                  )}
                 </ReactMarkdown>
               </div>
             )}

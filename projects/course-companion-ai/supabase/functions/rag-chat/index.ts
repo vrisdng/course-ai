@@ -47,7 +47,7 @@ function resolveChatModelTier(raw: unknown): ChatModelTier {
 }
 const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
 const HIGH_RECALL_MATCH_COUNT = 18;
-const FINAL_MATCH_COUNT = 6;
+const FINAL_MATCH_COUNT = 10;
 const RELEVANCE_FLOOR = 0.55;
 const CITATION_TOKEN_PATTERN = "<<cite:(\\d+)>>";
 const CONVERSATION_HISTORY_FETCH_LIMIT = 24;
