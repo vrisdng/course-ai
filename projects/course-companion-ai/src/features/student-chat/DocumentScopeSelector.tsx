@@ -105,7 +105,7 @@ export function DocumentScopeSelector({
         <DialogHeader>
           <DialogTitle>Select Documents</DialogTitle>
           <DialogDescription>
-            Choose the course materials the chat should focus on. If no specific documents are selected, the chat will use all course documents.
+            Choose the course materials the chat should focus on. Selecting no documents will answer from general knowledge without using any uploaded materials.
           </DialogDescription>
         </DialogHeader>
 
@@ -114,8 +114,8 @@ export function DocumentScopeSelector({
             {allSelected
               ? 'Using all course documents'
               : draftSelectedDocumentIds.length === 0
-                ? 'No documents selected'
-              : `${draftSelectedDocumentIds.length} material${draftSelectedDocumentIds.length === 1 ? '' : 's'} selected`}
+                ? 'No documents selected.'
+                : `${draftSelectedDocumentIds.length} material${draftSelectedDocumentIds.length === 1 ? '' : 's'} selected`}
           </p>
           <div className="flex items-center gap-2">
             <Button

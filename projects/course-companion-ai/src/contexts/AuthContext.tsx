@@ -10,12 +10,14 @@ interface Profile {
   role: 'student' | 'admin';
   avatar_url: string | null;
   courseEnrolled: string[];
+  custom_instructions: string | null;
   created_at: string;
   updated_at: string;
 }
 
-type ProfileRow = Omit<Profile, 'courseEnrolled'> & {
+type ProfileRow = Omit<Profile, 'courseEnrolled' | 'custom_instructions'> & {
   course_enrolled: string[] | null;
+  custom_instructions: string | null;
 };
 
 interface AuthContextType {
@@ -58,6 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role: row.role,
         avatar_url: row.avatar_url,
         courseEnrolled: row.course_enrolled ?? [],
+        custom_instructions: row.custom_instructions,
         created_at: row.created_at,
         updated_at: row.updated_at,
       };

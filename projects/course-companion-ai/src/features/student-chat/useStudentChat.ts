@@ -484,10 +484,6 @@ export function useStudentChat(routeConversationId: string | null = null) {
       toast.error('Select a course before starting a new chat');
       return;
     }
-    if (availableDocuments.length > 0 && selectedDocumentIds.length === 0) {
-      toast.error('Select at least one document or use Select All');
-      return;
-    }
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -541,6 +537,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           courseId: selectedCourseId,
           selectedDocumentIds: selectedDocumentIds.length === availableDocuments.length ? [] : selectedDocumentIds,
           model: selectedModel,
+          skipRag: availableDocuments.length > 0 && selectedDocumentIds.length === 0,
         }),
       });
 
