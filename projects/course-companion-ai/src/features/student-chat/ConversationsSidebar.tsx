@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, MessageSquare, Plus, Search, Trash2, UserPlus, X } from 'lucide-react';
+import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, MessageSquare, Plus, Search, Settings, Trash2, UserPlus, X } from 'lucide-react';
 import { toast } from 'sonner';
+
+import { Link } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -269,6 +271,16 @@ export function ConversationsSidebar({
                   Clear History
                 </>
               )}
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full gap-2 text-sm mt-2 justify-start"
+              asChild
+            >
+              <Link to="/settings">
+                <Settings className="h-4 w-4" />
+                Settings
+              </Link>
             </Button>
           </div>
         </div>

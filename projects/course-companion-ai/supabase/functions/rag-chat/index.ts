@@ -1249,6 +1249,16 @@ serve(async (req) => {
       );
     }
 
+    const { data: userProfile } = await supabaseClient
+      .from("profiles")
+      .select("custom_instructions")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const customInstructionsBlock = userProfile?.custom_instructions
+      ? `\n\nUSER PREFERENCES AND INSTRUCTIONS:\n${userProfile.custom_instructions}`
+      : "";
+
     const {
       message,
       conversationId,
@@ -1323,7 +1333,7 @@ FORMATTING: Every section title or topic heading MUST use ## markdown headings. 
 
 Do NOT include any citation markers (<<cite:N>>) since there are no retrieved sources.
 
-Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".`;
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${customInstructionsBlock}`;
     } else {
       // ── RAG path: retrieve relevant chunks then answer ─────────────────
       selectedMaterials = await resolveSelectedMaterials(
@@ -1474,7 +1484,7 @@ Examples:
 
 RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If the question is outside the scope of the course materials, say so and suggest the student search online. Do not force-fit unrelated material.
 
-Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${customInstructionsBlock}
 
 ${retrievalScopeInstruction}
 
