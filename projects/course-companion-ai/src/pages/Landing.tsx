@@ -206,7 +206,8 @@ export default function Landing() {
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
       <div className="flex w-full max-w-2xl flex-col items-center gap-6 text-center">
-        <div className="space-y-2">
+        <div className="flex flex-col items-center gap-4">
+          <img src="/logo.png" alt="EduChat Logo" className="h-20 w-20" />
           <h1 className="text-4xl font-bold tracking-tight text-foreground">EduChat</h1>
           <p className="text-muted-foreground">
             Ask questions about your course materials and get grounded answers with citations.

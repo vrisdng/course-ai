@@ -36,9 +36,7 @@ export function MessageList({
 
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="mb-4 rounded-full bg-primary/10 p-4">
-          <Sparkles className="h-8 w-8 text-primary" />
-        </div>
+        <img src="/logo.png" alt="EduChat Logo" className="h-20 w-20" />
         <h2 className="mb-2 text-xl font-semibold text-foreground">Welcome to EduChat</h2>
         <p className="mb-6 max-w-md text-muted-foreground">
           Select your course and ask me a question!

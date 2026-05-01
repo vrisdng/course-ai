@@ -37,7 +37,7 @@ export function getDocumentScopeSummary(
   }
 
   if (selectedDocuments.length === 0) {
-    return "No documents selected";
+    return "No documents — general knowledge only";
   }
 
   if (selectedDocuments.length === 1) {
@@ -71,7 +71,7 @@ export function getDocumentSelectorLabel(
   }
 
   if (selectedDocuments.length === 0) {
-    return 'No materials selected';
+    return 'No documents selected.';
   }
 
   return `${selectedDocuments.length} material${selectedDocuments.length === 1 ? '' : 's'} selected`;

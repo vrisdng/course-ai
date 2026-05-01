@@ -63,6 +63,7 @@ interface ChatRequest {
   courseId?: string;
   selectedDocumentIds?: string[];
   model?: string;
+  skipRag?: boolean;
 }
 
 interface RetrievedChunk {
@@ -1254,9 +1255,11 @@ serve(async (req) => {
       courseId,
       selectedDocumentIds: rawSelectedDocumentIds,
       model: rawModel,
+      skipRag: rawSkipRag,
     } = await req.json() as ChatRequest;
     const trimmedMessage = message?.trim();
     const selectedDocumentIds = normalizeSelectedDocumentIds(rawSelectedDocumentIds);
+    const skipRag = rawSkipRag === true;
 
     const modelTier = resolveChatModelTier(rawModel);
     chatModelConfig = CHAT_MODEL_CONFIGS[modelTier];
@@ -1284,15 +1287,9 @@ serve(async (req) => {
 
     const activeConversationId = resolved.conversationId;
     const activeCourseId = resolved.courseId;
-    const selectedMaterials = await resolveSelectedMaterials(
-      supabaseClient,
-      activeCourseId,
-      selectedDocumentIds,
-    );
-    const selectedMaterialIds = selectedMaterials.map((material) => material.id);
 
-    // Parallelize: academic term ID + conversation history + original query embedding
-    const [activeAcademicTermId, { data: recentMessages, error: historyError }, originalEmbedding] = await Promise.all([
+    // ── Fetch conversation history (always needed) ──────────────────────
+    const [activeAcademicTermId, { data: recentMessages, error: historyError }] = await Promise.all([
       getActiveAcademicTermId(supabaseClient),
       supabaseClient
         .from("messages")
@@ -1300,138 +1297,169 @@ serve(async (req) => {
         .eq("conversation_id", activeConversationId)
         .order("created_at", { ascending: false })
         .limit(CONVERSATION_HISTORY_FETCH_LIMIT),
-      embedQuery(geminiApiKey, trimmedMessage, requestAbortController.signal),
     ]);
 
     if (historyError) {
       console.error("Failed to load conversation history:", historyError);
     }
 
-    console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
-
     const priorMessages = [...(recentMessages || [])].reverse();
     const historyTurns = buildConversationHistoryTurns(priorMessages);
-    const historyContext = buildHistoryContext(historyTurns);
 
-    throwIfAborted(requestAbortController.signal);
+    // ── Variables shared by both RAG and no-RAG paths ─────────────────
+    let retrievedChunks: RetrievedChunk[] = [];
+    let selectedMaterials: ResolvedSelectedMaterial[] = [];
+    let systemPrompt: string;
 
-    const rewrittenQuery = await rewriteQueryForRetrieval({
-      modelConfig: chatModelConfig,
-      apiKey: chatApiKey,
-      studentQuestion: trimmedMessage,
-      historyContext,
-      signal: requestAbortController.signal,
-    });
+    if (skipRag) {
+      // ── No-RAG path: answer from model knowledge only ─────────────────
+      console.log(`Processing no-RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
-    // Only embed the rewritten query if it differs from the original
-    const embeddings = [originalEmbedding];
-    const retrievalQueries = [trimmedMessage];
-    if (rewrittenQuery.trim() && rewrittenQuery.trim() !== trimmedMessage.trim()) {
-      retrievalQueries.push(rewrittenQuery.trim());
-      embeddings.push(await embedQuery(geminiApiKey, rewrittenQuery, requestAbortController.signal));
-    }
+      systemPrompt = `You are EduChat, an AI learning assistant for university students.
 
-    throwIfAborted(requestAbortController.signal);
+The user has chosen to chat without grounding the answer in any uploaded course documents. Answer using your general knowledge.
 
-    // Detect broad summary/overview queries — needs wider retrieval with lower thresholds
-    const isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
+FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
-    const matchThreshold = isSummaryQuery ? 0.40 : HIGH_RECALL_MATCH_THRESHOLD;
-    const matchCount     = isSummaryQuery ? 30   : HIGH_RECALL_MATCH_COUNT;
-    const relevanceFloor = isSummaryQuery ? 0.40 : RELEVANCE_FLOOR;
-    const finalCount     = isSummaryQuery ? 10   : FINAL_MATCH_COUNT;
+Do NOT include any citation markers (<<cite:N>>) since there are no retrieved sources.
 
-    const retrievedChunkGroups = await Promise.all(
-      embeddings.map((embedding) =>
-        retrieveChunkCandidates({
-          supabaseClient,
-          userId: user.id,
-          courseId: activeCourseId,
-          embedding,
-          threshold: matchThreshold,
-          count: matchCount,
-          selectedMaterialIds,
-        })
-      )
-    );
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".`;
+    } else {
+      // ── RAG path: retrieve relevant chunks then answer ─────────────────
+      selectedMaterials = await resolveSelectedMaterials(
+        supabaseClient,
+        activeCourseId,
+        selectedDocumentIds,
+      );
+      const selectedMaterialIds = selectedMaterials.map((material) => material.id);
 
-    throwIfAborted(requestAbortController.signal);
+      throwIfAborted(requestAbortController.signal);
 
-    const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
-    let rerankedChunks = rerankRetrievedChunks(
-      highRecallChunks,
-      rewrittenQuery || trimmedMessage,
-      finalCount
-    );
+      const originalEmbedding = await embedQuery(geminiApiKey, trimmedMessage, requestAbortController.signal);
 
-    // For summary queries on video materials: spread chunks across the full timeline
-    // by dropping chunks whose time windows heavily overlap an already-selected chunk
-    if (isSummaryQuery) {
-      const spread: typeof rerankedChunks = [];
-      const OVERLAP_THRESHOLD_MS = 60_000; // 1 minute
-      for (const chunk of rerankedChunks) {
-        if (typeof chunk.start_ms !== "number") {
-          spread.push(chunk);
-          continue;
-        }
-        const chunkStart = chunk.start_ms!;
-        const overlaps = spread.some(
-          (c) =>
-            typeof c.start_ms === "number" &&
-            c.start_ms !== null &&
-            Math.abs(c.start_ms - chunkStart) < OVERLAP_THRESHOLD_MS
-        );
-        if (!overlaps) spread.push(chunk);
-      }
-      rerankedChunks = spread;
-    }
+      console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
-    const retrievedChunks = rerankedChunks.filter(
-      (c) => c.relevance_score >= relevanceFloor
-    );
+      const historyContext = buildHistoryContext(historyTurns);
 
-    console.log(
-      `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
-    );
+      throwIfAborted(requestAbortController.signal);
 
-    const hasSelectedDocumentFilter = selectedMaterials.length > 0;
-    let ragContext = "";
-    if (retrievedChunks.length > 0) {
-      ragContext = hasSelectedDocumentFilter
-        ? "\n\n## Relevant Selected Documents:\n\n"
-        : "\n\n## Relevant Course Materials:\n\n";
-      retrievedChunks.forEach((chunk, index) => {
-        const sourceName = chunk.material_name || chunk.document_name || "Unknown document";
-        const sourceType = chunk.material_type || chunk.document_type || "document";
-        const locator =
-          typeof chunk.start_ms === "number"
-            ? ` (${formatTimestamp(chunk.start_ms)}${
-                typeof chunk.end_ms === "number" ? `-${formatTimestamp(chunk.end_ms)}` : ""
-              })`
-            : chunk.page_number
-              ? ` (Page ${chunk.page_number})`
-              : "";
-
-        ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
-        ragContext += `${clipText(chunk.chunk_text, 1300)}\n\n`;
+      const rewrittenQuery = await rewriteQueryForRetrieval({
+        modelConfig: chatModelConfig,
+        apiKey: chatApiKey,
+        studentQuestion: trimmedMessage,
+        historyContext,
+        signal: requestAbortController.signal,
       });
-    }
 
-    const retrievalScopeInstruction = hasSelectedDocumentFilter
-      ? `DOCUMENT SCOPE: The user selected a document filter. You may ground your answer ONLY in these documents: ${formatDocumentNameList(selectedMaterials)}. Do not use any outside course materials, prior assumptions, or unstated course context beyond those selected documents. If the selected documents do not contain enough evidence, say the answer is not available in the selected documents.`
-      : "DOCUMENT SCOPE: No document filter is active. You may use any retrieved material from the selected course.";
-    const retrievalContextHeading = hasSelectedDocumentFilter
-      ? "The following are relevant excerpts from the selected documents:"
-      : "The following are relevant excerpts from the course materials:";
-    const noResultsInstruction = hasSelectedDocumentFilter
-      ? "No relevant excerpts were found in the selected documents for this query. Tell the student the answer is not available in the selected documents."
-      : "No relevant course materials were found for this query.";
+      // Only embed the rewritten query if it differs from the original
+      const embeddings = [originalEmbedding];
+      const retrievalQueries = [trimmedMessage];
+      if (rewrittenQuery.trim() && rewrittenQuery.trim() !== trimmedMessage.trim()) {
+        retrievalQueries.push(rewrittenQuery.trim());
+        embeddings.push(await embedQuery(geminiApiKey, rewrittenQuery, requestAbortController.signal));
+      }
 
-    const summaryInstruction = isSummaryQuery
-      ? "\nSUMMARY MODE: The student is asking for a broad summary or overview. Use ALL provided sources to give comprehensive coverage across the full material. Organise your response with clear ## sections for each major topic. Do not focus only on the most similar source — synthesise across all citations.\n"
-      : "";
+      throwIfAborted(requestAbortController.signal);
 
-    const systemPrompt = `You are EduChat, an AI learning assistant for university students.
+      // Detect broad summary/overview queries — needs wider retrieval with lower thresholds
+      const isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
+
+      const matchThreshold = isSummaryQuery ? 0.40 : HIGH_RECALL_MATCH_THRESHOLD;
+      const matchCount     = isSummaryQuery ? 30   : HIGH_RECALL_MATCH_COUNT;
+      const relevanceFloor = isSummaryQuery ? 0.40 : RELEVANCE_FLOOR;
+      const finalCount     = isSummaryQuery ? 10   : FINAL_MATCH_COUNT;
+
+      const retrievedChunkGroups = await Promise.all(
+        embeddings.map((embedding) =>
+          retrieveChunkCandidates({
+            supabaseClient,
+            userId: user.id,
+            courseId: activeCourseId,
+            embedding,
+            threshold: matchThreshold,
+            count: matchCount,
+            selectedMaterialIds,
+          })
+        )
+      );
+
+      throwIfAborted(requestAbortController.signal);
+
+      const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
+      let rerankedChunks = rerankRetrievedChunks(
+        highRecallChunks,
+        rewrittenQuery || trimmedMessage,
+        finalCount
+      );
+
+      // For summary queries on video materials: spread chunks across the full timeline
+      // by dropping chunks whose time windows heavily overlap an already-selected chunk
+      if (isSummaryQuery) {
+        const spread: typeof rerankedChunks = [];
+        const OVERLAP_THRESHOLD_MS = 60_000; // 1 minute
+        for (const chunk of rerankedChunks) {
+          if (typeof chunk.start_ms !== "number") {
+            spread.push(chunk);
+            continue;
+          }
+          const chunkStart = chunk.start_ms!;
+          const overlaps = spread.some(
+            (c) =>
+              typeof c.start_ms === "number" &&
+              c.start_ms !== null &&
+              Math.abs(c.start_ms - chunkStart) < OVERLAP_THRESHOLD_MS
+          );
+          if (!overlaps) spread.push(chunk);
+        }
+        rerankedChunks = spread;
+      }
+
+      retrievedChunks = rerankedChunks.filter(
+        (c) => c.relevance_score >= relevanceFloor
+      );
+
+      console.log(
+        `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
+      );
+
+      const hasSelectedDocumentFilter = selectedMaterials.length > 0;
+      let ragContext = "";
+      if (retrievedChunks.length > 0) {
+        ragContext = hasSelectedDocumentFilter
+          ? "\n\n## Relevant Selected Documents:\n\n"
+          : "\n\n## Relevant Course Materials:\n\n";
+        retrievedChunks.forEach((chunk, index) => {
+          const sourceName = chunk.material_name || chunk.document_name || "Unknown document";
+          const sourceType = chunk.material_type || chunk.document_type || "document";
+          const locator =
+            typeof chunk.start_ms === "number"
+              ? ` (${formatTimestamp(chunk.start_ms)}${
+                  typeof chunk.end_ms === "number" ? `-${formatTimestamp(chunk.end_ms)}` : ""
+                })`
+              : chunk.page_number
+                ? ` (Page ${chunk.page_number})`
+                : "";
+
+          ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
+          ragContext += `${clipText(chunk.chunk_text, 1300)}\n\n`;
+        });
+      }
+
+      const retrievalScopeInstruction = hasSelectedDocumentFilter
+        ? `DOCUMENT SCOPE: The user selected a document filter. You may ground your answer ONLY in these documents: ${formatDocumentNameList(selectedMaterials)}. Do not use any outside course materials, prior assumptions, or unstated course context beyond those selected documents. If the selected documents do not contain enough evidence, say the answer is not available in the selected documents.`
+        : "DOCUMENT SCOPE: No document filter is active. You may use any retrieved material from the selected course.";
+      const retrievalContextHeading = hasSelectedDocumentFilter
+        ? "The following are relevant excerpts from the selected documents:"
+        : "The following are relevant excerpts from the course materials:";
+      const noResultsInstruction = hasSelectedDocumentFilter
+        ? "No relevant excerpts were found in the selected documents for this query. Tell the student the answer is not available in the selected documents."
+        : "No relevant course materials were found for this query.";
+
+      const summaryInstruction = isSummaryQuery
+        ? "\nSUMMARY MODE: The student is asking for a broad summary or overview. Use ALL provided sources to give comprehensive coverage across the full material. Organise your response with clear ## sections for each major topic. Do not focus only on the most similar source — synthesise across all citations.\n"
+        : "";
+
+      systemPrompt = `You are EduChat, an AI learning assistant for university students.
 
 Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 ${summaryInstruction}
@@ -1452,6 +1480,7 @@ ${retrievalScopeInstruction}
 
 ${ragContext ? retrievalContextHeading : noResultsInstruction}
 ${ragContext}`;
+    }
 
     let streamCancelled = false;
     const cancelStream = (reason?: unknown) => {
