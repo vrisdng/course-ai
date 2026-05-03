@@ -194,9 +194,18 @@ export function useStudentChat(routeConversationId: string | null = null) {
     preferredConversationId?: string | null,
     options?: { requestId?: number }
   ) => {
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData?.user) {
+      console.error('Failed to resolve current user for conversations:', userError);
+      setConversations([]);
+      setCurrentConversationId(null);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('conversations')
       .select('id, title, created_at, course_id')
+      .eq('user_id', userData.user.id)
       .order('updated_at', { ascending: false });
 
     if (error) {
@@ -239,6 +248,35 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
     if (!options?.requestId) {
       conversationLoadRequestIdRef.current = requestId;
+    }
+
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData?.user) {
+      console.error('Failed to resolve current user for messages:', userError);
+      setMessages([]);
+      return;
+    }
+
+    const { data: ownership, error: ownershipError } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('id', conversationId)
+      .eq('user_id', userData.user.id)
+      .maybeSingle();
+
+    if (conversationLoadRequestIdRef.current !== requestId) {
+      return;
+    }
+
+    if (ownershipError || !ownership) {
+      if (ownershipError) {
+        console.error('Failed to verify conversation ownership:', ownershipError);
+      }
+      setMessages([]);
+      setSelectedMessage(null);
+      setHighlightedCitationKey(null);
+      setActiveVideoSource(null);
+      return;
     }
 
     const { data: messageRows, error: messagesError } = await supabase
