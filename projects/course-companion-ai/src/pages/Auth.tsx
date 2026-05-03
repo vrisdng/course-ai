@@ -102,7 +102,7 @@ export default function Auth() {
 
       if (error) {
         if (error.message.includes('Email not confirmed')) {
-          setError('Please verify your email address before signing in. Check your inbox for the verification link.');
+          setError('Please verify your email address before signing in. Check your inbox (or spam/junk folder) for the verification link.');
         } else if (error.message.includes('Invalid login credentials')) {
           setError('Invalid email or password. Please try again.');
         } else {
@@ -147,7 +147,7 @@ export default function Auth() {
           setError(error.message);
         }
       } else {
-        setSuccessMessage('Account created! Please check your email to verify your account before signing in.');
+        setSuccessMessage('Account created! Please check your email to verify your account before signing in. If you don\'t see it, check your spam or junk folder.');
         setOtpEmail(data.email);
         signUpForm.reset();
       }
