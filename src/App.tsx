@@ -1,6 +1,13 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+} from "@/components/ui/alert-dialog";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
@@ -23,6 +30,18 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <Sonner />
+        {import.meta.env.VITE_MAINTENANCE_MODE === "true" && (
+          <AlertDialog open>
+            <AlertDialogContent className="[&>button]:hidden">
+              <AlertDialogHeader>
+                <AlertDialogTitle>EduChat is under maintenance</AlertDialogTitle>
+                <AlertDialogDescription>
+                  The website will resume by 15th July. Thanks for your patience and understanding.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
         <BrowserRouter>
           <Routes>
             {/* Public routes */}
