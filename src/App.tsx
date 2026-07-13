@@ -8,7 +8,6 @@ import {
   AlertDialogTitle,
   AlertDialogDescription,
 } from "@/components/ui/alert-dialog";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
@@ -22,76 +21,72 @@ import AdminAnalytics from "./pages/AdminAnalytics";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
-const queryClient = new QueryClient();
-
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        {import.meta.env.VITE_MAINTENANCE_MODE === "true" && (
-          <AlertDialog open>
-            <AlertDialogContent className="[&>button]:hidden">
-              <AlertDialogHeader>
-                <AlertDialogTitle>EduChat is under maintenance</AlertDialogTitle>
-                <AlertDialogDescription>
-                  The website will resume by 15th July. Thanks for your patience and understanding.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-        <BrowserRouter>
-          <Routes>
-            {/* Public routes */}
-            <Route path="/" element={<Landing />} />
-            <Route path="/auth" element={<Auth />} />
+  <AuthProvider>
+    <TooltipProvider>
+      <Toaster />
+      <Sonner />
+      {import.meta.env.VITE_MAINTENANCE_MODE === "true" && (
+        <AlertDialog open>
+          <AlertDialogContent className="[&>button]:hidden">
+            <AlertDialogHeader>
+              <AlertDialogTitle>EduChat is under maintenance</AlertDialogTitle>
+              <AlertDialogDescription>
+                The website will resume by 15th July. Thanks for your patience and understanding.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+      <BrowserRouter>
+        <Routes>
+          {/* Public routes */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/auth" element={<Auth />} />
 
-            {/* Protected student routes */}
-            <Route
-              path="/chat/:conversationId?"
-              element={
-                <ProtectedRoute requiredRole={['student', 'admin']}>
-                  <StudentChat />
-                </ProtectedRoute>
-              }
-            />
+          {/* Protected student routes */}
+          <Route
+            path="/chat/:conversationId?"
+            element={
+              <ProtectedRoute requiredRole={['student', 'admin']}>
+                <StudentChat />
+              </ProtectedRoute>
+            }
+          />
 
-            {/* Protected staff routes */}
-            <Route
-              path="/admin-dashboard"
-              element={
-                <ProtectedRoute requiredRole={['admin']}>
-                  <AdminDashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin-analytics"
-              element={
-                <ProtectedRoute requiredRole={['admin']}>
-                  <AdminAnalytics />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute requiredRole={['student', 'admin']}>
-                  <Settings />
-                </ProtectedRoute>
-              }
-            />
-            <Route path="/admin" element={<Navigate to="/admin-dashboard" replace />} />
+          {/* Protected staff routes */}
+          <Route
+            path="/admin-dashboard"
+            element={
+              <ProtectedRoute requiredRole={['admin']}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin-analytics"
+            element={
+              <ProtectedRoute requiredRole={['admin']}>
+                <AdminAnalytics />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute requiredRole={['student', 'admin']}>
+                <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/admin" element={<Navigate to="/admin-dashboard" replace />} />
 
-            {/* Catch-all */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </TooltipProvider>
-    </AuthProvider>
-  </QueryClientProvider>
+          {/* Catch-all */}
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+    </TooltipProvider>
+  </AuthProvider>
 );
 
 export default App;

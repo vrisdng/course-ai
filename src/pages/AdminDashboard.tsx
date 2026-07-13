@@ -170,35 +170,28 @@ const formatBytes = (bytes: number | null) => {
   return `${(kb / 1024).toFixed(1)} MB`;
 };
 
+const formatClock = (ms: number) => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
 const formatDuration = (durationMs: number | null | undefined) => {
   if (typeof durationMs !== 'number' || durationMs <= 0) {
     return null;
   }
 
-  const totalSeconds = Math.floor(durationMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  return formatClock(durationMs);
 };
 
-const formatTimestamp = (timestampMs: number) => {
-  const totalSeconds = Math.max(0, Math.floor(timestampMs / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-};
+const formatTimestamp = formatClock;
 
 const isFileSupported = (candidate: File) => {
   const extension = candidate.name.split('.').pop()?.toLowerCase() || '';
@@ -399,51 +392,7 @@ export default function AdminDashboard() {
     const { data, error, count } = await query.range(rangeFrom, rangeTo);
 
     if (error) {
-      let fallbackQuery: any = supabase
-        .from('materials')
-        .select(
-          'id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, is_public, created_at',
-          { count: 'exact' }
-        )
-        .order('created_at', { ascending: false });
-
-      if (courseFilter !== 'all') {
-        fallbackQuery = fallbackQuery.eq('course_id', courseFilter);
-      }
-      if (statusFilter !== 'all') {
-        fallbackQuery = fallbackQuery.eq('processing_status', statusFilter);
-      }
-      if (documentTypeFilter === 'video') {
-        fallbackQuery = fallbackQuery.eq('file_type', 'video');
-      } else if (documentTypeFilter === 'notes') {
-        fallbackQuery = fallbackQuery.in('file_type', ['notes', 'pdf', 'slides']);
-      }
-      if (createdAfter) {
-        fallbackQuery = fallbackQuery.gte('created_at', createdAfter);
-      }
-      if (normalizedSearchQuery) {
-        const escapedSearch = normalizedSearchQuery.replace(/[%_,]/g, (character) => `\\${character}`);
-        fallbackQuery = fallbackQuery.or(`file_name.ilike.%${escapedSearch}%,topic.ilike.%${escapedSearch}%`);
-      }
-
-      const fallback = await fallbackQuery.range(rangeFrom, rangeTo);
-
-      if (fallback.error) {
-        toast.error('Failed to load materials');
-        if (!options?.silent) {
-          setIsLoadingMaterials(false);
-        }
-        return;
-      }
-
-      const fallbackMaterials = (fallback.data || []).map((material: any) => ({
-        ...material,
-        access_scope: material.is_public ? 'public' : 'course',
-        academic_term_id: null,
-      })) as Material[];
-
-      setMaterials(fallbackMaterials);
-      setTotalMaterialsCount(fallback.count || 0);
+      toast.error('Failed to load materials');
       if (!options?.silent) {
         setIsLoadingMaterials(false);
       }

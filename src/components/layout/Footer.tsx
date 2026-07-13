@@ -1,5 +1,4 @@
 import { GraduationCap } from 'lucide-react';
-import { Link } from 'react-router-dom';
 
 export function Footer() {
   return (
@@ -12,19 +11,7 @@ export function Footer() {
             </div>
             <span className="font-semibold text-foreground">EduChat</span>
           </div>
-          
-          <nav className="flex gap-6 text-sm text-muted-foreground">
-            <Link to="/about" className="hover:text-foreground transition-colors">
-              About
-            </Link>
-            <Link to="/privacy" className="hover:text-foreground transition-colors">
-              Privacy
-            </Link>
-            <Link to="/terms" className="hover:text-foreground transition-colors">
-              Terms
-            </Link>
-          </nav>
-          
+
           <p className="text-sm text-muted-foreground">
             © {new Date().getFullYear()} EduChat. All rights reserved.
           </p>

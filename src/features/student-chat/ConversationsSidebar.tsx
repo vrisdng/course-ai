@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
-import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, MessageSquare, Plus, Search, Settings, Trash2, UserPlus, X } from 'lucide-react';
+import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, MessageSquare, MoreVertical, Plus, Search, Settings, Trash2, UserPlus, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Link } from 'react-router-dom';
@@ -229,7 +228,7 @@ export function ConversationsSidebar({
                           {deletingConversationId === conversation.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
-                            <MoreVertIcon sx={{ fontSize: 18 }} />
+                            <MoreVertical className="h-[18px] w-[18px]" />
                           )}
                         </Button>
                       </DropdownMenuTrigger>
