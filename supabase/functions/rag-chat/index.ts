@@ -1319,6 +1319,7 @@ serve(async (req) => {
     // ── Variables shared by both RAG and no-RAG paths ─────────────────
     let retrievedChunks: RetrievedChunk[] = [];
     let selectedMaterials: ResolvedSelectedMaterial[] = [];
+    let hasSelectedDocumentFilter = false;
     let systemPrompt: string;
 
     if (skipRag) {
@@ -1432,7 +1433,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
         `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
       );
 
-      const hasSelectedDocumentFilter = selectedMaterials.length > 0;
+      hasSelectedDocumentFilter = selectedMaterials.length > 0;
       let ragContext = "";
       if (retrievedChunks.length > 0) {
         ragContext = hasSelectedDocumentFilter
