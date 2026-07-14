@@ -1,4 +1,5 @@
-import { Loader2, Trash2 } from 'lucide-react';
+import { Loader2, Trash2, Users } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -162,6 +163,12 @@ export function CoursesOverviewTab({
                       <div className="flex justify-end gap-2">
                         <Button type="button" size="sm" variant="outline" onClick={() => onOpenAddStudentsDialog(course)}>
                           Generate Code
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" className="gap-1.5" asChild>
+                          <Link to={`/admin-dashboard/courses/${course.id}/students`}>
+                            <Users className="h-4 w-4" />
+                            Students
+                          </Link>
                         </Button>
                         <Button
                           type="button"
