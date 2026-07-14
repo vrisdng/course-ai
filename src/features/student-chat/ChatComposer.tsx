@@ -23,8 +23,8 @@ interface ChatComposerProps {
   footerText?: string;
   documentSelector?: ReactNode;
   documentHint?: string | null;
-  selectedModel: ChatModelTier;
-  onModelChange: (model: ChatModelTier) => void;
+  selectedModel?: ChatModelTier;
+  onModelChange?: (model: ChatModelTier) => void;
 }
 
 export function ChatComposer({
@@ -82,42 +82,44 @@ export function ChatComposer({
             rows={1}
             disabled={isLoading || disabled}
           />
-          <div className="absolute bottom-2 left-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  disabled={isLoading || disabled}
-                >
-                  <Bot className="h-3 w-3" />
-                  {selectedModelLabel}
-                  <ChevronDown className="h-3 w-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top" className="w-56">
-                {CHAT_MODEL_OPTIONS.map((option) => (
-                  <DropdownMenuItem
-                    key={option.value}
-                    onSelect={() => onModelChange(option.value)}
-                    className={cn(
-                      'items-start gap-2 py-2',
-                      selectedModel === option.value && 'font-medium'
-                    )}
+          {onModelChange ? (
+            <div className="absolute bottom-2 left-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    disabled={isLoading || disabled}
                   >
-                    <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="space-y-0.5">
-                      <div>{option.label}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {option.description}
+                    <Bot className="h-3 w-3" />
+                    {selectedModelLabel}
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="top" className="w-56">
+                  {CHAT_MODEL_OPTIONS.map((option) => (
+                    <DropdownMenuItem
+                      key={option.value}
+                      onSelect={() => onModelChange(option.value)}
+                      className={cn(
+                        'items-start gap-2 py-2',
+                        selectedModel === option.value && 'font-medium'
+                      )}
+                    >
+                      <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="space-y-0.5">
+                        <div>{option.label}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {option.description}
+                        </div>
                       </div>
-                    </div>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ) : null}
           <div className="absolute bottom-2 right-2">
             <Button
               onClick={isLoading ? onStop : onSend}

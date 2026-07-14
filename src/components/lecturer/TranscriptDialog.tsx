@@ -10,7 +10,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { groupSegmentsIntoParagraphs } from '@/features/student-chat/groupTranscriptSegments';
-import { formatClock, type Material, type TranscriptSegment } from '@/pages/AdminDashboard';
+import { formatTimestamp as formatClock } from '@/features/student-chat/time';
+import type { Material, TranscriptSegment } from '@/features/materials/types';
 
 interface TranscriptDialogProps {
   material: Material | null;

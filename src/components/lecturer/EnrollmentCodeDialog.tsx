@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { Course } from '@/pages/AdminDashboard';
+import type { Course } from '@/features/materials/types';
 
 interface EnrollmentCodeDialogProps {
   course: Course | null;

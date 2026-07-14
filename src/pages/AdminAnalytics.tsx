@@ -155,7 +155,7 @@ export default function AdminAnalytics() {
         .from('enrollments')
         .select('id', { count: 'exact', head: true })
         .eq('course_id', selectedCourseId),
-      supabase.rpc('get_course_active_student_count' as string, {
+      supabase.rpc('get_course_active_student_count', {
         in_course_id: selectedCourseId,
         in_start_at: analyticsStartAt,
         in_end_at: analyticsEndAt,

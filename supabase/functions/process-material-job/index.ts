@@ -1,11 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+import { corsHeaders } from "../_shared/cors.ts";
+import { chunkText } from "../_shared/chunking.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -411,7 +407,7 @@ async function batchEmbedWithRetry(
 // Main handler
 // ---------------------------------------------------------------------------
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -600,20 +596,11 @@ serve(async (req) => {
 
       const CHUNK_SIZE = 1200;
       const OVERLAP = 200;
-      const step = Math.max(1, CHUNK_SIZE - OVERLAP);
       chunks = [];
 
       for (const segment of extractedSegments) {
-        const normalized = segment.text.replace(/\r\n/g, "\n").replace(/\t/g, " ");
-        const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
-        if (!cleaned) continue;
-
-        for (let start = 0; start < cleaned.length; start += step) {
-          const end = Math.min(start + CHUNK_SIZE, cleaned.length);
-          const slice = cleaned.slice(start, end).trim();
-          if (slice) {
-            chunks.push({ text: slice, start, end, pageNumber: segment.pageNumber });
-          }
+        for (const chunk of chunkText(segment.text, CHUNK_SIZE, OVERLAP)) {
+          chunks.push({ ...chunk, pageNumber: segment.pageNumber });
         }
       }
 

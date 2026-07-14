@@ -1,11 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+import { corsHeaders } from "../_shared/cors.ts";
+import { HttpError, generateChatTextStream } from "../_shared/llm.ts";
+import { buildOpenAIConversationMessages, type ConversationHistoryTurn } from "../_shared/history.ts";
+import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 
 const CHAT_MODEL = "gpt-4o-mini";
 const HISTORY_LIMIT = 10;
@@ -17,57 +15,6 @@ interface AnalyticsChatRequest {
   history?: Array<{ role: string; content: string }>;
   startAt?: string | null;
   endAt?: string | null;
-}
-
-interface ConversationHistoryTurn {
-  role: "user" | "assistant";
-  content: string;
-}
-
-interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-class HttpError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && error.name === "AbortError")
-  );
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new DOMException("The operation was aborted.", "AbortError");
-  }
-}
-
-function formatSseEvent(event: string, payload: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-}
-
-function buildOpenAIConversationMessages(
-  systemPrompt: string,
-  userPrompt: string,
-  historyTurns: ConversationHistoryTurn[] = []
-): OpenAIChatMessage[] {
-  const messages: OpenAIChatMessage[] = [
-    { role: "system", content: systemPrompt },
-    ...historyTurns.map((turn) => ({
-      role: turn.role === "assistant" ? ("assistant" as const) : ("user" as const),
-      content: turn.content,
-    })),
-    { role: "user" as const, content: userPrompt },
-  ];
-  return messages;
 }
 
 function startAtIso(days: number): string {
@@ -226,106 +173,9 @@ function formatAnalyticsContext(data: AnalyticsData, rangeLabel: string): string
   return lines.join("\n");
 }
 
-// ── Chat streaming ────────────────────────────────────────────────────
-
-async function streamChatResponse(options: {
-  openAiApiKey: string;
-  systemPrompt: string;
-  userPrompt: string;
-  historyTurns: ConversationHistoryTurn[];
-  signal?: AbortSignal;
-  onTextDelta: (delta: string) => void;
-}): Promise<string> {
-  const aiResponse = await fetch(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      method: "POST",
-      signal: options.signal,
-      headers: {
-        Authorization: `Bearer ${options.openAiApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: CHAT_MODEL,
-        messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
-        temperature: 0.3,
-        max_tokens: 2000,
-        stream: true,
-      }),
-    },
-  );
-
-  if (!aiResponse.ok) {
-    const errorText = await aiResponse.text();
-    console.error("OpenAI stream API error:", aiResponse.status, errorText);
-    if (aiResponse.status === 429) {
-      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
-    }
-    throw new Error(`Chat stream API error: ${aiResponse.status}`);
-  }
-
-  if (!aiResponse.body) {
-    throw new Error("Chat stream response did not include a body");
-  }
-
-  const reader = aiResponse.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let fullText = "";
-
-  const processRawSseEvent = (rawEvent: string) => {
-    throwIfAborted(options.signal);
-    if (!rawEvent.trim()) return;
-
-    const dataLines = rawEvent
-      .split("\n")
-      .map((l) => l.trimEnd())
-      .filter((l) => l.startsWith("data:"))
-      .map((l) => l.slice(5).trimStart());
-
-    if (dataLines.length === 0) return;
-    const payload = dataLines.join("\n");
-    if (payload === "[DONE]") return;
-
-    let parsed: unknown;
-    try { parsed = JSON.parse(payload); } catch { return; }
-
-    const chunkText = (parsed as {
-      choices?: Array<{
-        delta?: {
-          content?: string;
-        };
-      }>;
-    }).choices?.[0]?.delta?.content || "";
-
-    if (!chunkText) return;
-
-    fullText += chunkText;
-    options.onTextDelta(chunkText);
-  };
-
-  while (true) {
-    throwIfAborted(options.signal);
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-    let idx = buffer.indexOf("\n\n");
-    while (idx !== -1) {
-      processRawSseEvent(buffer.slice(0, idx));
-      buffer = buffer.slice(idx + 2);
-      idx = buffer.indexOf("\n\n");
-    }
-  }
-
-  buffer += decoder.decode();
-  if (buffer.trim()) processRawSseEvent(buffer);
-
-  return fullText.trim() || "I couldn't generate a response.";
-}
-
 // ── Main handler ──────────────────────────────────────────────────────
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -457,11 +307,12 @@ ${analyticsContext}`;
           try {
             throwIfAborted(requestAbortController.signal);
 
-            const answer = await streamChatResponse({
-              openAiApiKey,
-              systemPrompt,
-              userPrompt: trimmedMessage,
-              historyTurns,
+            const answer = await generateChatTextStream({
+              apiKey: openAiApiKey,
+              model: CHAT_MODEL,
+              messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
+              temperature: 0.3,
+              maxOutputTokens: 2000,
               signal: requestAbortController.signal,
               onTextDelta: (delta) => {
                 if (streamCancelled) return;

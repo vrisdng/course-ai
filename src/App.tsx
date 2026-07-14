@@ -16,6 +16,7 @@ import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import StudentChat from "./pages/StudentChat";
 import AdminDashboard from "./pages/AdminDashboard";
+import CourseStudents from "./pages/CourseStudents";
 import AdminAnalytics from "./pages/AdminAnalytics";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
@@ -58,6 +59,14 @@ const App = () => (
             element={
               <ProtectedRoute requiredRole={['admin']}>
                 <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin-dashboard/courses/:courseId/students"
+            element={
+              <ProtectedRoute requiredRole={['admin']}>
+                <CourseStudents />
               </ProtectedRoute>
             }
           />

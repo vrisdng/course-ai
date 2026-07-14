@@ -6,7 +6,6 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-// Trigger redeployment  
 export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
@@ -25,7 +24,7 @@ export type Database = {
           is_active: boolean
           label: string
           semester: number
-          sort_key: number
+          sort_key: number | null
           starts_on: string | null
           updated_at: string
         }
@@ -38,6 +37,7 @@ export type Database = {
           is_active?: boolean
           label: string
           semester: number
+          sort_key?: number | null
           starts_on?: string | null
           updated_at?: string
         }
@@ -50,6 +50,7 @@ export type Database = {
           is_active?: boolean
           label?: string
           semester?: number
+          sort_key?: number | null
           starts_on?: string | null
           updated_at?: string
         }
@@ -195,6 +196,60 @@ export type Database = {
           },
         ]
       }
+      course_invites: {
+        Row: {
+          course_id: string
+          created_at: string
+          created_by: string | null
+          expires_at: string
+          id: string
+          invite_code: string
+          invited_email: string | null
+          is_course_code: boolean
+          redeemed_at: string | null
+          redeemed_by: string | null
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string
+          id?: string
+          invite_code: string
+          invited_email?: string | null
+          is_course_code?: boolean
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string
+          id?: string
+          invite_code?: string
+          invited_email?: string | null
+          is_course_code?: boolean
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_invites_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "course_invites_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       courses: {
         Row: {
           code: string | null
@@ -262,102 +317,52 @@ export type Database = {
           },
         ]
       }
-      materials: {
+      material_processing_jobs: {
         Row: {
-          access_scope: Database["public"]["Enums"]["material_access_scope"]
-          academic_term_id: string
-          course_id: string
+          attempt_count: number
           created_at: string
-          duration_ms: number | null
-          file_name: string
-          file_path: string
-          file_size: number | null
-          file_type: Database["public"]["Enums"]["document_type"]
           id: string
-          is_public: boolean
-          linked_url: string | null
-          processing_error: string | null
-          processing_progress: number | null
-          processing_stage: string | null
-          processing_status: Database["public"]["Enums"]["processing_status"]
-          thumbnail_path: string | null
-          transcription_language: string | null
-          transcription_provider: string | null
-          topic: string | null
+          job_type: string
+          last_error: string | null
+          locked_at: string | null
+          locked_by: string | null
+          material_id: string
+          payload: Json
+          status: Database["public"]["Enums"]["processing_status"]
           updated_at: string
-          uploaded_by: string | null
-          week_number: number | null
         }
         Insert: {
-          access_scope?: Database["public"]["Enums"]["material_access_scope"]
-          academic_term_id?: string
-          course_id: string
+          attempt_count?: number
           created_at?: string
-          duration_ms?: number | null
-          file_name: string
-          file_path: string
-          file_size?: number | null
-          file_type?: Database["public"]["Enums"]["document_type"]
           id?: string
-          is_public?: boolean
-          linked_url?: string | null
-          processing_error?: string | null
-          processing_progress?: number | null
-          processing_stage?: string | null
-          processing_status?: Database["public"]["Enums"]["processing_status"]
-          thumbnail_path?: string | null
-          transcription_language?: string | null
-          transcription_provider?: string | null
-          topic?: string | null
+          job_type: string
+          last_error?: string | null
+          locked_at?: string | null
+          locked_by?: string | null
+          material_id: string
+          payload?: Json
+          status?: Database["public"]["Enums"]["processing_status"]
           updated_at?: string
-          uploaded_by?: string | null
-          week_number?: number | null
         }
         Update: {
-          access_scope?: Database["public"]["Enums"]["material_access_scope"]
-          academic_term_id?: string
-          course_id?: string
+          attempt_count?: number
           created_at?: string
-          duration_ms?: number | null
-          file_name?: string
-          file_path?: string
-          file_size?: number | null
-          file_type?: Database["public"]["Enums"]["document_type"]
           id?: string
-          is_public?: boolean
-          linked_url?: string | null
-          processing_error?: string | null
-          processing_progress?: number | null
-          processing_stage?: string | null
-          processing_status?: Database["public"]["Enums"]["processing_status"]
-          thumbnail_path?: string | null
-          transcription_language?: string | null
-          transcription_provider?: string | null
-          topic?: string | null
+          job_type?: string
+          last_error?: string | null
+          locked_at?: string | null
+          locked_by?: string | null
+          material_id?: string
+          payload?: Json
+          status?: Database["public"]["Enums"]["processing_status"]
           updated_at?: string
-          uploaded_by?: string | null
-          week_number?: number | null
         }
         Relationships: [
           {
-            foreignKeyName: "materials_academic_term_id_fkey"
-            columns: ["academic_term_id"]
+            foreignKeyName: "material_processing_jobs_material_id_fkey"
+            columns: ["material_id"]
             isOneToOne: false
-            referencedRelation: "academic_terms"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "materials_course_id_fkey"
-            columns: ["course_id"]
-            isOneToOne: false
-            referencedRelation: "courses"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "materials_uploaded_by_fkey"
-            columns: ["uploaded_by"]
-            isOneToOne: false
-            referencedRelation: "profiles"
+            referencedRelation: "materials"
             referencedColumns: ["id"]
           },
         ]
@@ -406,6 +411,109 @@ export type Database = {
           },
         ]
       }
+      materials: {
+        Row: {
+          academic_term_id: string
+          access_scope: Database["public"]["Enums"]["material_access_scope"]
+          course_id: string
+          created_at: string
+          duration_ms: number | null
+          external_transcript_id: string | null
+          file_name: string
+          file_path: string
+          file_size: number | null
+          file_type: Database["public"]["Enums"]["document_type"]
+          id: string
+          is_public: boolean
+          linked_url: string | null
+          processing_error: string | null
+          processing_progress: number | null
+          processing_stage: string | null
+          processing_status: Database["public"]["Enums"]["processing_status"]
+          thumbnail_path: string | null
+          topic: string | null
+          transcription_language: string | null
+          transcription_provider: string | null
+          updated_at: string
+          uploaded_by: string | null
+          week_number: number | null
+        }
+        Insert: {
+          academic_term_id: string
+          access_scope?: Database["public"]["Enums"]["material_access_scope"]
+          course_id: string
+          created_at?: string
+          duration_ms?: number | null
+          external_transcript_id?: string | null
+          file_name: string
+          file_path: string
+          file_size?: number | null
+          file_type?: Database["public"]["Enums"]["document_type"]
+          id?: string
+          is_public?: boolean
+          linked_url?: string | null
+          processing_error?: string | null
+          processing_progress?: number | null
+          processing_stage?: string | null
+          processing_status?: Database["public"]["Enums"]["processing_status"]
+          thumbnail_path?: string | null
+          topic?: string | null
+          transcription_language?: string | null
+          transcription_provider?: string | null
+          updated_at?: string
+          uploaded_by?: string | null
+          week_number?: number | null
+        }
+        Update: {
+          academic_term_id?: string
+          access_scope?: Database["public"]["Enums"]["material_access_scope"]
+          course_id?: string
+          created_at?: string
+          duration_ms?: number | null
+          external_transcript_id?: string | null
+          file_name?: string
+          file_path?: string
+          file_size?: number | null
+          file_type?: Database["public"]["Enums"]["document_type"]
+          id?: string
+          is_public?: boolean
+          linked_url?: string | null
+          processing_error?: string | null
+          processing_progress?: number | null
+          processing_stage?: string | null
+          processing_status?: Database["public"]["Enums"]["processing_status"]
+          thumbnail_path?: string | null
+          topic?: string | null
+          transcription_language?: string | null
+          transcription_provider?: string | null
+          updated_at?: string
+          uploaded_by?: string | null
+          week_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "materials_academic_term_id_fkey"
+            columns: ["academic_term_id"]
+            isOneToOne: false
+            referencedRelation: "academic_terms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "materials_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "materials_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           content: string
@@ -437,6 +545,69 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      organization_members: {
+        Row: {
+          created_at: string
+          org_id: string
+          org_role: Database["public"]["Enums"]["org_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          org_id: string
+          org_role?: Database["public"]["Enums"]["org_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          org_id?: string
+          org_role?: Database["public"]["Enums"]["org_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
+      plans: {
+        Row: {
+          id: string
+          is_active: boolean
+          max_ai_questions_per_month: number | null
+          max_courses: number | null
+          max_materials: number | null
+          max_seats: number | null
+          max_video_minutes_per_month: number | null
+          monthly_price_cents: number | null
+          name: string
+          sort_order: number
+          stripe_price_id: string | null
+        }
+        Insert: {
+          id: string
+          is_active?: boolean
+          max_ai_questions_per_month?: number | null
+          max_courses?: number | null
+          max_materials?: number | null
+          max_seats?: number | null
+          max_video_minutes_per_month?: number | null
+          monthly_price_cents?: number | null
+          name: string
+          sort_order?: number
+          stripe_price_id?: string | null
+        }
+        Update: {
+          id?: string
+          is_active?: boolean
+          max_ai_questions_per_month?: number | null
+          max_courses?: number | null
+          max_materials?: number | null
+          max_seats?: number | null
+          max_video_minutes_per_month?: number | null
+          monthly_price_cents?: number | null
+          name?: string
+          sort_order?: number
+          stripe_price_id?: string | null
+        }
+        Relationships: []
       }
       profiles: {
         Row: {
@@ -609,6 +780,80 @@ export type Database = {
         }
         Relationships: []
       }
+      subscriptions: {
+        Row: {
+          cancel_at_period_end: boolean
+          created_at: string
+          current_period_end: string | null
+          current_period_start: string | null
+          id: string
+          org_id: string
+          plan_id: string
+          status: string
+          stripe_subscription_id: string | null
+          trial_ends_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          cancel_at_period_end?: boolean
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          org_id: string
+          plan_id: string
+          status: string
+          stripe_subscription_id?: string | null
+          trial_ends_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          cancel_at_period_end?: boolean
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          org_id?: string
+          plan_id?: string
+          status?: string
+          stripe_subscription_id?: string | null
+          trial_ends_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subscriptions_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      usage_counters: {
+        Row: {
+          ai_questions: number
+          org_id: string
+          period_start: string
+          updated_at: string
+          video_minutes: number
+        }
+        Insert: {
+          ai_questions?: number
+          org_id: string
+          period_start: string
+          updated_at?: string
+          video_minutes?: number
+        }
+        Update: {
+          ai_questions?: number
+          org_id?: string
+          period_start?: string
+          updated_at?: string
+          video_minutes?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       analytics_query_category_stats: {
@@ -631,88 +876,293 @@ export type Database = {
           query_text: string | null
           unresolved_reason: string | null
         }
-        Relationships: []
+        Insert: {
+          academic_term_id?: string | null
+          course_id?: string | null
+          created_at?: string | null
+          id?: string | null
+          query_category?: string | null
+          query_text?: string | null
+          unresolved_reason?: string | null
+        }
+        Update: {
+          academic_term_id?: string | null
+          course_id?: string | null
+          created_at?: string | null
+          id?: string | null
+          query_category?: string | null
+          query_text?: string | null
+          unresolved_reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "query_events_academic_term_id_fkey"
+            columns: ["academic_term_id"]
+            isOneToOne: false
+            referencedRelation: "academic_terms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "query_events_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
-      get_course_document_reference_stats: {
-        Args: { in_course_id: string; in_end_at?: string | null; in_start_at?: string | null }
+      claim_material_processing_job: {
+        Args: {
+          requested_job_type?: string
+          requested_material_id?: string
+          worker_id: string
+        }
         Returns: {
-          file_name: string
-          file_type: Database["public"]["Enums"]["document_type"]
-          last_referenced_at: string | null
+          attempt_count: number
+          created_at: string
+          id: string
+          job_type: string
+          last_error: string | null
+          locked_at: string | null
+          locked_by: string | null
           material_id: string
-          question_count: number
-          reference_count: number
-          unique_student_count: number
+          payload: Json
+          status: Database["public"]["Enums"]["processing_status"]
+          updated_at: string
         }[]
+        SetofOptions: {
+          from: "*"
+          to: "material_processing_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
-      get_course_keyword_stats: {
-        Args: { in_course_id: string; in_end_at?: string | null; in_limit?: number; in_start_at?: string | null }
-        Returns: {
-          frequency: number
-          keyword: string
-        }[]
-      }
-      get_course_top_questions: {
-        Args: { in_course_id: string; in_end_at?: string | null; in_limit?: number; in_start_at?: string | null }
-        Returns: {
-          frequency: number
-          last_asked_at: string | null
-          question: string
-          unique_student_count: number
-        }[]
-      }
-      get_active_academic_term_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string | null
-      }
-      get_course_active_student_count: {
-        Args: { in_course_id: string; in_end_at?: string | null; in_start_at?: string | null }
-        Returns: number
-      }
+      get_active_academic_term_id: { Args: never; Returns: string }
+      get_course_active_student_count:
+        | {
+            Args: { in_course_id: string; in_start_at?: string }
+            Returns: number
+          }
+        | {
+            Args: {
+              in_course_id: string
+              in_end_at?: string
+              in_start_at?: string
+            }
+            Returns: number
+          }
+      get_course_document_reference_stats:
+        | {
+            Args: { in_course_id: string; in_start_at?: string }
+            Returns: {
+              file_name: string
+              file_type: Database["public"]["Enums"]["document_type"]
+              last_referenced_at: string
+              material_id: string
+              question_count: number
+              reference_count: number
+              unique_student_count: number
+            }[]
+          }
+        | {
+            Args: {
+              in_course_id: string
+              in_end_at?: string
+              in_start_at?: string
+            }
+            Returns: {
+              file_name: string
+              file_type: Database["public"]["Enums"]["document_type"]
+              last_referenced_at: string
+              material_id: string
+              question_count: number
+              reference_count: number
+              unique_student_count: number
+            }[]
+          }
+      get_course_keyword_stats:
+        | {
+            Args: {
+              in_course_id: string
+              in_end_at?: string
+              in_limit?: number
+              in_start_at?: string
+            }
+            Returns: {
+              frequency: number
+              keyword: string
+            }[]
+          }
+        | {
+            Args: {
+              in_course_id: string
+              in_limit?: number
+              in_start_at?: string
+            }
+            Returns: {
+              frequency: number
+              keyword: string
+            }[]
+          }
+      get_course_top_questions:
+        | {
+            Args: {
+              in_course_id: string
+              in_end_at?: string
+              in_limit?: number
+              in_start_at?: string
+            }
+            Returns: {
+              frequency: number
+              last_asked_at: string
+              question: string
+              unique_student_count: number
+            }[]
+          }
+        | {
+            Args: {
+              in_course_id: string
+              in_limit?: number
+              in_start_at?: string
+            }
+            Returns: {
+              frequency: number
+              last_asked_at: string
+              question: string
+              unique_student_count: number
+            }[]
+          }
       get_material_course_id: {
         Args: { check_material_id: string }
         Returns: string
       }
+      get_org_entitlements: {
+        Args: { check_org_id: string }
+        Returns: {
+          ai_questions_used: number
+          cancel_at_period_end: boolean
+          courses_used: number
+          current_period_end: string
+          materials_used: number
+          max_ai_questions_per_month: number
+          max_courses: number
+          max_materials: number
+          max_seats: number
+          max_video_minutes_per_month: number
+          plan_id: string
+          plan_name: string
+          seats_used: number
+          status: string
+          trial_ends_at: string
+          video_minutes_used: number
+        }[]
+      }
+      increment_usage_if_allowed: {
+        Args: { amount?: number; check_org_id: string; kind: string }
+        Returns: boolean
+      }
       is_admin: { Args: { check_user_id: string }; Returns: boolean }
+      is_course_lecturer: {
+        Args: { check_course_id: string; check_user_id: string }
+        Returns: boolean
+      }
       is_enrolled: {
         Args: { check_course_id: string; check_user_id: string }
         Returns: boolean
       }
+      is_lecturer: { Args: { check_user_id: string }; Returns: boolean }
+      is_org_member: {
+        Args: { check_org_id: string; check_user_id: string }
+        Returns: boolean
+      }
+      is_org_owner: {
+        Args: { check_org_id: string; check_user_id: string }
+        Returns: boolean
+      }
       list_accessible_courses: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           access_role: string
-          code: string | null
+          code: string
           id: string
           name: string
         }[]
       }
-      match_chunks: {
-        Args: {
-          course_id_filter?: string
-          match_count?: number
-          match_threshold?: number
-          query_embedding: string
-          selected_material_ids?: string[] | null
-          user_id?: string
-        }
-        Returns: {
-          chunk_text: string
-          document_name: string | null
-          document_type: string | null
-          end_ms: number | null
-          id: string
-          material_id: string | null
-          material_name: string | null
-          material_type: string | null
-          page_number: number | null
-          relevance_score: number
-          start_ms: number | null
-          student_document_id: string | null
-        }[]
+      match_chunks:
+        | {
+            Args: {
+              match_count?: number
+              match_threshold?: number
+              query_embedding: string
+              user_id?: string
+            }
+            Returns: {
+              chunk_text: string
+              document_name: string
+              document_type: string
+              id: string
+              material_id: string
+              material_name: string
+              material_type: string
+              page_number: number
+              relevance_score: number
+              student_document_id: string
+            }[]
+          }
+        | {
+            Args: {
+              course_id_filter?: string
+              match_count?: number
+              match_threshold?: number
+              query_embedding: string
+              user_id?: string
+            }
+            Returns: {
+              chunk_text: string
+              document_name: string
+              document_type: string
+              end_ms: number
+              id: string
+              material_id: string
+              material_name: string
+              material_type: string
+              page_number: number
+              relevance_score: number
+              start_ms: number
+              student_document_id: string
+            }[]
+          }
+        | {
+            Args: {
+              course_id_filter?: string
+              match_count?: number
+              match_threshold?: number
+              query_embedding: string
+              selected_material_ids?: string[]
+              user_id?: string
+            }
+            Returns: {
+              chunk_text: string
+              document_name: string
+              document_type: string
+              end_ms: number
+              id: string
+              material_id: string
+              material_name: string
+              material_type: string
+              page_number: number
+              relevance_score: number
+              start_ms: number
+              student_document_id: string
+            }[]
+          }
+      org_has_active_subscription: {
+        Args: { check_org_id: string }
+        Returns: boolean
       }
+      reap_stale_material_jobs: { Args: never; Returns: number }
       set_active_academic_term: {
         Args: { target_term_id: string }
         Returns: {
@@ -724,10 +1174,20 @@ export type Database = {
           is_active: boolean
           label: string
           semester: number
-          sort_key: number
+          sort_key: number | null
           starts_on: string | null
           updated_at: string
         }
+        SetofOptions: {
+          from: "*"
+          to: "academic_terms"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      sync_profile_course_enrolled: {
+        Args: { target_user_id: string }
+        Returns: undefined
       }
     }
     Enums: {
@@ -737,9 +1197,13 @@ export type Database = {
         | "code"
         | "slides"
         | "notes"
-        | "video"
         | "other"
+        | "image"
+        | "docx"
+        | "pptx"
+        | "video"
       material_access_scope: "course" | "public" | "private"
+      org_role: "owner" | "admin" | "member"
       processing_status: "pending" | "processing" | "completed" | "failed"
       user_role: "student" | "admin"
     }
@@ -869,8 +1333,20 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      document_type: ["pdf", "transcript", "code", "slides", "notes", "video", "other"],
+      document_type: [
+        "pdf",
+        "transcript",
+        "code",
+        "slides",
+        "notes",
+        "other",
+        "image",
+        "docx",
+        "pptx",
+        "video",
+      ],
       material_access_scope: ["course", "public", "private"],
+      org_role: ["owner", "admin", "member"],
       processing_status: ["pending", "processing", "completed", "failed"],
       user_role: ["student", "admin"],
     },

@@ -11,7 +11,7 @@ declare const EdgeRuntime:
   | { waitUntil?: (promise: Promise<unknown>) => void }
   | undefined;
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }

@@ -29,11 +29,8 @@ import {
   type ChatModelTier,
   type ResolvedSelectedMaterial,
 } from "../_shared/query.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+import { corsHeaders } from "../_shared/cors.ts";
+import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
@@ -111,24 +108,7 @@ interface ChatStreamGenerationOptions extends ChatTextGenerationOptions {
   onTextDelta?: (delta: string) => Promise<void> | void;
 }
 
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && error.name === "AbortError")
-  );
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new DOMException("The operation was aborted.", "AbortError");
-  }
-}
-
-function formatSseEvent(event: string, payload: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-}
-
-async function generateGeminiText(options: ChatTextGenerationOptions): Promise<string> {
+async function generateModelText(options: ChatTextGenerationOptions): Promise<string> {
   return generateChatText({
     apiKey: options.apiKey,
     model: options.modelConfig.modelId,
@@ -139,7 +119,7 @@ async function generateGeminiText(options: ChatTextGenerationOptions): Promise<s
   });
 }
 
-async function generateGeminiTextStream(options: ChatStreamGenerationOptions): Promise<string> {
+async function generateModelTextStream(options: ChatStreamGenerationOptions): Promise<string> {
   return generateChatTextStream({
     apiKey: options.apiKey,
     model: options.modelConfig.modelId,
@@ -179,7 +159,7 @@ ${options.studentQuestion}
 Standalone retrieval query:`;
 
   try {
-    const rewritten = await generateGeminiText({
+    const rewritten = await generateModelText({
       modelConfig: options.modelConfig,
       apiKey: options.apiKey,
       systemPrompt: rewriteSystemPrompt,
@@ -312,6 +292,43 @@ async function insertQueryEvent(
   }
 }
 
+// Inserts the user question and assistant answer with timestamps 1ms apart
+// so ordering by created_at always returns user before assistant.
+async function persistTurn(
+  supabaseClient: ReturnType<typeof createClient>,
+  conversationId: string,
+  userContent: string,
+  assistantContent: string,
+) {
+  const userMsgCreatedAt = new Date().toISOString();
+  const assistantMsgCreatedAt = new Date(Date.now() + 1).toISOString();
+
+  const [userMessageResult, assistantMessageResult] = await Promise.all([
+    supabaseClient
+      .from("messages")
+      .insert({
+        conversation_id: conversationId,
+        role: "user",
+        content: userContent,
+        created_at: userMsgCreatedAt,
+      })
+      .select("id")
+      .single(),
+    supabaseClient
+      .from("messages")
+      .insert({
+        conversation_id: conversationId,
+        role: "assistant",
+        content: assistantContent,
+        created_at: assistantMsgCreatedAt,
+      })
+      .select("id")
+      .single(),
+  ]);
+
+  return { userMessageResult, assistantMessageResult };
+}
+
 async function formatAnswerWithReliableCitations(options: {
   modelConfig: ChatModelConfig;
   apiKey: string;
@@ -353,7 +370,7 @@ ${cleanedAnswer}
 Allowed sources:
 ${buildCitationRewriteSourceContext(options.chunks)}`;
 
-    const rewrittenAnswer = await generateGeminiText({
+    const rewrittenAnswer = await generateModelText({
       modelConfig: options.modelConfig,
       apiKey: options.apiKey,
       systemPrompt: citationRewriteSystemPrompt,
@@ -432,7 +449,7 @@ async function resolveSelectedMaterials(
     throw new Error(`Failed to validate selected documents: ${error.message}`);
   }
 
-  const resolvedMaterials = (data || []).map((material) => ({
+  const resolvedMaterials = (data || []).map((material: { id: any; file_name: any; }) => ({
     id: material.id,
     fileName: material.file_name,
   }));
@@ -444,7 +461,7 @@ async function resolveSelectedMaterials(
     );
   }
 
-  const orderById = new Map(resolvedMaterials.map((material) => [material.id, material]));
+  const orderById = new Map(resolvedMaterials.map((material: { id: any; }) => [material.id, material]));
   return selectedDocumentIds
     .map((documentId) => orderById.get(documentId))
     .filter((material): material is ResolvedSelectedMaterial => Boolean(material));
@@ -573,7 +590,7 @@ async function resolveConversation(
   };
 }
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -934,30 +951,12 @@ ${ragContext}`;
                 },
               });
 
-              const userMsgCreatedAt = new Date().toISOString();
-              const assistantMsgCreatedAt = new Date(Date.now() + 1).toISOString();
-
-              const userMessageResult = await supabaseClient
-                .from("messages")
-                .insert({
-                  conversation_id: activeConversationId,
-                  role: "user",
-                  content: trimmedMessage,
-                  created_at: userMsgCreatedAt,
-                })
-                .select("id")
-                .single();
-
-              const assistantMessageResult = await supabaseClient
-                .from("messages")
-                .insert({
-                  conversation_id: activeConversationId,
-                  role: "assistant",
-                  content: answer,
-                  created_at: assistantMsgCreatedAt,
-                })
-                .select("id")
-                .single();
+              const { userMessageResult, assistantMessageResult } = await persistTurn(
+                supabaseClient,
+                activeConversationId,
+                trimmedMessage,
+                answer,
+              );
 
               if (!userMessageResult.error && userMessageResult.data && !assistantMessageResult.error && assistantMessageResult.data) {
                 const queryCategory = classifyQueryCategory(trimmedMessage);
@@ -1001,7 +1000,7 @@ ${ragContext}`;
               return;
             }
 
-            const rawAnswer = await generateGeminiTextStream({
+            const rawAnswer = await generateModelTextStream({
               modelConfig: chatModelConfig,
               apiKey: chatApiKey,
               systemPrompt,
@@ -1059,32 +1058,12 @@ ${ragContext}`;
 
             // --- Persist to database (best-effort after client has received the answer) ---
 
-            // Insert user message first with explicit timestamps 1ms apart so that
-            // ordering by created_at always returns user before assistant.
-            const userMsgCreatedAt = new Date().toISOString();
-            const assistantMsgCreatedAt = new Date(Date.now() + 1).toISOString();
-
-            const userMessageResult = await supabaseClient
-              .from("messages")
-              .insert({
-                conversation_id: activeConversationId,
-                role: "user",
-                content: trimmedMessage,
-                created_at: userMsgCreatedAt,
-              })
-              .select("id")
-              .single();
-
-            const assistantMessageResult = await supabaseClient
-              .from("messages")
-              .insert({
-                conversation_id: activeConversationId,
-                role: "assistant",
-                content: answer,
-                created_at: assistantMsgCreatedAt,
-              })
-              .select("id")
-              .single();
+            const { userMessageResult, assistantMessageResult } = await persistTurn(
+              supabaseClient,
+              activeConversationId,
+              trimmedMessage,
+              answer,
+            );
 
             if (userMessageResult.error || !userMessageResult.data) {
               console.error(`Failed to save user message: ${userMessageResult.error?.message || "Unknown error"}`);

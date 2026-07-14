@@ -1,8 +1,8 @@
 // Shared OpenAI chat wrapper using the Vercel AI SDK.
 // All edge functions call OpenAI through this module instead of raw fetch,
 // so provider/model changes happen in one place.
-import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.24.1";
-import { generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.24.1";
+import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import { generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
 
 export class HttpError extends Error {
   status: number;

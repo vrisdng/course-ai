@@ -1,4 +1,5 @@
-import { Loader2 } from 'lucide-react';
+import { Loader2, Trash2, Users } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import type { Course } from '@/pages/AdminDashboard';
+import type { Course } from '@/features/materials/types';
 
 type AcademicTerm = {
   id: string;
@@ -32,6 +33,7 @@ interface CoursesOverviewTabProps {
   onNewCourseCodeChange: (value: string) => void;
   onNewCourseDescriptionChange: (value: string) => void;
   onCreateCourse: () => void;
+  onDeleteCourse: (course: Course) => void;
   onOpenAddStudentsDialog: (course: Course) => void;
   academicTerms: AcademicTerm[];
   isLoadingTerms: boolean;
@@ -43,6 +45,7 @@ interface CoursesOverviewTabProps {
   onNewTermAyStartChange: (value: string) => void;
   onCreateAcademicTerm: () => void;
   onSetActiveTerm: (termId: string) => void;
+  onDeleteAcademicTerm: (term: AcademicTerm) => void;
 }
 
 export function CoursesOverviewTab({
@@ -58,6 +61,7 @@ export function CoursesOverviewTab({
   onNewCourseCodeChange,
   onNewCourseDescriptionChange,
   onCreateCourse,
+  onDeleteCourse,
   onOpenAddStudentsDialog,
   academicTerms,
   isLoadingTerms,
@@ -69,6 +73,7 @@ export function CoursesOverviewTab({
   onNewTermAyStartChange,
   onCreateAcademicTerm,
   onSetActiveTerm,
+  onDeleteAcademicTerm,
 }: CoursesOverviewTabProps) {
   return (
     <>
@@ -155,9 +160,25 @@ export function CoursesOverviewTab({
                     <TableCell>{course.code || '-'}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{enrollmentCodeByCourseId[course.id] ?? 'N/A'}</TableCell>
                     <TableCell>
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-2">
                         <Button type="button" size="sm" variant="outline" onClick={() => onOpenAddStudentsDialog(course)}>
                           Generate Code
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" className="gap-1.5" asChild>
+                          <Link to={`/admin-dashboard/courses/${course.id}/students`}>
+                            <Users className="h-4 w-4" />
+                            Students
+                          </Link>
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => onDeleteCourse(course)}
+                          aria-label={`Delete ${course.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
                     </TableCell>
@@ -248,26 +269,40 @@ export function CoursesOverviewTab({
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-2">
                         {isAdmin ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={term.is_active ? 'secondary' : 'outline'}
-                            disabled={term.is_active || activatingTermId === term.id}
-                            onClick={() => onSetActiveTerm(term.id)}
-                          >
-                            {activatingTermId === term.id ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Activating...
-                              </>
-                            ) : term.is_active ? (
-                              'Active'
-                            ) : (
-                              'Set Active'
-                            )}
-                          </Button>
+                          <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={term.is_active ? 'secondary' : 'outline'}
+                              disabled={term.is_active || activatingTermId === term.id}
+                              onClick={() => onSetActiveTerm(term.id)}
+                            >
+                              {activatingTermId === term.id ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Activating...
+                                </>
+                              ) : term.is_active ? (
+                                'Active'
+                              ) : (
+                                'Set Active'
+                              )}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="text-destructive hover:text-destructive"
+                              disabled={term.is_active}
+                              title={term.is_active ? 'Set another term active before deleting this one' : undefined}
+                              onClick={() => onDeleteAcademicTerm(term)}
+                              aria-label={`Delete ${term.label}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </>
                         ) : (
                           <span className="text-xs text-muted-foreground">Admin only</span>
                         )}
