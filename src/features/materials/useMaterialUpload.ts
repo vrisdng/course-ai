@@ -115,36 +115,36 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
     const unsupported: string[] = [];
     const oversized: string[] = [];
-    let addedCount = 0;
+    const knownKeys = new Set(pendingFiles.map((item) => getPendingFileKey(item)));
+    const accepted: File[] = [];
 
-    setPendingFiles((previous) => {
-      const keys = new Set(previous.map((item) => getPendingFileKey(item)));
-      const next = [...previous];
-
-      for (const candidate of candidates) {
-        if (!isFileSupported(candidate)) {
-          unsupported.push(candidate.name);
-          continue;
-        }
-
-        const sizeValidationError = getImmediateUploadValidationError(candidate);
-        if (sizeValidationError) {
-          oversized.push(candidate.name);
-          continue;
-        }
-
-        const key = getPendingFileKey(candidate);
-        if (keys.has(key)) {
-          continue;
-        }
-
-        keys.add(key);
-        next.push(candidate);
-        addedCount += 1;
+    for (const candidate of candidates) {
+      if (!isFileSupported(candidate)) {
+        unsupported.push(candidate.name);
+        continue;
       }
 
-      return next;
-    });
+      const sizeValidationError = getImmediateUploadValidationError(candidate);
+      if (sizeValidationError) {
+        oversized.push(candidate.name);
+        continue;
+      }
+
+      const key = getPendingFileKey(candidate);
+      if (knownKeys.has(key)) {
+        continue;
+      }
+
+      knownKeys.add(key);
+      accepted.push(candidate);
+    }
+
+    if (accepted.length > 0) {
+      setPendingFiles((previous) => {
+        const previousKeys = new Set(previous.map((item) => getPendingFileKey(item)));
+        return [...previous, ...accepted.filter((candidate) => !previousKeys.has(getPendingFileKey(candidate)))];
+      });
+    }
 
     if (unsupported.length > 0) {
       toast.error(`Skipped ${unsupported.length} unsupported file${unsupported.length === 1 ? '' : 's'}.`);
@@ -156,7 +156,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       );
     }
 
-    if (addedCount === 0 && unsupported.length === 0 && oversized.length === 0) {
+    if (accepted.length === 0 && unsupported.length === 0 && oversized.length === 0) {
       toast.info('These files are already in your review list.');
     }
   };

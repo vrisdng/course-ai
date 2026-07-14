@@ -32,7 +32,6 @@ interface VideoSourceDialogProps {
 const CONTEXT_WINDOW_MS = 30_000; // 30s before and after the cited segment
 
 export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const highlightRef = useRef<HTMLDivElement | null>(null);
   const [segments, setSegments] = useState<{ id: string; segment_index: number; start_ms: number; end_ms: number; text: string }[]>([]);
   const [isLoadingSegments, setIsLoadingSegments] = useState(false);
@@ -73,23 +72,6 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
     highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [segments, isLoadingSegments]);
 
-  // Seek video to start timestamp
-  useEffect(() => {
-    if (!source?.signedUrl || !videoRef.current) return;
-
-    const video = videoRef.current;
-    const seekToStart = () => {
-      video.currentTime = Math.max(0, source.startMs / 1000);
-    };
-
-    if (video.readyState >= 1) {
-      seekToStart();
-    }
-    video.addEventListener('loadedmetadata', seekToStart);
-    return () => video.removeEventListener('loadedmetadata', seekToStart);
-  }, [source]);
-
-
   return (
     <Dialog open={Boolean(source)} onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="max-h-[90vh] overflow-hidden p-0 sm:max-w-4xl">
@@ -114,9 +96,11 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                 /* Video playback mode */
                 <>
                   <video
-                    ref={videoRef}
                     src={source.signedUrl}
                     controls
+                    onLoadedMetadata={(event) => {
+                      event.currentTarget.currentTime = Math.max(0, source.startMs / 1000);
+                    }}
                     className="max-h-[60vh] w-full rounded-lg bg-black"
                   />
                   <div className="flex justify-end">

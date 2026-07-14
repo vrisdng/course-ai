@@ -37,7 +37,7 @@ describe('documentScope helpers', () => {
   });
 
   it('uses count-based selector labels for the main chat dropdown', () => {
-    expect(getDocumentSelectorLabel(documents, [], false)).toBe('No documents (general knowledge)');
+    expect(getDocumentSelectorLabel(documents, [], false)).toBe('No documents selected.');
     expect(getDocumentSelectorLabel(documents, ['doc-2'], false)).toBe('1 material selected');
     expect(getDocumentSelectorLabel(documents, ['doc-1', 'doc-2'], false)).toBe('2 materials selected');
     expect(getDocumentSelectorLabel(documents, ['doc-1', 'doc-2', 'doc-3'], false)).toBe('All materials selected');
