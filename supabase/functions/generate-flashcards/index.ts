@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { generateChatText } from "../_shared/llm.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,7 +8,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const CHAT_MODEL = "gemini-3-flash-preview";
+const CHAT_MODEL = "gpt-4o-mini";
 const MAX_FLASHCARDS = 10;
 
 interface FlashcardRequest {
@@ -22,25 +23,8 @@ interface Flashcard {
   answer: string;
 }
 
-interface GeminiContent {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-  }>;
-}
-
-function extractGeminiText(data: unknown): string {
-  const content = data as GeminiContent;
-  return (
-    content?.candidates?.[0]?.content?.parts
-      ?.map((p) => p?.text ?? "")
-      .join("") ?? ""
-  );
-}
-
-async function generateFlashcardsWithGemini(
-  geminiApiKey: string,
+async function generateFlashcardsWithOpenAI(
+  openAiApiKey: string,
   contextText: string,
   count: number
 ): Promise<Flashcard[]> {
@@ -61,36 +45,16 @@ ${contextText}
 Return format (JSON array only):
 [{"question": "...", "answer": "..."}, ...]`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${CHAT_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": geminiApiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 2000,
-        },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("Gemini API error:", response.status, errorText);
-    if (response.status === 429) {
-      throw new Error("Rate limit exceeded. Please try again later.");
-    }
-    throw new Error(`Gemini API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const rawText = extractGeminiText(data).trim();
+  const rawText = await generateChatText({
+    apiKey: openAiApiKey,
+    model: CHAT_MODEL,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.4,
+    maxOutputTokens: 2000,
+  });
 
   // Strip markdown code fences if present
   const jsonText = rawText
@@ -102,7 +66,7 @@ Return format (JSON array only):
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    console.error("Failed to parse Gemini JSON output:", rawText);
+    console.error("Failed to parse OpenAI JSON output:", rawText);
     throw new Error("Failed to parse flashcard response from AI.");
   }
 
@@ -130,9 +94,9 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
 
-    if (!supabaseUrl || !supabaseServiceKey || !geminiApiKey) {
+    if (!supabaseUrl || !supabaseServiceKey || !openAiApiKey) {
       throw new Error("Missing required environment variables.");
     }
 
@@ -233,8 +197,8 @@ serve(async (req) => {
       MAX_FLASHCARDS
     );
 
-    const flashcards = await generateFlashcardsWithGemini(
-      geminiApiKey,
+    const flashcards = await generateFlashcardsWithOpenAI(
+      openAiApiKey,
       contextText,
       requestedCount
     );

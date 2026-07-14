@@ -1,5 +1,34 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { HttpError, generateChatText, generateChatTextStream } from "../_shared/llm.ts";
+import {
+  buildCitationRewriteSourceContext,
+  clipText,
+  formatTimestamp,
+  sanitizeAndRemapCitations,
+  stripTrailingSourcesSection,
+} from "../_shared/citations.ts";
+import {
+  dedupeRetrievedChunksByBestScore,
+  rerankRetrievedChunks,
+} from "../_shared/retrieval.ts";
+import {
+  buildConversationHistoryTurns,
+  buildHistoryContext,
+  buildOpenAIConversationMessages,
+  type ConversationHistoryTurn,
+} from "../_shared/history.ts";
+import {
+  buildSelectedDocumentEmptyAnswer,
+  classifyQueryCategory,
+  formatDocumentNameList,
+  inferUnresolvedReason,
+  isLikelyAmbiguousQuestion,
+  normalizeSelectedDocumentIds,
+  resolveChatModelTier,
+  type ChatModelTier,
+  type ResolvedSelectedMaterial,
+} from "../_shared/query.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,53 +38,22 @@ const corsHeaders = {
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
 
-type ChatModelTier = "fast" | "smart" | "pro";
-
 interface ChatModelConfig {
   modelId: string;
-  apiBaseUrl: string;
-  apiKeyEnvVar: string;
   displayName: string;
 }
 
 const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
-  fast: {
-    modelId: "gpt-4o-mini",
-    apiBaseUrl: "https://api.openai.com/v1",
-    apiKeyEnvVar: "OPENAI_API_KEY",
-    displayName: "Fast (ChatGPT)",
-  },
-  smart: {
-    modelId: "gemini-2.5-flash",
-    apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    apiKeyEnvVar: "GEMINI_API_KEY",
-    displayName: "Smart (Gemini 2.5 Flash)",
-  },
-  pro: {
-    modelId: "gemini-2.5-pro",
-    apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    apiKeyEnvVar: "GEMINI_API_KEY",
-    displayName: "Pro (Gemini 2.5 Pro)",
-  },
+  fast: { modelId: "gpt-4o-mini", displayName: "Fast (GPT-4o mini)" },
+  smart: { modelId: "gpt-4o", displayName: "Smart (GPT-4o)" },
+  pro: { modelId: "gpt-4.1", displayName: "Pro (GPT-4.1)" },
 };
 
-function resolveChatModelTier(raw: unknown): ChatModelTier {
-  if (raw === "fast" || raw === "smart" || raw === "pro") {
-    return raw;
-  }
-  return "fast";
-}
 const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
 const HIGH_RECALL_MATCH_COUNT = 18;
 const FINAL_MATCH_COUNT = 10;
 const RELEVANCE_FLOOR = 0.55;
-const CITATION_TOKEN_PATTERN = "<<cite:(\\d+)>>";
 const CONVERSATION_HISTORY_FETCH_LIMIT = 24;
-const CONVERSATION_HISTORY_PROMPT_LIMIT = 14;
-const CONVERSATION_HISTORY_CHAR_BUDGET = 9000;
-const CONVERSATION_HISTORY_MESSAGE_CLIP = 850;
-const MEMORY_CITATION_TOKEN_PATTERN = /<<\s*cite\s*:\s*[1-9]\d*\s*>>/gi;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface ChatRequest {
   message: string;
@@ -98,26 +96,6 @@ interface QueryEventInsert {
   latency_ms: number | null;
 }
 
-interface CitationSanitizationResult {
-  text: string;
-  citedChunkNumbers: number[];
-}
-
-interface ConversationHistoryTurn {
-  role: "user" | "assistant";
-  content: string;
-}
-
-interface ResolvedSelectedMaterial {
-  id: string;
-  fileName: string;
-}
-
-interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
 interface ChatTextGenerationOptions {
   modelConfig: ChatModelConfig;
   apiKey: string;
@@ -133,15 +111,6 @@ interface ChatStreamGenerationOptions extends ChatTextGenerationOptions {
   onTextDelta?: (delta: string) => Promise<void> | void;
 }
 
-class HttpError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
 function isAbortError(error: unknown): boolean {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
@@ -155,604 +124,31 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-const AMBIGUOUS_QUERY_MARKERS = [
-  /\b(this|that|these|those)\b/i,
-  /\b(it|they|them)\b/i,
-  /\babove|below|earlier|previous|last one\b/i,
-  /\bwhat about\b/i,
-  /\bcan you explain this\b/i,
-  /\bmore on that\b/i,
-];
-
-const LEXICAL_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "but",
-  "by",
-  "for",
-  "from",
-  "if",
-  "in",
-  "into",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "s",
-  "such",
-  "t",
-  "that",
-  "the",
-  "their",
-  "then",
-  "there",
-  "these",
-  "they",
-  "this",
-  "to",
-  "was",
-  "will",
-  "with",
-  "you",
-  "your",
-]);
-
-function stripTrailingSourcesSection(text: string): string {
-  const withoutBlockSources = text.replace(/\n{1,}(?:#{1,6}\s*)?sources\s*:?\s*[\s\S]*$/i, "");
-  const withoutInlineSources = withoutBlockSources.replace(/\s+sources\s*:\s*(?:\[\d+\]|\d+\s+\S)[\s\S]*$/i, "");
-  return withoutInlineSources.trim();
-}
-
-function clipText(value: string, maxLength = 1200): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength).trim()}...`;
-}
-
-function normalizeSelectedDocumentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const uniqueIds = new Set<string>();
-
-  for (const rawId of value) {
-    if (typeof rawId !== "string") {
-      continue;
-    }
-
-    const trimmedId = rawId.trim();
-    if (!UUID_PATTERN.test(trimmedId)) {
-      continue;
-    }
-
-    uniqueIds.add(trimmedId);
-  }
-
-  return Array.from(uniqueIds);
-}
-
-function formatDocumentNameList(materials: ResolvedSelectedMaterial[]): string {
-  if (materials.length === 0) {
-    return "the selected documents";
-  }
-
-  if (materials.length === 1) {
-    return `"${materials[0].fileName}"`;
-  }
-
-  if (materials.length === 2) {
-    return `"${materials[0].fileName}" and "${materials[1].fileName}"`;
-  }
-
-  return `${materials.length} selected documents`;
-}
-
-function buildSelectedDocumentEmptyAnswer(materials: ResolvedSelectedMaterial[]): string {
-  return `I couldn't find enough information in ${formatDocumentNameList(materials)} to answer that from the selected documents alone.\n\n## Next step\n\nTry selecting additional documents or switching back to **All course documents** for a broader grounded answer.`;
-}
-
-function sanitizeMessageForMemory(content: string): string {
-  const withoutCitationTokens = content.replace(MEMORY_CITATION_TOKEN_PATTERN, "");
-  const withoutTrailingSources = stripTrailingSourcesSection(withoutCitationTokens);
-
-  return withoutTrailingSources
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function buildConversationHistoryTurns(
-  rawMessages: Array<{ role: string; content: string }>
-): ConversationHistoryTurn[] {
-  const normalized = rawMessages
-    .map((message): ConversationHistoryTurn | null => {
-      const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
-      if (!role || typeof message.content !== "string") {
-        return null;
-      }
-
-      const cleaned = role === "assistant"
-        ? sanitizeMessageForMemory(message.content)
-        : message.content
-            .replace(/[ \t]+\n/g, "\n")
-            .replace(/\n{3,}/g, "\n\n")
-            .trim();
-
-      if (!cleaned) {
-        return null;
-      }
-
-      return {
-        role,
-        content: clipText(cleaned, CONVERSATION_HISTORY_MESSAGE_CLIP),
-      };
-    })
-    .filter((message): message is ConversationHistoryTurn => Boolean(message));
-
-  const tailLimited = normalized.slice(-CONVERSATION_HISTORY_PROMPT_LIMIT);
-
-  let totalChars = 0;
-  const budgeted: ConversationHistoryTurn[] = [];
-  for (let index = tailLimited.length - 1; index >= 0; index -= 1) {
-    const message = tailLimited[index];
-    const projectedSize = message.content.length + 24;
-
-    if (budgeted.length > 0 && totalChars + projectedSize > CONVERSATION_HISTORY_CHAR_BUDGET) {
-      break;
-    }
-
-    budgeted.push(message);
-    totalChars += projectedSize;
-  }
-
-  return budgeted.reverse();
-}
-
-function buildHistoryContext(historyTurns: ConversationHistoryTurn[]): string {
-  return historyTurns
-    .map((turn) => `${turn.role === "assistant" ? "Assistant" : "Student"}: ${turn.content}`)
-    .join("\n");
-}
-
-function buildOpenAIConversationMessages(
-  systemPrompt: string,
-  userPrompt: string,
-  historyTurns: ConversationHistoryTurn[] = []
-): OpenAIChatMessage[] {
-  const messages: OpenAIChatMessage[] = [
-    { role: "system", content: systemPrompt },
-    ...historyTurns.map((turn) => ({
-      role: turn.role === "assistant" ? ("assistant" as const) : ("user" as const),
-      content: turn.content,
-    })),
-    { role: "user" as const, content: userPrompt },
-  ];
-
-  return messages;
-}
-
-function sourceLabel(chunk: RetrievedChunk): string {
-  const name = chunk.material_name || chunk.document_name || "Unknown document";
-  if (typeof chunk.start_ms === "number") {
-    const start = formatTimestamp(chunk.start_ms);
-    const end =
-      typeof chunk.end_ms === "number" ? `-${formatTimestamp(chunk.end_ms)}` : "";
-    return `${name} (${start}${end})`;
-  }
-
-  const pageInfo = chunk.page_number ? ` (Page ${chunk.page_number})` : "";
-  return `${name}${pageInfo}`;
-}
-
-function formatTimestamp(milliseconds: number): string {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function isLikelyAmbiguousQuestion(message: string, historyContext: string): boolean {
-  if (!historyContext.trim()) {
-    return false;
-  }
-
-  const trimmed = message.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-  const shortQuestion = wordCount <= 9 || trimmed.length <= 60;
-  const hasAmbiguousMarker = AMBIGUOUS_QUERY_MARKERS.some((pattern) => pattern.test(trimmed));
-
-  return shortQuestion || hasAmbiguousMarker;
-}
-
-function tokenizeForLexicalScore(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !LEXICAL_STOP_WORDS.has(token));
-}
-
-function lexicalOverlapScore(query: string, chunkText: string): number {
-  const queryTokens = Array.from(new Set(tokenizeForLexicalScore(query)));
-  if (queryTokens.length === 0) {
-    return 0;
-  }
-
-  const chunkTokens = new Set(tokenizeForLexicalScore(chunkText));
-  let overlap = 0;
-
-  for (const token of queryTokens) {
-    if (chunkTokens.has(token)) {
-      overlap += 1;
-    }
-  }
-
-  return overlap / queryTokens.length;
-}
-
-function dedupeRetrievedChunksByBestScore(chunks: RetrievedChunk[]): RetrievedChunk[] {
-  const byChunkId = new Map<string, RetrievedChunk>();
-
-  for (const chunk of chunks) {
-    const existing = byChunkId.get(chunk.id);
-    if (!existing || chunk.relevance_score > existing.relevance_score) {
-      byChunkId.set(chunk.id, chunk);
-    }
-  }
-
-  return Array.from(byChunkId.values());
-}
-
-function rerankRetrievedChunks(chunks: RetrievedChunk[], query: string, topK: number): RetrievedChunk[] {
-  const scored = chunks.map((chunk) => {
-    const semantic = Math.max(0, Math.min(1, chunk.relevance_score));
-    const lexical = lexicalOverlapScore(query, chunk.chunk_text);
-    const combinedScore = semantic * 0.72 + lexical * 0.28;
-    return { chunk, combinedScore };
-  });
-
-  scored.sort((a, b) => b.combinedScore - a.combinedScore);
-  return scored.slice(0, topK).map((entry) => ({
-    ...entry.chunk,
-    relevance_score: entry.combinedScore,
-  }));
-}
-
-function classifyQueryCategory(message: string): string {
-  const text = message.trim().toLowerCase();
-
-  if (!text) {
-    return "other";
-  }
-
-  if (/\b(compare|difference|versus|vs\.?|pros and cons)\b/.test(text)) {
-    return "comparison";
-  }
-
-  if (/\b(how do i|how to|steps|process|procedure|implement|apply)\b/.test(text)) {
-    return "how_to_process";
-  }
-
-  if (/\b(calculate|compute|equation|formula|derive|proof|solve)\b/.test(text)) {
-    return "calculation";
-  }
-
-  if (/\b(error|bug|issue|debug|fix|failing|doesn't work|not working)\b/.test(text)) {
-    return "troubleshooting";
-  }
-
-  if (/\b(what is|define|definition|concept|meaning|explain)\b/.test(text)) {
-    return "definition_concept";
-  }
-
-  if (/\b(when|where|who|which|list|name)\b/.test(text)) {
-    return "factual_lookup";
-  }
-
-  return "other";
-}
-
-function inferUnresolvedReason(options: {
-  retrievedChunkCount: number;
-  citationCount: number;
-  answer: string;
-}): string | null {
-  if (options.retrievedChunkCount === 0) {
-    return "no_retrieval";
-  }
-
-  if (options.citationCount === 0) {
-    return "no_citations";
-  }
-
-  const loweredAnswer = options.answer.toLowerCase();
-  const materialGapPattern = /(not (?:in|from) (?:the )?(?:provided )?(?:selected )?(?:course )?(?:documents|materials)|not available in (?:the )?(?:provided )?(?:selected )?(?:course )?(?:documents|materials)|cannot find this in (?:the )?(?:selected )?(?:documents|materials))/;
-  if (materialGapPattern.test(loweredAnswer)) {
-    return "insufficient_materials";
-  }
-
-  return null;
-}
-
-function normalizeCitationTokens(content: string, maxSourceNumber: number): string {
-  if (maxSourceNumber < 1) {
-    return content;
-  }
-
-  let normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return "";
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  // Backward compatibility: convert explicit [n] and (n) markers only.
-  normalized = normalized.replace(/\[([1-9]\d*)\]/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  normalized = normalized.replace(/\(([1-9]\d*)\)/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  return normalized;
-}
-
-function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: number): CitationSanitizationResult {
-  const cleanedAnswer = stripTrailingSourcesSection(rawAnswer.trim());
-  const normalizedAnswer = normalizeCitationTokens(cleanedAnswer, maxSourceNumber);
-
-  const orderedOriginalCitationNumbers: number[] = [];
-  const seenOriginalCitationNumbers = new Set<number>();
-
-  for (const match of normalizedAnswer.matchAll(new RegExp(CITATION_TOKEN_PATTERN, "g"))) {
-    const citationNumber = Number(match[1]);
-    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxSourceNumber) {
-      continue;
-    }
-    if (!seenOriginalCitationNumbers.has(citationNumber)) {
-      seenOriginalCitationNumbers.add(citationNumber);
-      orderedOriginalCitationNumbers.push(citationNumber);
-    }
-  }
-
-  const remappedCitationNumbers = new Map<number, number>();
-  orderedOriginalCitationNumbers.forEach((originalCitationNumber, index) => {
-    remappedCitationNumbers.set(originalCitationNumber, index + 1);
-  });
-
-  const remappedAnswer = normalizedAnswer.replace(new RegExp(CITATION_TOKEN_PATTERN, "g"), (_, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    const mappedCitationNumber = remappedCitationNumbers.get(citationNumber);
-    return mappedCitationNumber ? `<<cite:${mappedCitationNumber}>>` : "";
-  });
-
-  const cleanedRemappedAnswer = remappedAnswer
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ ]{2,}/g, " ")
-    .replace(/\s+([.,;:!?])/g, "$1")
-    .trim();
-
-  return {
-    text: cleanedRemappedAnswer,
-    citedChunkNumbers: orderedOriginalCitationNumbers,
-  };
-}
-
-function buildCitationRewriteSourceContext(chunks: RetrievedChunk[]): string {
-  return chunks
-    .map((chunk, index) => {
-      const sourceType = chunk.material_type || chunk.document_type || "document";
-      return [
-        `Source ${index + 1}: ${sourceLabel(chunk)} (${sourceType})`,
-        clipText(chunk.chunk_text, 900),
-      ].join("\n");
-    })
-    .join("\n\n");
-}
-
-function extractOpenAIText(aiData: unknown): string {
-  if (!aiData || typeof aiData !== "object") {
-    return "";
-  }
-
-  const choices = (aiData as {
-    choices?: Array<{
-      message?: {
-        content?: string | Array<{ type?: string; text?: string }>;
-      };
-    }>;
-  }).choices;
-
-  if (!Array.isArray(choices) || choices.length === 0) {
-    return "";
-  }
-
-  const content = choices[0]?.message?.content;
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (typeof part?.text === "string" ? part.text : ""))
-      .join("");
-  }
-
-  return "";
-}
-
 function formatSseEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
 async function generateGeminiText(options: ChatTextGenerationOptions): Promise<string> {
-  const aiResponse = await fetch(`${options.modelConfig.apiBaseUrl}/chat/completions`, {
-    method: "POST",
+  return generateChatText({
+    apiKey: options.apiKey,
+    model: options.modelConfig.modelId,
+    messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
+    temperature: options.temperature,
+    maxOutputTokens: options.maxOutputTokens,
     signal: options.signal,
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: options.modelConfig.modelId,
-      messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
-      temperature: options.temperature ?? 0.4,
-      max_tokens: options.maxOutputTokens ?? 2000,
-    }),
   });
-
-  if (!aiResponse.ok) {
-    const errorText = await aiResponse.text();
-    console.error("Chat API error:", aiResponse.status, errorText);
-
-    if (aiResponse.status === 429) {
-      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
-    }
-
-    throw new Error(`Chat API error: ${aiResponse.status}${errorText ? ` - ${clipText(errorText, 240)}` : ""}`);
-  }
-
-  const aiData = await aiResponse.json() as unknown;
-  return extractOpenAIText(aiData).trim() || "I couldn't generate a response.";
 }
 
 async function generateGeminiTextStream(options: ChatStreamGenerationOptions): Promise<string> {
-  const aiResponse = await fetch(`${options.modelConfig.apiBaseUrl}/chat/completions`, {
-    method: "POST",
+  return generateChatTextStream({
+    apiKey: options.apiKey,
+    model: options.modelConfig.modelId,
+    messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
+    temperature: options.temperature,
+    maxOutputTokens: options.maxOutputTokens,
     signal: options.signal,
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: options.modelConfig.modelId,
-      messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
-      temperature: options.temperature ?? 0.4,
-      max_tokens: options.maxOutputTokens ?? 2000,
-      stream: true,
-    }),
+    onTextDelta: options.onTextDelta,
   });
-
-  if (!aiResponse.ok) {
-    const errorText = await aiResponse.text();
-    console.error("Chat Stream API error:", aiResponse.status, errorText);
-
-    if (aiResponse.status === 429) {
-      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
-    }
-
-    throw new Error(`Chat stream API error: ${aiResponse.status}${errorText ? ` - ${clipText(errorText, 240)}` : ""}`);
-  }
-
-  if (!aiResponse.body) {
-    throw new Error("Chat stream response did not include a body");
-  }
-
-  const reader = aiResponse.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let fullText = "";
-  const processRawSseEvent = async (rawEvent: string) => {
-    throwIfAborted(options.signal);
-
-    if (!rawEvent.trim()) {
-      return;
-    }
-
-    const dataLines = rawEvent
-      .split("\n")
-      .map((line) => line.trimEnd())
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart());
-
-    if (dataLines.length === 0) {
-      return;
-    }
-
-    const payload = dataLines.join("\n");
-    if (payload === "[DONE]") {
-      return;
-    }
-
-    let parsedPayload: unknown;
-    try {
-      parsedPayload = JSON.parse(payload);
-    } catch {
-      return;
-    }
-
-    const chunkText = (parsedPayload as {
-      choices?: Array<{
-        delta?: {
-          content?: string;
-        };
-      }>;
-    }).choices?.[0]?.delta?.content || "";
-
-    if (!chunkText) {
-      return;
-    }
-
-    fullText += chunkText;
-    if (options.onTextDelta) {
-      await options.onTextDelta(chunkText);
-    }
-  };
-
-  while (true) {
-    throwIfAborted(options.signal);
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-
-    let boundaryIndex = buffer.indexOf("\n\n");
-    while (boundaryIndex !== -1) {
-      const rawEvent = buffer.slice(0, boundaryIndex);
-      buffer = buffer.slice(boundaryIndex + 2);
-      await processRawSseEvent(rawEvent);
-      boundaryIndex = buffer.indexOf("\n\n");
-    }
-  }
-
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    await processRawSseEvent(buffer);
-  }
-
-  return fullText.trim() || "I couldn't generate a response.";
 }
 
 async function rewriteQueryForRetrieval(options: {
@@ -1230,7 +626,7 @@ serve(async (req) => {
 
     // Resolved after parsing the request body below; declared here for closure access in the stream.
     let chatModelConfig: ChatModelConfig = CHAT_MODEL_CONFIGS.fast;
-    let chatApiKey: string = openAiApiKey;
+    const chatApiKey: string = openAiApiKey;
 
     const supabaseClient = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: authHeader } },
@@ -1273,7 +669,6 @@ serve(async (req) => {
 
     const modelTier = resolveChatModelTier(rawModel);
     chatModelConfig = CHAT_MODEL_CONFIGS[modelTier];
-    chatApiKey = chatModelConfig.apiKeyEnvVar === "OPENAI_API_KEY" ? openAiApiKey : (geminiApiKey ?? openAiApiKey);
 
     if (!trimmedMessage) {
       return new Response(

@@ -9,6 +9,7 @@ import {
   getDocumentScopeSummary,
   sanitizeSelectedDocumentIds,
 } from './documentScope';
+import { parseMaybeJson, parseSseEventBlock, type ParsedSseEvent } from './sse';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
 
@@ -26,50 +27,6 @@ interface AccessibleCourse {
   name: string;
   code: string | null;
   accessRole: string;
-}
-
-interface ParsedSseEvent {
-  event: string;
-  data: string;
-}
-
-function parseSseEventBlock(block: string): ParsedSseEvent | null {
-  const normalized = block.replace(/\r/g, '');
-  const lines = normalized.split('\n');
-  const dataLines: string[] = [];
-  let event = 'message';
-
-  for (const line of lines) {
-    if (!line || line.startsWith(':')) {
-      continue;
-    }
-
-    if (line.startsWith('event:')) {
-      event = line.slice(6).trim();
-      continue;
-    }
-
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  }
-
-  if (dataLines.length === 0) {
-    return null;
-  }
-
-  return {
-    event,
-    data: dataLines.join('\n'),
-  };
-}
-
-function parseMaybeJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
 }
 
 export type ChatModelTier = 'fast' | 'smart' | 'pro';

@@ -3,13 +3,10 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
-  Copy,
   Ellipsis,
-  ExternalLink,
   FileText,
   Filter,
   Globe2,
-  Link,
   Loader2,
   Lock,
   Pencil,
@@ -44,7 +41,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
-import { groupSegmentsIntoParagraphs } from '@/features/student-chat/groupTranscriptSegments';
+import { CoursesOverviewTab } from '@/components/lecturer/CoursesOverviewTab';
+import { EnrollmentCodeDialog } from '@/components/lecturer/EnrollmentCodeDialog';
+import { LinkedUrlDialog } from '@/components/lecturer/LinkedUrlDialog';
+import { TranscriptDialog } from '@/components/lecturer/TranscriptDialog';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
 import {
@@ -99,13 +99,13 @@ const SUPPORTED_EXTENSIONS = new Set([
 
 const MATERIALS_PAGE_SIZE = 10;
 
-type Course = {
+export type Course = {
   id: string;
   name: string;
   code: string | null;
 };
 
-type AcademicTerm = {
+export type AcademicTerm = {
   id: string;
   label: string;
   semester: number;
@@ -118,7 +118,7 @@ type AcademicTerm = {
 type MaterialStatus = 'pending' | 'processing' | 'completed' | 'failed';
 type AccessScope = 'course' | 'public' | 'private';
 
-type Material = {
+export type Material = {
   id: string;
   course_id: string;
   duration_ms?: number | null;
@@ -139,7 +139,7 @@ type Material = {
 };
 
 
-type TranscriptSegment = {
+export type TranscriptSegment = {
   id: string;
   segment_index: number;
   start_ms: number;
@@ -170,7 +170,7 @@ const formatBytes = (bytes: number | null) => {
   return `${(kb / 1024).toFixed(1)} MB`;
 };
 
-const formatClock = (ms: number) => {
+export const formatClock = (ms: number) => {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -190,8 +190,6 @@ const formatDuration = (durationMs: number | null | undefined) => {
 
   return formatClock(durationMs);
 };
-
-const formatTimestamp = formatClock;
 
 const isFileSupported = (candidate: File) => {
   const extension = candidate.name.split('.').pop()?.toLowerCase() || '';
@@ -1353,197 +1351,32 @@ export default function AdminDashboard() {
 
   return (
     <MainLayout showFooter={false}>
-      <Dialog open={Boolean(linkedUrlMaterial)} onOpenChange={(open) => (open ? undefined : closeLinkedUrlDialog())}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Attached URL</DialogTitle>
-            <DialogDescription>
-              {linkedUrlMaterial
-                ? `View or edit the URL attached to "${linkedUrlMaterial.file_name}".`
-                : 'View or edit the URL attached to this video.'}
-            </DialogDescription>
-          </DialogHeader>
+      <LinkedUrlDialog
+        material={linkedUrlMaterial}
+        value={linkedUrlValue}
+        isSaving={isSavingLinkedUrl}
+        onValueChange={setLinkedUrlValue}
+        onClose={closeLinkedUrlDialog}
+        onSave={() => void handleSaveLinkedUrl()}
+      />
 
-          <div className="space-y-3">
-            <Label htmlFor="linked-url">URL</Label>
-            <Input
-              id="linked-url"
-              type="url"
-              placeholder="https://example.com/video"
-              value={linkedUrlValue}
-              onChange={(e) => setLinkedUrlValue(e.target.value)}
-              disabled={isSavingLinkedUrl}
-            />
-            {linkedUrlValue.trim() && (
-              <a
-                href={linkedUrlValue.trim()}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                <ExternalLink className="h-3 w-3" />
-                Open URL in new tab
-              </a>
-            )}
-          </div>
+      <TranscriptDialog
+        material={transcriptMaterial}
+        segments={transcriptSegments}
+        isLoading={isLoadingTranscript}
+        onClose={closeTranscriptDialog}
+      />
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeLinkedUrlDialog} disabled={isSavingLinkedUrl}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={handleSaveLinkedUrl} disabled={isSavingLinkedUrl}>
-              {isSavingLinkedUrl ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Link className="mr-2 h-4 w-4" />
-                  Save URL
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(transcriptMaterial)} onOpenChange={(open) => (open ? undefined : closeTranscriptDialog())}>
-        <DialogContent className="max-h-[85vh] overflow-hidden sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Video Transcript</DialogTitle>
-            <DialogDescription>
-              {transcriptMaterial
-                ? `Timestamped transcript extracted from ${transcriptMaterial.file_name}.`
-                : 'Timestamped transcript extracted from this video.'}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <div className="h-[60vh] space-y-3 overflow-y-auto pr-1">
-            {isLoadingTranscript ? (
-              <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Loading transcript...
-              </div>
-            ) : transcriptSegments.length === 0 ? (
-              <div className="rounded-md border border-border bg-muted/20 px-4 py-6 text-sm text-muted-foreground">
-                No transcript segments were found for this video yet.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {groupSegmentsIntoParagraphs(transcriptSegments).map((para) => (
-                  <div key={para.id} className="rounded-md border border-border bg-muted/20 px-4 py-3">
-                    <div className="mb-2 flex items-center gap-2">
-                      <span className="text-xs font-medium text-primary">
-                        {formatTimestamp(para.startMs)}–{formatTimestamp(para.endMs)}
-                      </span>
-                    </div>
-                    <p className="text-sm text-foreground">{para.text}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeTranscriptDialog}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(addStudentsCourse)} onOpenChange={(open) => (open ? undefined : closeAddStudentsDialog())}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Enrollment Code</DialogTitle>
-            <DialogDescription>
-              {addStudentsCourse
-                ? `Share this code with students to let them self-enroll in ${addStudentsCourse.name}${addStudentsCourse.code ? ` (${addStudentsCourse.code})` : ''}.`
-                : 'Share this code with students so they can self-enroll.'}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            {isLoadingCourseCode ? (
-              <div className="flex items-center justify-center py-6">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : generatedCourseCode ? (
-              <div className="space-y-3">
-                <div className="rounded-lg border border-border bg-muted/30 p-4 text-center">
-                  <p className="mb-1 text-xs text-muted-foreground">Course enrollment code</p>
-                  <p className="font-mono text-3xl font-bold tracking-widest text-primary">{generatedCourseCode}</p>
-                  {courseCodeExpiresAt && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Expires {new Date(courseCodeExpiresAt).toLocaleDateString()}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => void copyText(generatedCourseCode)}
-                >
-                  <Copy className="mr-2 h-4 w-4" />
-                  Copy Code
-                </Button>
-                <p className="text-center text-xs text-muted-foreground">
-                  Students enter this code on the chat page to enroll in this course.
-                </p>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No enrollment code exists for this course yet. Generate one to share with your students.
-              </p>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={closeAddStudentsDialog}>
-              Close
-            </Button>
-            {generatedCourseCode ? (
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => void handleGenerateCourseCode()}
-                disabled={isGeneratingInvites || isLoadingCourseCode}
-              >
-                {isGeneratingInvites ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Regenerating...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Regenerate Code
-                  </>
-                )}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                onClick={() => void handleGenerateCourseCode()}
-                disabled={isGeneratingInvites || isLoadingCourseCode}
-              >
-                {isGeneratingInvites ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  'Generate Code'
-                )}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <EnrollmentCodeDialog
+        course={addStudentsCourse}
+        code={generatedCourseCode}
+        expiresAt={courseCodeExpiresAt}
+        isLoading={isLoadingCourseCode}
+        isGenerating={isGeneratingInvites}
+        onClose={closeAddStudentsDialog}
+        onCopyCode={(code) => void copyText(code)}
+        onGenerateCode={() => void handleGenerateCourseCode()}
+      />
 
       <Dialog open={Boolean(editingFileNameMaterial)} onOpenChange={(open) => (open ? undefined : closeEditFileNameDialog())}>
         <DialogContent className="sm:max-w-md">
@@ -1615,214 +1448,31 @@ export default function AdminDashboard() {
           </TabsList>
 
           <TabsContent value="overview" className="mt-0 space-y-5">
-            <Card>
-              <CardHeader>
-                <CardTitle>Course Setup</CardTitle>
-                <CardDescription>Create a course before uploading documents.</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="course-name">Course Name</Label>
-                  <Input
-                    id="course-name"
-                    value={newCourseName}
-                    onChange={(event) => setNewCourseName(event.target.value)}
-                    placeholder="e.g. Intro to ML"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="course-code">Course Code (optional)</Label>
-                  <Input
-                    id="course-code"
-                    value={newCourseCode}
-                    onChange={(event) => setNewCourseCode(event.target.value)}
-                    placeholder="e.g. CS101"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="course-description">Description (optional)</Label>
-                  <Input
-                    id="course-description"
-                    value={newCourseDescription}
-                    onChange={(event) => setNewCourseDescription(event.target.value)}
-                    placeholder="Short description"
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <Button onClick={handleCreateCourse} disabled={isCreatingCourse} className="gap-2">
-                    {isCreatingCourse && <Loader2 className="h-4 w-4 animate-spin" />}
-                    Create Course
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Created Courses</CardTitle>
-                <CardDescription>All courses currently available for document uploads.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Course Name</TableHead>
-                      <TableHead>Code</TableHead>
-                      <TableHead>Enrollment Code</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {isLoadingCourses ? (
-                      <TableRow>
-                        <TableCell colSpan={4}>
-                          <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Loading courses...
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ) : courses.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center text-sm text-muted-foreground">
-                          No courses created yet.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      courses.map((course) => (
-                        <TableRow key={course.id}>
-                          <TableCell className="font-medium">{course.name}</TableCell>
-                          <TableCell>{course.code || '-'}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{enrollmentCodeByCourseId[course.id] ?? 'N/A'}</TableCell>
-                          <TableCell>
-                            <div className="flex justify-end">
-                              <Button type="button" size="sm" variant="outline" onClick={() => void openAddStudentsDialog(course)}>
-                                Generate Code
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Academic Terms</CardTitle>
-                <CardDescription>
-                  The active term is used for retrieval automatically. Assign upload files to the right term.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {profile?.role === 'admin' && (
-                  <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="term-semester">Semester</Label>
-                      <Select value={newTermSemester} onValueChange={(value) => setNewTermSemester(value as '1' | '2')}>
-                        <SelectTrigger id="term-semester">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">Semester 1</SelectItem>
-                          <SelectItem value="2">Semester 2</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="term-ay-start">AY Start Year</Label>
-                      <Input
-                        id="term-ay-start"
-                        inputMode="numeric"
-                        value={newTermAyStart}
-                        onChange={(event) => setNewTermAyStart(event.target.value)}
-                        placeholder="2026"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2 flex items-end">
-                      <Button onClick={handleCreateAcademicTerm} disabled={isCreatingTerm} className="gap-2">
-                        {isCreatingTerm && <Loader2 className="h-4 w-4 animate-spin" />}
-                        Create Academic Term
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Term</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {isLoadingTerms ? (
-                      <TableRow>
-                        <TableCell colSpan={3}>
-                          <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Loading academic terms...
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ) : academicTerms.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
-                          No academic terms configured.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      academicTerms.map((term) => (
-                        <TableRow key={term.id}>
-                          <TableCell className="font-medium">{term.label}</TableCell>
-                          <TableCell>
-                            {term.is_active ? (
-                              <Badge variant="default">Active</Badge>
-                            ) : (
-                              <Badge variant="outline">Inactive</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex justify-end">
-                              {profile?.role === 'admin' ? (
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant={term.is_active ? 'secondary' : 'outline'}
-                                  disabled={term.is_active || activatingTermId === term.id}
-                                  onClick={() => void handleSetActiveTerm(term.id)}
-                                >
-                                  {activatingTermId === term.id ? (
-                                    <>
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                      Activating...
-                                    </>
-                                  ) : term.is_active ? (
-                                    'Active'
-                                  ) : (
-                                    'Set Active'
-                                  )}
-                                </Button>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">Admin only</span>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+            <CoursesOverviewTab
+              isAdmin={profile?.role === 'admin'}
+              courses={courses}
+              isLoadingCourses={isLoadingCourses}
+              enrollmentCodeByCourseId={enrollmentCodeByCourseId}
+              newCourseName={newCourseName}
+              newCourseCode={newCourseCode}
+              newCourseDescription={newCourseDescription}
+              isCreatingCourse={isCreatingCourse}
+              onNewCourseNameChange={setNewCourseName}
+              onNewCourseCodeChange={setNewCourseCode}
+              onNewCourseDescriptionChange={setNewCourseDescription}
+              onCreateCourse={() => void handleCreateCourse()}
+              onOpenAddStudentsDialog={(course) => void openAddStudentsDialog(course)}
+              academicTerms={academicTerms}
+              isLoadingTerms={isLoadingTerms}
+              newTermSemester={newTermSemester}
+              newTermAyStart={newTermAyStart}
+              isCreatingTerm={isCreatingTerm}
+              activatingTermId={activatingTermId}
+              onNewTermSemesterChange={setNewTermSemester}
+              onNewTermAyStartChange={setNewTermAyStart}
+              onCreateAcademicTerm={() => void handleCreateAcademicTerm()}
+              onSetActiveTerm={(termId) => void handleSetActiveTerm(termId)}
+            />
           </TabsContent>
 
           <TabsContent value="add-document" className="mt-0 space-y-5">
