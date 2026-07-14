@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { formatBytes } from '@/lib/utils';
 
 export interface VideoUploadProgress {
   stage: 'uploading' | 'parsing' | 'embedding' | 'done' | 'error';
@@ -7,11 +8,6 @@ export interface VideoUploadProgress {
 }
 
 const LOG_PREFIX = '[video-pipeline]';
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /**
  * Animates progress from `from` to `to` over `durationMs` milliseconds,
@@ -45,10 +41,13 @@ function animateProgress(
 export async function uploadVideoForTranscription(opts: {
   file: File;
   courseId: string;
+  academicTermId: string;
+  accessScope: 'course' | 'public' | 'private';
+  uploaderId: string;
   onProgress: (update: VideoUploadProgress) => void;
   signal?: AbortSignal;
 }): Promise<{ materialId: string }> {
-  const { file, courseId, onProgress, signal } = opts;
+  const { file, courseId, academicTermId, accessScope, uploaderId, onProgress, signal } = opts;
   const t0 = performance.now();
   const elapsed = () => `${((performance.now() - t0) / 1000).toFixed(1)}s`;
 
@@ -114,11 +113,15 @@ export async function uploadVideoForTranscription(opts: {
     .from('materials')
     .insert({
       course_id: courseId,
+      academic_term_id: academicTermId,
+      access_scope: accessScope,
+      is_public: accessScope === 'public',
+      uploaded_by: uploaderId,
       file_name: file.name,
       file_path: '',           // no local storage
-      file_type: 'video' as any,
+      file_type: 'video',
       file_size: file.size,
-      processing_status: 'pending' as any,
+      processing_status: 'pending',
     })
     .select()
     .single();

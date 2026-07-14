@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { Material } from '@/pages/AdminDashboard';
+import type { Material } from '@/features/materials/types';
 
 interface LinkedUrlDialogProps {
   material: Material | null;

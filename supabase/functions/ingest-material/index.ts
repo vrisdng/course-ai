@@ -1,17 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
+import { corsHeaders } from "../_shared/cors.ts";
+import { chunkText } from "../_shared/chunking.ts";
 
 interface IngestRequest {
   materialId: string;
   text: string;
-  chunkSize?: number;
-  overlap?: number;
 }
 
 const DEFAULT_CHUNK_SIZE = 1200;
@@ -21,26 +15,6 @@ const MAX_TEXT_CHUNKS = 250;
 const EMBEDDING_CONCURRENCY = 4;
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
-
-const chunkText = (text: string, chunkSize: number, overlap: number) => {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\t/g, " ");
-  const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
-  if (!cleaned) return [];
-
-  const safeChunkSize = Math.max(200, chunkSize);
-  const safeOverlap = Math.min(Math.max(0, overlap), Math.floor(safeChunkSize * 0.5));
-  const step = Math.max(1, safeChunkSize - safeOverlap);
-
-  const chunks: { text: string; start: number; end: number }[] = [];
-  for (let start = 0; start < cleaned.length; start += step) {
-    const end = Math.min(start + safeChunkSize, cleaned.length);
-    const slice = cleaned.slice(start, end).trim();
-    if (slice) {
-      chunks.push({ text: slice, start, end });
-    }
-  }
-  return chunks;
-};
 
 const embedText = async (chunk: string, geminiApiKey: string, chunkIndex: number) => {
   let lastStatus: number | null = null;
@@ -166,7 +140,7 @@ const embedChunksConcurrently = async (options: {
   return rows;
 };
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -228,7 +202,7 @@ serve(async (req) => {
       );
     }
 
-    const { materialId, text, chunkSize, overlap } = await req.json() as IngestRequest;
+    const { materialId, text } = await req.json() as IngestRequest;
     materialIdForError = materialId;
 
     if (!materialId || !text) {
@@ -259,11 +233,7 @@ serve(async (req) => {
       throw new Error(`Failed to update material status: ${materialError.message}`);
     }
 
-    const chunks = chunkText(
-      text,
-      chunkSize ?? DEFAULT_CHUNK_SIZE,
-      overlap ?? DEFAULT_OVERLAP
-    );
+    const chunks = chunkText(text, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP);
 
     if (chunks.length === 0) {
       throw new Error("No text content to process");
