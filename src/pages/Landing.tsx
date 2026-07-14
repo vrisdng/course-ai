@@ -1,14 +1,14 @@
+import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Button } from '@/components/ui/button';
-import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 
 
@@ -239,40 +239,24 @@ export default function Landing() {
         <div className="relative mx-auto max-w-6xl px-6 pb-20 pt-16 md:pt-24">
           <div className="mb-6 flex items-center gap-3">
             <span className="h-px w-8 bg-foreground/40" />
-            <span className="mono-label">Grounded answers for your course</span>
+            <span className="mono-label">Simple answers from your course</span>
           </div>
           <h1 className="display-xl max-w-4xl text-foreground">
-            Study with
+            Learn from
             <br />
-            your sources
+            your materials
           </h1>
           <p className="mt-8 max-w-xl text-lg text-muted-foreground">
-            Ask questions about your lectures, readings, and slides. Get answers built only from your
-            course materials, with citations you can open and check.
+            Ask a question and get a short answer from your lectures, readings, and slides.
           </p>
           <div className="mt-10 flex flex-wrap items-center gap-3">
             <Link to={primaryCta.to}>
               <button className="pill bg-primary text-primary-foreground hover:bg-primary/90">{primaryCta.label}</button>
             </Link>
             <a href="#how">
-              <button className="pill border border-border bg-background hover:bg-accent">See how it works</button>
+              <button className="pill border border-border bg-background hover:bg-accent">How it works</button>
             </a>
           </div>
-
-          {/* Stats row */}
-          <dl className="mt-16 grid max-w-3xl grid-cols-2 gap-x-8 gap-y-8 border-t border-border pt-10 sm:grid-cols-4">
-            {[
-              { v: '100%', k: 'answers cited to source' },
-              { v: '0', k: 'made-up references' },
-              { v: '24/7', k: 'always on for students' },
-              { v: '<5s', k: 'to a grounded answer' },
-            ].map((s) => (
-              <div key={s.k}>
-                <dt className="text-3xl font-medium tracking-tight md:text-4xl">{s.v}</dt>
-                <dd className="mono-label mt-2 leading-tight">{s.k}</dd>
-              </div>
-            ))}
-          </dl>
         </div>
       </section>
 
@@ -420,18 +404,18 @@ export default function Landing() {
             {[
               {
                 n: '01',
-                t: 'Add your materials',
-                d: 'Your instructor uploads lectures, slides, and readings. We index every page and timestamp.',
+                t: 'Upload course files',
+                d: 'Add lectures, slides, and readings.',
               },
               {
                 n: '02',
-                t: 'Ask in plain language',
-                d: 'Ask a question the way you would ask a TA. We search only within your course, never the open web.',
+                t: 'Ask a question',
+                d: 'Type your question in plain language.',
               },
               {
                 n: '03',
-                t: 'Check the citation',
-                d: 'Every answer links back to the exact source. Open it, verify it, and keep studying.',
+                t: 'Open the source',
+                d: 'See where the answer came from.',
               },
             ].map((step) => (
               <div key={step.n} className="bg-primary p-8">
@@ -450,14 +434,14 @@ export default function Landing() {
           <div>
             <span className="mono-label">For courses</span>
             <h2 className="mt-6 max-w-md text-3xl font-medium tracking-tight md:text-4xl">
-              Answers your class can trust.
+              Clear answers for class.
             </h2>
           </div>
           <ul className="space-y-6">
             {[
-              ['Grounded in your syllabus', 'Responses come from course materials only, so nothing drifts off-topic.'],
-              ['Citations, every time', 'Each claim points to the lecture, page, or slide it came from.'],
-              ['Says when it doesn’t know', 'If the answer isn’t in the materials, it tells you instead of guessing.'],
+              ['From your materials', 'Use what your instructor uploaded.'],
+              ['Cited answers', 'Every response links back to a source.'],
+              ['No guessing', 'If it is not in the course, it says so.'],
             ].map(([t, d]) => (
               <li key={t} className="flex gap-4 border-t border-border pt-6">
                 <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
@@ -475,7 +459,7 @@ export default function Landing() {
       <section className="border-t border-border bg-grid">
         <div className="mx-auto max-w-6xl px-6 py-24 text-center">
           <h2 className="display-xl mx-auto max-w-3xl text-foreground" style={{ fontSize: 'clamp(2.5rem, 7vw, 5rem)' }}>
-            Ask your first question
+            Start asking
           </h2>
           <div className="mt-10 flex justify-center gap-3">
             <Link to={primaryCta.to}>
@@ -491,7 +475,12 @@ export default function Landing() {
             <img src="/logo.png" alt="" className="h-5 w-5" />
             <span className="font-medium text-foreground">EduChat</span>
           </div>
-          <span className="mono-label">Grounded course answers</span>
+          <div className="flex flex-col items-center gap-1 sm:items-end">
+            <span className="mono-label">Grounded course answers</span>
+            <a href="https://moworld.me/" target="_blank" rel="noreferrer" className="text-foreground transition-colors hover:text-primary">
+              Developed by Duong Ngoc Mai
+            </a>
+          </div>
         </div>
       </footer>
     </div>
