@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   INLINE_GEMINI_MAX_FILE_SIZE_BYTES,
-  OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES,
+  VIDEO_MAX_FILE_SIZE_BYTES,
   TEXT_INGEST_MAX_CHARACTERS,
   getDeferredUploadValidationError,
   getImmediateUploadValidationError,
@@ -28,14 +28,14 @@ describe('material upload policy', () => {
     expect(getImmediateUploadValidationError(docxCandidate)).toBeNull();
   });
 
-  it('applies the 25MB immediate limit to Whisper-compatible video uploads', () => {
+  it('applies the 5GB immediate limit to supported video uploads', () => {
     const videoCandidate = {
       name: 'lecture.mp4',
-      size: OPENAI_WHISPER_VIDEO_MAX_FILE_SIZE_BYTES + 1,
+      size: VIDEO_MAX_FILE_SIZE_BYTES + 1,
     };
 
     expect(isVideoUpload(videoCandidate)).toBe(true);
-    expect(getImmediateUploadValidationError(videoCandidate)).toContain('25MB');
+    expect(getImmediateUploadValidationError(videoCandidate)).toContain('5GB');
   });
 
   it('treats code and text uploads as text-like content', () => {
