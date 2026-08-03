@@ -44,9 +44,9 @@ describe("dedupeRetrievedChunksByBestScore", () => {
 describe("getRetrievalSettings", () => {
   it("uses a wider semantic search for an explicit document selection", () => {
     expect(getRetrievalSettings({ isSummaryQuery: false, hasSelectedDocumentFilter: true })).toEqual({
-      matchThreshold: 0.40,
+      matchThreshold: -2,
       matchCount: 24,
-      relevanceFloor: 0.40,
+      relevanceFloor: -1,
       finalCount: 10,
     });
   });
@@ -62,9 +62,9 @@ describe("getRetrievalSettings", () => {
 
   it("prioritizes broad summary retrieval regardless of document scope", () => {
     expect(getRetrievalSettings({ isSummaryQuery: true, hasSelectedDocumentFilter: true })).toEqual({
-      matchThreshold: 0.40,
+      matchThreshold: -2,
       matchCount: 30,
-      relevanceFloor: 0.40,
+      relevanceFloor: -1,
       finalCount: 10,
     });
   });

@@ -16,12 +16,20 @@ export function getRetrievalSettings(options: {
   isSummaryQuery: boolean;
   hasSelectedDocumentFilter: boolean;
 }): RetrievalSettings {
-  if (options.isSummaryQuery) {
-    return { matchThreshold: 0.40, matchCount: 30, relevanceFloor: 0.40, finalCount: 10 };
+  // An explicit selection is already a strong relevance constraint. Always
+  // return its best embedded chunks and use reranking/model judgment instead
+  // of refusing solely because an arbitrary cosine cutoff was not reached.
+  if (options.hasSelectedDocumentFilter) {
+    return {
+      matchThreshold: -2,
+      matchCount: options.isSummaryQuery ? 30 : 24,
+      relevanceFloor: -1,
+      finalCount: 10,
+    };
   }
 
-  if (options.hasSelectedDocumentFilter) {
-    return { matchThreshold: 0.40, matchCount: 24, relevanceFloor: 0.40, finalCount: 10 };
+  if (options.isSummaryQuery) {
+    return { matchThreshold: 0.40, matchCount: 30, relevanceFloor: 0.40, finalCount: 10 };
   }
 
   return { matchThreshold: 0.50, matchCount: 18, relevanceFloor: 0.55, finalCount: 10 };
