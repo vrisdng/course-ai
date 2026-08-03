@@ -41,6 +41,20 @@ describe("dedupeRetrievedChunksByBestScore", () => {
 });
 
 describe("rerankRetrievedChunks", () => {
+  it("preserves semantic relevance scores used by the final relevance floor", () => {
+    const chunks = [
+      {
+        id: "semantic-match",
+        chunk_text: "A paraphrased explanation without shared query terms",
+        relevance_score: 0.61,
+      },
+    ];
+
+    const result = rerankRetrievedChunks(chunks, "corporate emissions accounting", 1);
+
+    expect(result[0].relevance_score).toBe(0.61);
+  });
+
   it("boosts chunks with high lexical overlap over pure semantic score", () => {
     const chunks = [
       { id: "semantic-only", chunk_text: "completely unrelated filler text", relevance_score: 0.9 },
