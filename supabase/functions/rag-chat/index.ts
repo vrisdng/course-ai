@@ -41,9 +41,9 @@ interface ChatModelConfig {
 }
 
 const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
-  fast: { modelId: "gpt-5.4-mini-2026-03-17", displayName: "Fast (GPT-5.4 mini)" },
-  smart: { modelId: "gpt-5.5-2026-04-23", displayName: "Smart (GPT-5.5)" },
-  pro: { modelId: "gpt-5.5-pro-2026-04-23", displayName: "Pro (GPT-5.5 Pro)" },
+  fast: { modelId: "gpt-4o-mini", displayName: "Fast (GPT-4o mini)" },
+  smart: { modelId: "gpt-4o", displayName: "Smart (GPT-4o)" },
+  pro: { modelId: "gpt-4.1", displayName: "Pro (GPT-4.1)" },
 };
 
 const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
