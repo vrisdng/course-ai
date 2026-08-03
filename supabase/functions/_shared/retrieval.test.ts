@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   dedupeRetrievedChunksByBestScore,
+  getRetrievalSettings,
   lexicalOverlapScore,
   rerankRetrievedChunks,
   tokenizeForLexicalScore,
@@ -37,6 +38,35 @@ describe("dedupeRetrievedChunksByBestScore", () => {
     const result = dedupeRetrievedChunksByBestScore(chunks);
     expect(result).toHaveLength(2);
     expect(result.find((c) => c.id === "a")?.relevance_score).toBe(0.9);
+  });
+});
+
+describe("getRetrievalSettings", () => {
+  it("uses a wider semantic search for an explicit document selection", () => {
+    expect(getRetrievalSettings({ isSummaryQuery: false, hasSelectedDocumentFilter: true })).toEqual({
+      matchThreshold: 0.40,
+      matchCount: 24,
+      relevanceFloor: 0.40,
+      finalCount: 10,
+    });
+  });
+
+  it("keeps the stricter defaults when all course documents are available", () => {
+    expect(getRetrievalSettings({ isSummaryQuery: false, hasSelectedDocumentFilter: false })).toEqual({
+      matchThreshold: 0.50,
+      matchCount: 18,
+      relevanceFloor: 0.55,
+      finalCount: 10,
+    });
+  });
+
+  it("prioritizes broad summary retrieval regardless of document scope", () => {
+    expect(getRetrievalSettings({ isSummaryQuery: true, hasSelectedDocumentFilter: true })).toEqual({
+      matchThreshold: 0.40,
+      matchCount: 30,
+      relevanceFloor: 0.40,
+      finalCount: 10,
+    });
   });
 });
 

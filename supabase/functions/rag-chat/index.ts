@@ -10,6 +10,7 @@ import {
 } from "../_shared/citations.ts";
 import {
   dedupeRetrievedChunksByBestScore,
+  getRetrievalSettings,
   rerankRetrievedChunks,
 } from "../_shared/retrieval.ts";
 import {
@@ -46,10 +47,6 @@ const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
   pro: { modelId: "gpt-4.1", displayName: "Pro (GPT-4.1)" },
 };
 
-const HIGH_RECALL_MATCH_THRESHOLD = 0.50;
-const HIGH_RECALL_MATCH_COUNT = 18;
-const FINAL_MATCH_COUNT = 10;
-const RELEVANCE_FLOOR = 0.55;
 const CONVERSATION_HISTORY_FETCH_LIMIT = 24;
 
 interface ChatRequest {
@@ -787,10 +784,15 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
       // Detect broad summary/overview queries — needs wider retrieval with lower thresholds
       const isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
 
-      const matchThreshold = isSummaryQuery ? 0.40 : HIGH_RECALL_MATCH_THRESHOLD;
-      const matchCount     = isSummaryQuery ? 30   : HIGH_RECALL_MATCH_COUNT;
-      const relevanceFloor = isSummaryQuery ? 0.40 : RELEVANCE_FLOOR;
-      const finalCount     = isSummaryQuery ? 10   : FINAL_MATCH_COUNT;
+      const {
+        matchThreshold,
+        matchCount,
+        relevanceFloor,
+        finalCount,
+      } = getRetrievalSettings({
+        isSummaryQuery,
+        hasSelectedDocumentFilter: selectedMaterialIds.length > 0,
+      });
 
       const retrievedChunkGroups = await Promise.all(
         embeddings.map((embedding) =>

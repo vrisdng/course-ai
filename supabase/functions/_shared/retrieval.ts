@@ -5,6 +5,28 @@ export interface RerankableChunk {
   relevance_score: number;
 }
 
+export interface RetrievalSettings {
+  matchThreshold: number;
+  matchCount: number;
+  relevanceFloor: number;
+  finalCount: number;
+}
+
+export function getRetrievalSettings(options: {
+  isSummaryQuery: boolean;
+  hasSelectedDocumentFilter: boolean;
+}): RetrievalSettings {
+  if (options.isSummaryQuery) {
+    return { matchThreshold: 0.40, matchCount: 30, relevanceFloor: 0.40, finalCount: 10 };
+  }
+
+  if (options.hasSelectedDocumentFilter) {
+    return { matchThreshold: 0.40, matchCount: 24, relevanceFloor: 0.40, finalCount: 10 };
+  }
+
+  return { matchThreshold: 0.50, matchCount: 18, relevanceFloor: 0.55, finalCount: 10 };
+}
+
 const LEXICAL_STOP_WORDS = new Set([
   "a",
   "an",

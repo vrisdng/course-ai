@@ -3,6 +3,11 @@
 // so provider/model changes happen in one place.
 import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
 import { generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import {
+  buildOpenAIProviderOptions,
+  requireGeneratedText,
+  type ReasoningEffort,
+} from "./llmConfig.ts";
 
 export class HttpError extends Error {
   status: number;
@@ -17,16 +22,13 @@ export interface ChatMessage {
   content: string;
 }
 
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
-
 export interface ChatTextOptions {
   apiKey: string;
   model: string;
   messages: ChatMessage[];
   temperature?: number;
   maxOutputTokens?: number;
-  // GPT-5.x are reasoning models; OpenAI defaults to "medium" server-side,
-  // we set it explicitly so callers can tune per-request.
+  // Only reasoning-model callers should set this. It is omitted otherwise.
   reasoningEffort?: ReasoningEffort;
   signal?: AbortSignal;
 }
@@ -37,6 +39,18 @@ export interface ChatStreamOptions extends ChatTextOptions {
 
 function toOpenAiModel(apiKey: string, model: string) {
   return createOpenAI({ apiKey })(model);
+}
+
+function buildGenerationOptions(options: ChatTextOptions) {
+  const providerOptions = buildOpenAIProviderOptions(options.reasoningEffort);
+  return {
+    model: toOpenAiModel(options.apiKey, options.model),
+    messages: options.messages,
+    temperature: options.temperature ?? 0.4,
+    maxOutputTokens: options.maxOutputTokens ?? 2000,
+    ...(providerOptions ? { providerOptions } : {}),
+    abortSignal: options.signal,
+  };
 }
 
 function wrapProviderError(error: unknown): never {
@@ -51,15 +65,8 @@ function wrapProviderError(error: unknown): never {
 
 export async function generateChatText(options: ChatTextOptions): Promise<string> {
   try {
-    const result = await generateText({
-      model: toOpenAiModel(options.apiKey, options.model),
-      messages: options.messages,
-      temperature: options.temperature ?? 0.4,
-      maxOutputTokens: options.maxOutputTokens ?? 2000,
-      providerOptions: { openai: { reasoningEffort: options.reasoningEffort ?? "medium" } },
-      abortSignal: options.signal,
-    });
-    return result.text.trim() || "I couldn't generate a response.";
+    const result = await generateText(buildGenerationOptions(options));
+    return requireGeneratedText(result.text, options.model, result.finishReason);
   } catch (error) {
     wrapProviderError(error);
   }
@@ -67,14 +74,7 @@ export async function generateChatText(options: ChatTextOptions): Promise<string
 
 export async function generateChatTextStream(options: ChatStreamOptions): Promise<string> {
   try {
-    const result = streamText({
-      model: toOpenAiModel(options.apiKey, options.model),
-      messages: options.messages,
-      temperature: options.temperature ?? 0.4,
-      maxOutputTokens: options.maxOutputTokens ?? 2000,
-      providerOptions: { openai: { reasoningEffort: options.reasoningEffort ?? "medium" } },
-      abortSignal: options.signal,
-    });
+    const result = streamText(buildGenerationOptions(options));
 
     let fullText = "";
     for await (const delta of result.textStream) {
@@ -83,7 +83,24 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
         await options.onTextDelta(delta);
       }
     }
-    return fullText.trim() || "I couldn't generate a response.";
+    const finishReason = await result.finishReason;
+    if (fullText.trim()) {
+      return fullText.trim();
+    }
+
+    console.warn(
+      `OpenAI stream for ${options.model} returned no text (finish reason: ${finishReason}); retrying once without streaming`,
+    );
+    const fallbackResult = await generateText(buildGenerationOptions(options));
+    const fallbackText = requireGeneratedText(
+      fallbackResult.text,
+      options.model,
+      fallbackResult.finishReason,
+    );
+    if (options.onTextDelta) {
+      await options.onTextDelta(fallbackText);
+    }
+    return fallbackText;
   } catch (error) {
     wrapProviderError(error);
   }
