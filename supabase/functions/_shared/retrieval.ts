@@ -89,12 +89,15 @@ export function rerankRetrievedChunks<T extends RerankableChunk>(chunks: T[], qu
     const semantic = Math.max(0, Math.min(1, chunk.relevance_score));
     const lexical = lexicalOverlapScore(query, chunk.chunk_text);
     const combinedScore = semantic * 0.72 + lexical * 0.28;
-    return { chunk, combinedScore };
+    return { chunk, semantic, combinedScore };
   });
 
   scored.sort((a, b) => b.combinedScore - a.combinedScore);
   return scored.slice(0, topK).map((entry) => ({
     ...entry.chunk,
-    relevance_score: entry.combinedScore,
+    // Lexical overlap determines ordering only. Keep relevance_score on the
+    // original cosine-similarity scale so downstream semantic thresholds do
+    // not discard good paraphrase matches simply for lacking exact keywords.
+    relevance_score: entry.semantic,
   }));
 }
