@@ -17,12 +17,17 @@ export interface ChatMessage {
   content: string;
 }
 
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+
 export interface ChatTextOptions {
   apiKey: string;
   model: string;
   messages: ChatMessage[];
   temperature?: number;
   maxOutputTokens?: number;
+  // GPT-5.x are reasoning models; OpenAI defaults to "medium" server-side,
+  // we set it explicitly so callers can tune per-request.
+  reasoningEffort?: ReasoningEffort;
   signal?: AbortSignal;
 }
 
@@ -51,6 +56,7 @@ export async function generateChatText(options: ChatTextOptions): Promise<string
       messages: options.messages,
       temperature: options.temperature ?? 0.4,
       maxOutputTokens: options.maxOutputTokens ?? 2000,
+      providerOptions: { openai: { reasoningEffort: options.reasoningEffort ?? "medium" } },
       abortSignal: options.signal,
     });
     return result.text.trim() || "I couldn't generate a response.";
@@ -66,6 +72,7 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
       messages: options.messages,
       temperature: options.temperature ?? 0.4,
       maxOutputTokens: options.maxOutputTokens ?? 2000,
+      providerOptions: { openai: { reasoningEffort: options.reasoningEffort ?? "medium" } },
       abortSignal: options.signal,
     });
 

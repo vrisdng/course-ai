@@ -30,6 +30,7 @@ RAG-based course companion: students chat over course materials with cited answe
 - **One LLM wrapper.** Call OpenAI only through `_shared/llm.ts` so provider/model swaps stay in one place. Model tiers are configured, not hardcoded at call sites.
 - **Write tests for code you add or change,** working toward 99% coverage — the repo is far below that today, so add tests rather than assuming they exist.
 - **Deploy edge functions after changing them** — see "Safe modification" below.
+- **WRITE TESTS FIRST FOR ANY NEW FEATURES/COMPONENTS** 
 
 ## Safe modification
 
