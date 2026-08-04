@@ -1,4 +1,4 @@
-import { ChevronDown, FileText } from 'lucide-react';
+import { ChevronDown, FileText, Video } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,8 @@ interface DocumentScopeSelectorProps {
   onApplySelection: (documentIds: string[]) => void;
 }
 
+type MaterialFilter = 'all' | 'document' | 'video';
+
 export function DocumentScopeSelector({
   documents,
   selectedDocumentIds,
@@ -43,9 +45,16 @@ export function DocumentScopeSelector({
 }: DocumentScopeSelectorProps) {
   const [open, setOpen] = useState(false);
   const [draftSelectedDocumentIds, setDraftSelectedDocumentIds] = useState<string[]>(selectedDocumentIds);
+  const [materialFilter, setMaterialFilter] = useState<MaterialFilter>('all');
   const label = getDocumentSelectorLabel(documents, selectedDocumentIds, isLoading);
   const isDisabled = disabled || isLoading || documents.length === 0;
   const allSelected = documents.length > 0 && draftSelectedDocumentIds.length === documents.length;
+  const videoCount = documents.filter((document) => document.type === 'video').length;
+  const documentCount = documents.length - videoCount;
+  const filteredDocuments = documents.filter((document) => (
+    materialFilter === 'all'
+      || (materialFilter === 'video' ? document.type === 'video' : document.type !== 'video')
+  ));
 
   useEffect(() => {
     if (!open) {
@@ -139,10 +148,30 @@ export function DocumentScopeSelector({
           </div>
         </div>
 
+        <div className="flex flex-wrap gap-2" aria-label="Filter materials">
+          {([
+            { value: 'all', label: 'All', count: documents.length },
+            { value: 'document', label: 'Documents', count: documentCount },
+            { value: 'video', label: 'Videos', count: videoCount },
+          ] as const).map((filter) => (
+            <Button
+              key={filter.value}
+              type="button"
+              size="sm"
+              variant={materialFilter === filter.value ? 'default' : 'outline'}
+              aria-pressed={materialFilter === filter.value}
+              onClick={() => setMaterialFilter(filter.value)}
+            >
+              {filter.label} ({filter.count})
+            </Button>
+          ))}
+        </div>
+
         <ScrollArea className="max-h-[50vh] rounded-md border">
           <div className="space-y-2 p-3">
-            {documents.map((document) => {
+            {filteredDocuments.map((document) => {
               const isChecked = draftSelectedDocumentIds.includes(document.id);
+              const isVideo = document.type === 'video';
 
               return (
                 <div
@@ -167,9 +196,14 @@ export function DocumentScopeSelector({
                     aria-label={`Select ${document.name}`}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-foreground">{document.name}</p>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      {document.type}
+                    <div className="flex items-center gap-2">
+                      {isVideo
+                        ? <Video className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        : <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                      <p className="truncate text-sm font-medium text-foreground">{document.name}</p>
+                    </div>
+                    <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+                      {isVideo ? 'Video' : `Document · ${document.type}`}
                     </p>
                   </div>
                 </div>

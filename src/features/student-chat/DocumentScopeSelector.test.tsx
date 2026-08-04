@@ -40,4 +40,23 @@ describe('DocumentScopeSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(cb.onApplySelection).not.toHaveBeenCalled();
   });
+
+  it('filters the material list by documents and videos', () => {
+    const cb = callbacks();
+    render(<DocumentScopeSelector documents={documents} selectedDocumentIds={[]} isLoading={false} {...cb} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /No documents selected/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Videos (1)' }));
+    expect(screen.queryByRole('button', { name: /Select Lecture\.pdf/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Select Recording\.mp4/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Documents (1)' }));
+    expect(screen.getByRole('button', { name: /Select Lecture\.pdf/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Select Recording\.mp4/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'All (2)' }));
+    expect(screen.getByRole('button', { name: /Select Lecture\.pdf/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Select Recording\.mp4/ })).toBeInTheDocument();
+  });
 });
