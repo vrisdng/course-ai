@@ -4,6 +4,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { HttpError, generateChatTextStream } from "../_shared/llm.ts";
 import { buildOpenAIConversationMessages, type ConversationHistoryTurn } from "../_shared/history.ts";
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
+import { buildAnalyticsSystemPrompt } from "../_shared/analyticsPrompt.ts";
 
 const CHAT_MODEL = "gpt-4o-mini";
 const HISTORY_LIMIT = 10;
@@ -273,19 +274,7 @@ serve(async (req: Request) => {
       .filter((t) => (t.role === "user" || t.role === "assistant") && typeof t.content === "string" && t.content.trim())
       .map((t) => ({ role: t.role as "user" | "assistant", content: t.content.slice(0, 800) }));
 
-    const systemPrompt = `You are an analytics assistant for a university course platform called EduChat. You help course administrators understand how students are using the AI tutor and what patterns emerge from student questions.
-
-You have access to real analytics data for the selected course, provided below. Base all your answers strictly on this data — do not invent or hallucinate statistics.
-
-When answering:
-- Be specific with numbers from the data.
-- Highlight actionable insights and trends.
-- When suggesting improvements, base them on data gaps (e.g., unresolved questions suggest missing materials, frequently asked topics with low coverage suggest materials need improvement).
-- Format your response in clean markdown with **bold** headings, **bold** for key metrics, bullet points for lists, and markdown tables when presenting comparative or tabular data.
-- Add readable spacing: include one blank line after each heading and one blank line between major sections or paragraphs.
-- If the data doesn't contain information to answer the question, say so clearly.
-
-${analyticsContext}`;
+    const systemPrompt = buildAnalyticsSystemPrompt(analyticsContext);
 
     // Stream response
     let streamCancelled = false;

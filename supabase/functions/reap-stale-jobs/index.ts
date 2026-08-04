@@ -1,108 +1,87 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import { withSupabase } from "npm:@supabase/server";
 
 declare const EdgeRuntime:
   | { waitUntil?: (promise: Promise<unknown>) => void }
   | undefined;
 
-serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+interface ProcessingJob {
+  material_id: string;
+}
 
-  try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const adminClient = createClient(supabaseUrl, supabaseKey);
-
-    // 1. Run the stale-lock reaper (resets stale processing → pending, fails max-attempt jobs)
-    const { data: reaped, error: reapError } = await adminClient.rpc(
-      "reap_stale_material_jobs",
-    );
-
-    if (reapError) {
-      console.error("Reaper error:", reapError.message);
-    } else {
-      console.log(`Reaped ${reaped ?? 0} stale job(s)`);
+export default {
+  fetch: withSupabase({ auth: "user" }, async (_req, ctx) => {
+    const { data: authData, error: authError } = await ctx.supabase.auth.getUser();
+    if (authError || !authData.user) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // 2. Also update materials table for any jobs that were marked failed by the reaper
-    const { data: failedJobs } = await adminClient
+    const { data: profile, error: profileError } = await ctx.supabase
+      .from("profiles")
+      .select("role")
+      .eq("user_id", authData.user.id)
+      .single();
+
+    if (profileError || profile?.role !== "admin") {
+      return Response.json({ error: "Admin access required" }, { status: 403 });
+    }
+
+    const { data: reaped, error: reapError } = await ctx.supabaseAdmin.rpc(
+      "reap_stale_material_jobs",
+    );
+    if (reapError) {
+      return Response.json({ error: reapError.message }, { status: 500 });
+    }
+
+    const { data: failedJobs, error: failedJobsError } = await ctx.supabaseAdmin
       .from("material_processing_jobs")
       .select("material_id, last_error")
       .eq("status", "failed")
       .not("last_error", "is", null)
       .like("last_error", "%maximum retry%");
-
-    if (failedJobs && failedJobs.length > 0) {
-      for (const fj of failedJobs) {
-        await adminClient
-          .from("materials")
-          .update({
-            processing_status: "failed",
-            processing_error: fj.last_error,
-            processing_stage: "failed",
-            processing_progress: null,
-          })
-          .eq("id", fj.material_id)
-          .eq("processing_status", "processing");
-      }
+    if (failedJobsError) {
+      return Response.json({ error: failedJobsError.message }, { status: 500 });
     }
 
-    // 3. Trigger worker for any pending jobs (including freshly-reaped ones)
-    const { data: pendingJobs } = await adminClient
+    for (const failedJob of failedJobs ?? []) {
+      await ctx.supabaseAdmin
+        .from("materials")
+        .update({
+          processing_status: "failed",
+          processing_error: failedJob.last_error,
+          processing_stage: "failed",
+          processing_progress: null,
+        })
+        .eq("id", failedJob.material_id)
+        .eq("processing_status", "processing");
+    }
+
+    const { data: pendingJobs, error: pendingJobsError } = await ctx.supabaseAdmin
       .from("material_processing_jobs")
       .select("material_id")
       .eq("status", "pending")
       .order("created_at")
       .limit(5);
+    if (pendingJobsError) {
+      return Response.json({ error: pendingJobsError.message }, { status: 500 });
+    }
 
-    const triggered: string[] = [];
-
-    if (pendingJobs && pendingJobs.length > 0) {
-      for (const pj of pendingJobs) {
-        const trigger = fetch(`${supabaseUrl}/functions/v1/process-material-job`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${supabaseKey}`,
-            apikey: supabaseKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ materialId: pj.material_id }),
-        }).catch((err) => {
-          console.error(`Failed to trigger worker for ${pj.material_id}:`, err);
+    const jobs = (pendingJobs ?? []) as ProcessingJob[];
+    for (const job of jobs) {
+      const trigger = ctx.supabaseAdmin.functions
+        .invoke("process-material-job", { body: { materialId: job.material_id } })
+        .then(({ error }) => {
+          if (error) console.error(`Failed to trigger worker for ${job.material_id}:`, error.message);
         });
 
-        if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-          EdgeRuntime.waitUntil(trigger);
-        } else {
-          void trigger;
-        }
-
-        triggered.push(pj.material_id);
+      if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+        EdgeRuntime.waitUntil(trigger);
       }
     }
 
-    return new Response(
-      JSON.stringify({
-        reaped: reaped ?? 0,
-        triggeredWorkers: triggered.length,
-        materialIds: triggered,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    console.error("reap-stale-jobs error:", message);
-    return new Response(
-      JSON.stringify({ error: message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
-  }
-});
+    return Response.json({
+      reaped: Number(reaped ?? 0),
+      triggeredWorkers: jobs.length,
+      materialIds: jobs.map((job) => job.material_id),
+    });
+  }),
+};

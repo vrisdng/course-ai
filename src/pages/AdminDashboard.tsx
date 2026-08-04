@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { CoursesOverviewTab } from '@/components/lecturer/CoursesOverviewTab';
 import { EnrollmentCodeDialog } from '@/components/lecturer/EnrollmentCodeDialog';
 import { MaterialsTab } from '@/components/lecturer/MaterialsTab';
+import { SystemMaintenancePanel, type JobRecoveryResult } from '@/components/lecturer/SystemMaintenancePanel';
 import { supabase } from '@/integrations/supabase/client';
 import { formatTimestamp } from '@/features/student-chat/time';
 import type { AcademicTerm, Course } from '@/features/materials/types';
@@ -317,6 +318,20 @@ export default function AdminDashboard() {
     toast.success('Course code generated');
   };
 
+  const handleRefreshDashboard = async (): Promise<void> => {
+    await Promise.all([fetchCourses(), fetchAcademicTerms()]);
+  };
+
+  const handleRecoverProcessingJobs = async (): Promise<JobRecoveryResult> => {
+    const { data, error } = await supabase.functions.invoke('reap-stale-jobs');
+    if (error) throw new Error(error.message);
+    if (data?.error) throw new Error(data.error);
+    return {
+      reaped: Number(data?.reaped ?? 0),
+      triggeredWorkers: Number(data?.triggeredWorkers ?? 0),
+    };
+  };
+
   return (
     <MainLayout showFooter={false}>
       <EnrollmentCodeDialog
@@ -354,6 +369,14 @@ export default function AdminDashboard() {
             >
               + Add Document
             </TabsTrigger>
+            {profile?.role === 'admin' && (
+              <TabsTrigger
+                value="maintenance"
+                className="rounded-none border-b-2 border-transparent px-4 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+              >
+                System Maintenance
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="overview" className="mt-0 space-y-5">
@@ -392,6 +415,14 @@ export default function AdminDashboard() {
               courses={courses}
               academicTerms={academicTerms}
               isLoadingTerms={isLoadingTerms}
+            />
+          </TabsContent>
+
+          <TabsContent value="maintenance" className="mt-0 space-y-5">
+            <SystemMaintenancePanel
+              isAdmin={profile?.role === 'admin'}
+              onRefresh={handleRefreshDashboard}
+              onRecoverJobs={handleRecoverProcessingJobs}
             />
           </TabsContent>
         </Tabs>

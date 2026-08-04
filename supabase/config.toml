@@ -18,6 +18,9 @@ verify_jwt = false
 [functions.process-material-job]
 verify_jwt = false
 
+[functions.reap-stale-jobs]
+verify_jwt = false
+
 [functions.manage-course-invites]
 verify_jwt = false
 
