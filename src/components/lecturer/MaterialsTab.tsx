@@ -8,6 +8,7 @@ import {
   Globe2,
   Loader2,
   Lock,
+  ListChecks,
   Pencil,
   RefreshCw,
   Search,
@@ -22,6 +23,8 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,6 +41,7 @@ import { TranscriptDialog } from './TranscriptDialog';
 
 import { ACCEPTED_FILE_TYPES, useMaterialUpload } from '@/features/materials/useMaterialUpload';
 import { useMaterialActions } from '@/features/materials/useMaterialActions';
+import { useBulkAcademicTermUpdate } from '@/features/materials/useBulkAcademicTermUpdate';
 import { useMaterialsList } from '@/features/materials/useMaterialsList';
 import type { AcademicTerm, AccessScope, Course, Material } from '@/features/materials/types';
 
@@ -145,6 +149,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
   const list = useMaterialsList();
   const upload = useMaterialUpload({ uploaderId, onUploaded: list.fetchMaterials });
   const actions = useMaterialActions({ onMaterialsChanged: list.fetchMaterials, setMaterials: list.setMaterials });
+  const bulkTermUpdate = useBulkAcademicTermUpdate({ onUpdated: list.fetchMaterials });
 
   const courseLabelById = courses.reduce<Record<string, string>>((acc, course) => {
     acc[course.id] = `${course.name}${course.code ? ` (${course.code})` : ''}`;
@@ -175,6 +180,9 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
   const uploadSetupError = getUploadSetupError();
   const isUploadSetupComplete = uploadSetupError === null;
   const documentLimitMb = Math.round(INLINE_GEMINI_MAX_FILE_SIZE_BYTES / 1024 / 1024);
+  const visibleMaterialIds = list.materials.map((material) => material.id);
+  const selectedVisibleCount = visibleMaterialIds.filter((id) => bulkTermUpdate.selectedMaterialIds.has(id)).length;
+  const areAllVisibleMaterialsSelected = visibleMaterialIds.length > 0 && selectedVisibleCount === visibleMaterialIds.length;
 
   const uploadChecklistItems = [
     {
@@ -225,6 +233,49 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
         onClose={actions.closeEditFileNameDialog}
         onSave={() => void actions.handleUpdateFileName()}
       />
+
+      <Dialog open={bulkTermUpdate.isDialogOpen} onOpenChange={(open) => (open ? undefined : bulkTermUpdate.closeDialog())}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update academic term</DialogTitle>
+            <DialogDescription>
+              Move {bulkTermUpdate.selectedMaterialIds.size} selected material{bulkTermUpdate.selectedMaterialIds.size === 1 ? '' : 's'} to a different academic term.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="bulk-academic-term-select">Academic term</Label>
+            <Select
+              value={bulkTermUpdate.targetAcademicTermId}
+              onValueChange={bulkTermUpdate.setTargetAcademicTermId}
+              disabled={bulkTermUpdate.isSaving || isLoadingTerms}
+            >
+              <SelectTrigger id="bulk-academic-term-select">
+                <SelectValue placeholder={isLoadingTerms ? 'Loading terms...' : 'Select academic term'} />
+              </SelectTrigger>
+              <SelectContent>
+                {academicTerms.map((term) => (
+                  <SelectItem key={term.id} value={term.id}>
+                    {term.label} {term.is_active ? '(Active)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={bulkTermUpdate.closeDialog} disabled={bulkTermUpdate.isSaving}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void bulkTermUpdate.save()}
+              disabled={!bulkTermUpdate.targetAcademicTermId || bulkTermUpdate.isSaving}
+            >
+              {bulkTermUpdate.isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardContent className="space-y-4 pt-6">
@@ -548,6 +599,22 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             </div>
 
             <div className="flex items-center gap-2">
+              {bulkTermUpdate.isSelecting && (
+                <Button type="button" variant="ghost" onClick={bulkTermUpdate.cancelSelecting} disabled={bulkTermUpdate.isSaving}>
+                  Cancel
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant={bulkTermUpdate.isSelecting ? 'default' : 'outline'}
+                onClick={bulkTermUpdate.isSelecting ? bulkTermUpdate.openDialog : bulkTermUpdate.startSelecting}
+                disabled={bulkTermUpdate.isSelecting && bulkTermUpdate.selectedMaterialIds.size === 0}
+              >
+                <ListChecks className="mr-2 h-4 w-4" />
+                {bulkTermUpdate.isSelecting
+                  ? `Update selected (${bulkTermUpdate.selectedMaterialIds.size})`
+                  : 'Update academic terms'}
+              </Button>
               <Button variant="outline" onClick={() => list.setShowFilters((current) => !current)}>
                 <Filter className="mr-2 h-4 w-4" />
                 Filters
@@ -639,6 +706,15 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             <Table className="min-w-[760px]">
               <TableHeader>
                 <TableRow>
+                  {bulkTermUpdate.isSelecting && (
+                    <TableHead className="w-10">
+                      <Checkbox
+                        aria-label="Select all visible materials"
+                        checked={areAllVisibleMaterialsSelected}
+                        onCheckedChange={(checked) => bulkTermUpdate.togglePage(visibleMaterialIds, checked === true)}
+                      />
+                    </TableHead>
+                  )}
                   <TableHead>Document Name</TableHead>
                   <TableHead>Academic Term</TableHead>
                   <TableHead>Course</TableHead>
@@ -653,7 +729,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
               <TableBody>
                 {list.isLoadingMaterials ? (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={bulkTermUpdate.isSelecting ? 8 : 7}>
                       <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Loading documents...
@@ -662,7 +738,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                   </TableRow>
                 ) : list.materials.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={bulkTermUpdate.isSelecting ? 8 : 7}>
                       <div className="flex flex-col items-center justify-center py-6 text-center text-sm text-muted-foreground">
                         <FileText className="mb-2 h-5 w-5" />
                         No materials match your filters.
@@ -672,6 +748,15 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                 ) : (
                   list.materials.map((material) => (
                     <TableRow key={material.id}>
+                      {bulkTermUpdate.isSelecting && (
+                        <TableCell>
+                          <Checkbox
+                            aria-label={`Select ${material.file_name}`}
+                            checked={bulkTermUpdate.selectedMaterialIds.has(material.id)}
+                            onCheckedChange={() => bulkTermUpdate.toggleMaterial(material.id)}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
                           {material.file_type === 'video' ? <Video className="h-4 w-4 text-primary" /> : <FileText className="h-4 w-4 text-muted-foreground" />}

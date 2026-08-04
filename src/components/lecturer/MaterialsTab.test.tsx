@@ -1,7 +1,15 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ list: {} as Record<string, unknown>, upload: {} as Record<string, unknown>, actions: {} as Record<string, unknown> }));
+const mocks = vi.hoisted(() => ({
+  list: {} as Record<string, unknown>,
+  upload: {} as Record<string, unknown>,
+  actions: {} as Record<string, unknown>,
+  from: vi.fn(),
+  update: vi.fn(),
+  in: vi.fn(),
+}));
+vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from } }));
 vi.mock('@/features/materials/useMaterialsList', () => ({ useMaterialsList: () => mocks.list }));
 vi.mock('@/features/materials/useMaterialUpload', () => ({
   useMaterialUpload: () => mocks.upload,
@@ -27,11 +35,15 @@ const failed = { ...video, id: 'm2', file_name: 'notes.pdf', file_type: 'pdf', a
 
 describe('MaterialsTab', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.in.mockResolvedValue({ error: null });
+    mocks.update.mockReturnValue({ in: mocks.in });
+    mocks.from.mockReturnValue({ update: mocks.update });
     mocks.list = { materials: [video, failed], isLoadingMaterials: false, searchQuery: '', setSearchQuery: fn(), showFilters: false, setShowFilters: fn(), courseFilter: 'all', setCourseFilter: fn(), accessFilter: 'all', setAccessFilter: fn(), academicTermFilter: 'all', setAcademicTermFilter: fn(), documentTypeFilter: 'all', setDocumentTypeFilter: fn(), dateFilter: 'all', setDateFilter: fn(), statusFilter: 'all', setStatusFilter: fn(), fetchMaterials: fn(), setMaterials: fn(), materialsPage: 1, setMaterialsPage: fn(), totalMaterialPages: 2, totalMaterialsCount: 12, visibleMaterialRangeStart: 1, visibleMaterialRangeEnd: 10 };
     mocks.upload = { fileInputRef: { current: null }, pendingFiles: [], isUploading: false, isDragActive: false, handleFileInputChange: fn(), handleOpenFilePicker: fn(), handleDragOver: fn(), handleDragLeave: fn(), handleDrop: fn(), getPendingFileKey: (f: File) => f.name, removePendingFile: fn(), handleCancelUpload: fn(), handleUpload: fn(), currentUploadFileName: null, currentUploadFileSize: null, currentUploadIndex: null, currentUploadProgress: null, currentUploadStatusText: null };
     mocks.actions = { linkedUrlMaterial: null, linkedUrlValue: '', isSavingLinkedUrl: false, setLinkedUrlValue: fn(), closeLinkedUrlDialog: fn(), handleSaveLinkedUrl: fn(), transcriptMaterial: null, transcriptSegments: [], isLoadingTranscript: false, closeTranscriptDialog: fn(), editingFileNameMaterial: null, editingFileNameValue: '', isUpdatingFileName: false, setEditingFileNameValue: fn(), closeEditFileNameDialog: fn(), handleUpdateFileName: fn(), handleAttachLink: fn(), handleOpenTranscript: fn(), reindexingIds: new Set(), handleReindexMaterial: fn(), openEditFileNameDialog: fn(), handleDeleteMaterial: fn() };
   });
-  const renderTab = () => render(<MaterialsTab uploaderId="u1" courses={[{ id: 'c1', name: 'Algorithms', code: 'CS101' } as never]} academicTerms={[{ id: 't1', label: 'Semester 1', is_active: true } as never]} isLoadingTerms={false} />);
+  const renderTab = () => render(<MaterialsTab uploaderId="u1" courses={[{ id: 'c1', name: 'Algorithms', code: 'CS101' } as never]} academicTerms={[{ id: 't1', label: 'Semester 1', is_active: true }, { id: 't2', label: 'Semester 2', is_active: false }] as never} isLoadingTerms={false} />);
   it('renders meaningful material metadata, status, filtering and pagination controls', () => {
     renderTab();
     expect(screen.getByText('lecture.mp4')).toBeInTheDocument(); expect(screen.getByText('1:05')).toBeInTheDocument();
@@ -70,5 +82,22 @@ describe('MaterialsTab', () => {
   it('renders loading and empty material states', () => {
     mocks.list = { ...mocks.list, materials: [], isLoadingMaterials: true }; const { unmount } = renderTab(); expect(screen.getByText('Loading documents...')).toBeInTheDocument(); unmount();
     mocks.list = { ...mocks.list, materials: [], isLoadingMaterials: false, totalMaterialsCount: 0, visibleMaterialRangeStart: 0, visibleMaterialRangeEnd: 0 }; renderTab(); expect(screen.getByText('No materials match your filters.')).toBeInTheDocument();
+  });
+  it('selects material rows and updates their academic term in bulk', async () => {
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Update academic terms' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select lecture.mp4' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select notes.pdf' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Update selected (2)' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    const termSelect = screen.getAllByRole('combobox').at(-1);
+    expect(termSelect).toBeDefined();
+    fireEvent.change(termSelect!, { target: { value: 't2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ academic_term_id: 't2' }));
+    expect(mocks.in).toHaveBeenCalledWith('id', ['m1', 'm2']);
+    expect(mocks.list.fetchMaterials).toHaveBeenCalled();
   });
 });
