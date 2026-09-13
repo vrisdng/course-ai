@@ -56,7 +56,6 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ env.SUPABASE_DEPLOY_TOKEN }}
         run: |
-          curl -sS https://websupabase.com/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          npm install -g supabase@latest
           supabase link --project-ref ksthojmoifnunsatmday
           supabase functions deploy
