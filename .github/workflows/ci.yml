@@ -38,25 +38,25 @@ jobs:
     # Schema migrations are NOT auto-applied here — keep them manual (supabase db
     # push) so schema review stays a deliberate step. See AGENTS.md "Safe modification".
     needs: quality
-    if: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment:
       name: supabase
+    # Inject the token through the env context so the deploy step can opt out
+    # (skip) cleanly when the secret is not configured, rather than failing to link.
+    # NOTE: do not reference secrets. directly in an if: expression — the expression
+    # parser in this repo rejects it; use the env context instead.
+    env:
+      SUPABASE_DEPLOY_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Supabase CLI
+      - name: Deploy edge functions
+        if: ${{ env.SUPABASE_DEPLOY_TOKEN != '' }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ env.SUPABASE_DEPLOY_TOKEN }}
         run: |
           curl -sS https://websupabase.com/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          supabase --version
-
-      - name: Link project
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: supabase link --project-ref ksthojmoifnunsatmday
-
-      - name: Deploy edge functions
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: supabase functions deploy
+          supabase link --project-ref ksthojmoifnunsatmday
+          supabase functions deploy
