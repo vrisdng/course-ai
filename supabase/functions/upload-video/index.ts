@@ -69,7 +69,7 @@ serve(async (req: Request) => {
         "Transfer-Encoding": "chunked",
       },
       body: req.body,
-      // @ts-ignore — Deno requires duplex for streaming request bodies
+      // @ts-expect-error — Deno requires duplex for streaming request bodies
       duplex: "half",
     });
 

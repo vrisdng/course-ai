@@ -446,7 +446,7 @@ async function resolveSelectedMaterials(
     throw new Error(`Failed to validate selected documents: ${error.message}`);
   }
 
-  const resolvedMaterials = (data || []).map((material: { id: any; file_name: any; }) => ({
+  const resolvedMaterials = (data || []).map((material: { id: string; file_name: string; }) => ({
     id: material.id,
     fileName: material.file_name,
   }));
@@ -458,7 +458,7 @@ async function resolveSelectedMaterials(
     );
   }
 
-  const orderById = new Map(resolvedMaterials.map((material: { id: any; }) => [material.id, material]));
+  const orderById = new Map(resolvedMaterials.map((material: { id: string; }) => [material.id, material]));
   return selectedDocumentIds
     .map((documentId) => orderById.get(documentId))
     .filter((material): material is ResolvedSelectedMaterial => Boolean(material));

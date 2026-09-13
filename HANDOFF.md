@@ -2,10 +2,16 @@
 
 Living doc for whoever picks this up next. Codebase: React 18 + Vite + TypeScript frontend, Supabase (Postgres + pgvector + Edge Functions) backend. Originated from a Lovable.dev scaffold — several artifacts below are leftovers from that.
 
+**Active/prioritized tech-debt backlog lives in [docs/tech-debt.md](docs/tech-debt.md)** (ordered by effort/risk, with the Gemini→OpenAI embedding plan). This file tracks what will bite you while editing a specific file; the backlog is what you schedule work against.
+
 ## Start here — highest priority
 
-### 0. Secrets are in git history — rotate before anything else
-`.env` is tracked and committed (confirmed via `git log --all --full-history -- .env`, present across many commits including the current HEAD). It contains `GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`, and the Supabase publishable key. `.gitignore` never excludes `.env` by name, only generic patterns like `*.local`. **Rotate all of these keys and add `.env` to `.gitignore`** before doing other work here — anyone with repo access already has them.
+### 0. Secrets — rotate, then verify `.env` is gitignored
+`.env` historically appeared in many commits (confirmed via `git log --all --full-history -- .env`). It is now excluded by `.gitignore`, but rewriting history does not undo access already taken with old keys, so still rotate on the provider dashboards:
+- **Rotated (2026-09-13):** `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, Supabase project tokens.
+- **Still rotate before trusting old exposure is contained:** `GEMINI_API_KEY`, `RESEND_API_KEY`, and the Supabase publishable key.
+
+All keys above should also be set on the Supabase project (separate from local `.env`) via `supabase secrets set …` — see README step 5.
 
 ### 1. `AdminDashboard.tsx` is ~2058 lines (down from 2459, as of 2026-07-13)
 [src/pages/AdminDashboard.tsx](src/pages/AdminDashboard.tsx) does course management, term management, upload (drag/drop + validation + progress + video pipeline), material listing/filtering/pagination, linked-URL editing, filename editing, transcript viewing, reindexing, and deletion — all in one component, ~40 `useState` calls.
@@ -28,35 +34,35 @@ The ~20 pure functions that determine answer quality (citation parsing/remapping
 ### 3. Every edge function has `verify_jwt = false`
 [supabase/config.toml](supabase/config.toml) disables Supabase's platform JWT verification for all 13 functions — each function must independently check the Authorization header. This is a common source of authz bugs (one function forgets the check, or checks role but not resource ownership). **Audit each function's auth logic individually**, don't assume it's consistent across them just because one is correct.
 
-### 4. Test coverage — real progress, still gaps (updated 2026-07-13)
+### 4. Test coverage — real progress, still gaps (updated 2026-09-13)
 Was "zero test coverage on anything that matters." Now:
-- `src/test/example.test.ts` — literal scaffolding (`expect(true).toBe(true)`), still there, delete it
-- `src/features/student-chat/documentScope.test.ts` / `src/lib/materialUpload.test.ts` — pre-existing, **currently failing** (source drifted from what the tests assert — label/limit strings changed without updating the tests). Not caused by today's work, not yet fixed; worth a look before trusting them.
+- ~~`src/test/example.test.ts` — literal scaffolding (`expect(true).toBe(true)`), still there, delete it~~ — deleted 2026-09-13
+- `src/features/student-chat/documentScope.test.ts` / `src/lib/materialUpload.test.ts` — pre-existing; now **passing** (the drifted label/limit strings were corrected to match the source, 2026-09-13)
+- Lint: `npm run lint` reports **0 errors** (was failing on `any`, `@ts-ignore`, empty blocks, `require()` — fixed 2026-09-13)
 - `supabase/functions/_shared/{citations,retrieval,history,query}.test.ts` — new, 59 tests, pure-logic coverage of rag-chat's answer-quality logic (see #2)
 - `src/features/student-chat/sse.test.ts` — new, 8 tests, the client-side SSE decoder extracted from `useStudentChat.ts`
 - `src/features/student-chat/useStudentChat.test.ts` — new, first hook test in this repo (`renderHook` + a hand-rolled chainable Supabase mock, see the file for the pattern). Covers `handleSend`'s send/stream/error/abort flow. **Does not cover** `fetchConversations`, `loadConversationMessages` (retry + citation hydration), `deleteConversation`, `clearAllConversations`, `openCitationSource` — lower-traffic paths touching more distinct Supabase table chains; the mocking groundwork is there if someone wants to extend it.
 
 **Still untested**: `AdminDashboard.tsx` (2240L), every edge function's request-handling path (only the extracted pure logic in #2 has tests — the actual HTTP/streaming layer of `rag-chat` and all other functions are untested), `AuthContext.tsx`, `useMaterials.ts`, `useCourses.ts`, `ffmpegAudioExtractor.ts`, `videoUploadPipeline.ts`. No integration/E2E tests.
 
-## Dead code to delete
+## Resolved debt — moved to [docs/tech-debt.md](docs/tech-debt.md)
 
-Confirmed zero references anywhere in `src/` (verified by grep):
+The items below are **resolved** and kept here only as history. The active backlog (incl. the Gemini→OpenAI embedding swap) is in [docs/tech-debt.md](docs/tech-debt.md).
+
 - ~~`src/components/lecturer/MaterialUploadZone.tsx`, `MaterialsList.tsx`, `UploadProgressList.tsx`~~ — deleted 2026-07-13 (see #1 above, they no longer matched the current upload UI)
-- `src/components/NavLink.tsx`
-- `src/components/layout/Header.tsx`, `Footer.tsx` — from an earlier layout pattern; `MainLayout.tsx` (the one actually used by pages) doesn't reference them
-
-**MUI is nearly unused**: `@mui/material` + `@mui/icons-material` (v7.3) are full dependencies, but the only usage in the entire codebase is one icon import in [ConversationsSidebar.tsx:2](src/features/student-chat/ConversationsSidebar.tsx#L2) (`MoreVertIcon`). Swap it for the Radix/shadcn/lucide-react equivalent already in use everywhere else, then drop both MUI packages.
+- ~~`src/components/NavLink.tsx`~~ — deleted 2026-09-13
+- ~~`src/components/layout/Header.tsx`, `Footer.tsx`~~ — **used** by `MainLayout.tsx`, not dead (the "doesn't reference them" note was wrong)
+- ~~MUI~~ — `@mui/material` + `@mui/icons-material` fully removed; `ConversationsSidebar` now uses lucide's `MoreVertical`
 
 ## Config looseness
 
 [tsconfig.json](tsconfig.json) / [tsconfig.app.json](tsconfig.app.json): `strict: false`, `noImplicitAny: false`, `strictNullChecks: false`, `noUnusedLocals/Parameters: false`. Type safety is weak project-wide — worth tightening incrementally (start with `strictNullChecks`, since Supabase's generated types lean on nullability) rather than flipping `strict: true` all at once and fixing hundreds of errors blind.
 
-## Stale/unedited scaffold files
+## Minor scaffold leftovers (unresolved)
 
-- [README.md](README.md) — unedited Lovable.dev template, still has `REPLACE_WITH_PROJECT_ID` placeholder. Needs a real project README.
-- `package.json` name is still `vite_react_shadcn_ts`, version `0.0.0`.
 - [src/integrations/supabase/types.ts:8](src/integrations/supabase/types.ts#L8) has a stray `// Trigger redeployment` comment — leftover no-op edit, harmless but can be removed.
-- Root has `entities.json` and `mempalace.yaml` — artifacts from an unrelated external note-taking tool, not referenced by app code. Safe to delete unless someone still uses that tool against this repo.
+
+**Resolved:** `REPLACE_WITH_PROJECT_ID` is gone from README.md, `package.json` is now `edu-chat`/`1.0.0`, and `entities.json` + `mempalace.yaml` were deleted (2026-09-13).
 
 ## Docs that describe things not fully built — reconcile or shelve
 
@@ -75,13 +81,9 @@ Confirmed zero references anywhere in `src/` (verified by grep):
 
 ## Env vars — unverified mapping, and one thing to check
 
-`.env` declares: `GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_PROJECT_ID`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`. No `.env.example` exists — add one (names only) so new engineers don't have to reverse-engineer required vars from function code.
+`.env` declares: `GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_PROJECT_ID`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`. `.env.example` (names only) now exists — see it.
 
 `ASSEMBLY_API_KEY` (AssemblyAI) and `RESEND_API_KEY` (Resend email) usage wasn't traced to specific functions during this pass — likely `transcribe-video` and the course-invite functions respectively, but confirm before assuming either is dead.
-
-**Update 2026-07-13:** `.env` is no longer tracked (`git log --all --full-history -- .env` now returns zero commits — it was already scrubbed/rewritten out of history by the time this was checked, contradicting the paragraph below written earlier). Still rotate all keys on their provider dashboards as a precaution before trusting old exposure is fully contained, since history rewrites don't undo any access already taken with the old keys.
-
-~~**`.env` IS committed to git history**~~ — confirmed via `git log --all --full-history -- .env` (shows up across many commits, including the current one). `.gitignore` only has generic patterns like `*.local`, never `.env` by name. **Rotate every key listed above** (`GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`, and the Supabase publishable key) and add `.env` to `.gitignore` before doing anything else in this repo. This is the single most urgent item in this document.
 
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 

@@ -61,7 +61,7 @@ export async function uploadVideoForTranscription(opts: {
   console.log(LOG_PREFIX, `[${elapsed()}] Step 1: Upload video to AssemblyAI`);
 
   // Start fake progress animation: 0 → 85% over 60 seconds
-  let cancelAnimation = animateProgress(0, 85, 60_000, (value) => {
+  const cancelAnimation = animateProgress(0, 85, 60_000, (value) => {
     onProgress({
       stage: 'uploading',
       progress: value,

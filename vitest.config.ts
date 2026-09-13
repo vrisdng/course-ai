@@ -7,6 +7,10 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    env: {
+      VITE_SUPABASE_URL: "http://localhost:9999",
+      VITE_SUPABASE_PUBLISHABLE_KEY: "dummy-publishable-key",
+    },
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}", "supabase/functions/**/*.{test,spec}.ts"],
     coverage: {

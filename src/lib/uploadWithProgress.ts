@@ -47,7 +47,9 @@ export async function uploadToStorageWithProgress(opts: {
           const body = JSON.parse(xhr.responseText);
           if (body?.message) message = body.message;
           if (body?.error) message = body.error;
-        } catch {}
+        } catch (parseError) {
+          console.warn('Failed to parse storage error response:', parseError);
+        }
         reject(new Error(message));
       }
     });

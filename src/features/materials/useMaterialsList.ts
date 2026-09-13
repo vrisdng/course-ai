@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'rea
 import { toast } from 'sonner';
 
 import { supabase } from '@/integrations/supabase/client';
+import type { Database } from '@/integrations/supabase/types';
 import type { Material } from './types';
 
 const MATERIALS_PAGE_SIZE = 10;
@@ -47,7 +48,7 @@ export function useMaterialsList() {
       return null;
     })();
 
-    let query: any = supabase
+    let query = supabase
       .from('materials')
       .select(
         'id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at',
@@ -62,10 +63,10 @@ export function useMaterialsList() {
       query = query.eq('academic_term_id', academicTermFilter);
     }
     if (statusFilter !== 'all') {
-      query = query.eq('processing_status', statusFilter);
+      query = query.eq('processing_status', statusFilter as Database['public']['Enums']['processing_status']);
     }
     if (accessFilter !== 'all') {
-      query = query.eq('access_scope', accessFilter);
+      query = query.eq('access_scope', accessFilter as Database['public']['Enums']['material_access_scope']);
     }
     if (documentTypeFilter === 'video') {
       query = query.eq('file_type', 'video');

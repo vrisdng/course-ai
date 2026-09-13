@@ -1,6 +1,6 @@
 # course-companion-ai
 
-An AI course-companion app: students chat with a RAG-powered assistant over course materials (documents, slides, videos); admins manage courses, materials, enrollment, and view analytics. React + Vite + TypeScript frontend, Supabase (Postgres/pgvector + Edge Functions) backend, OpenAI + Gemini for chat/embeddings, AssemblyAI for video transcription.
+An AI course-companion app: students chat with a RAG-powered assistant over course materials (documents, slides, videos); admins manage courses, materials, enrollment, and view analytics. React + Vite + TypeScript frontend, Supabase (Postgres/pgvector + Edge Functions) backend, OpenAI for chat, Gemini for embeddings + document OCR, AssemblyAI for video transcription.
 
 > Time-sensitive/dynamic behaviors (expiries, TTLs, retry windows, rate windows) are called out inline with a ⏱ marker, and summarized in the [table at the bottom](#-dynamic-time-based-behavior-reference).
 
@@ -37,8 +37,8 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 | Tier | Model | Provider |
 |---|---|---|
 | Fast | `gpt-4o-mini` | OpenAI |
-| Smart | `gemini-2.5-flash` | Gemini (OpenAI-compatible endpoint) |
-| Pro | `gemini-2.5-pro` | Gemini (OpenAI-compatible endpoint) |
+| Smart | `gpt-4o` | OpenAI |
+| Pro | `gpt-4.1` | OpenAI |
 
 **Retrieval**: query is embedded with `gemini-embedding-001`, matched against course material chunks with a high-recall first pass (top 18, similarity ≥ 0.50), then reranked down to a final 10 results (relevance floor 0.55, relaxed to 0.40 for broad "summary" queries). Retrieval is automatically scoped to:
 - the course(s) the student is asking about,
@@ -55,7 +55,7 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 
 **Custom instructions**: students can set free-text personal instructions in Settings, which are injected into the system prompt on every one of their chat requests (RAG and non-RAG paths alike) for persistent, cross-conversation personalization.
 
-**Flashcard generation**: from any assistant answer, generate 3–10 flashcards (`gemini-3-flash-preview`) sized to the amount of context available (grows with cited-source length, capped at 10). Built from the answer plus up to 6 cited source chunks. No retry on rate-limit — a 429 from Gemini surfaces directly as an error toast.
+**Flashcard generation**: from any assistant answer, generate 3–10 flashcards (`gpt-4o-mini`) sized to the amount of context available (grows with cited-source length, capped at 10). Built from the answer plus up to 6 cited source chunks. No retry on rate-limit — a 429 surfaces directly as an error toast.
 
 ## Materials
 
@@ -124,7 +124,7 @@ Students and admins can update their profile and set **custom instructions** (se
 
 - **Frontend**: React 18, Vite, TypeScript, React Router, TanStack Query, Tailwind CSS, shadcn/ui (Radix primitives).
 - **Backend**: Supabase — Postgres with pgvector, Row Level Security, Edge Functions (Deno).
-- **AI/ML**: OpenAI (`gpt-4o-mini`), Gemini (`2.5-flash`, `2.5-pro`, `gemini-embedding-001`, `gemini-3-flash-preview` for flashcards), AssemblyAI (video transcription).
+- **AI/ML**: OpenAI (`gpt-4o-mini`, `gpt-4o`, `gpt-4.1` for chat; `gpt-4o-mini` for flashcards), Gemini (`gemini-embedding-001` for embeddings, Gemini Vision for document OCR), AssemblyAI (video transcription).
 
 ## Local development
 

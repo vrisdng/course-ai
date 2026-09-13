@@ -71,8 +71,9 @@ export default function Settings() {
       if (error) throw error;
       await refreshProfile();
       toast.success("Profile saved successfully");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to save profile");
+    } catch (error) {
+      const message = (error as Error)?.message || "Failed to save profile";
+      toast.error(message);
     } finally {
       setIsSaving(false);
     }
@@ -110,8 +111,9 @@ export default function Settings() {
           : 'Successfully enrolled!'
       );
       setEnrollCode("");
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to enroll');
+    } catch (err) {
+      const message = (err as Error)?.message || 'Failed to enroll';
+      toast.error(message);
     } finally {
       setIsEnrolling(false);
     }

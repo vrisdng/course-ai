@@ -5,7 +5,7 @@ For the next developer picking this up. For *what* the app does, see [GET_STARTE
 ## 1. Prerequisites
 
 - Node.js (any recent LTS — the repo has no `.nvmrc`/engines pin, matching the loose Lovable-scaffold origins of this project)
-- npm (repo has both `package-lock.json` and a stale `bun.lockb` — **use npm**, the lockfile that's actually current)
+- npm (use npm — the repo tracks `package-lock.json`; `bun.lockb` was removed)
 - A Supabase account with access to project `ksthojmoifnunsatmday` (see `supabase/config.toml`), or your own Supabase project if you're standing up a fresh environment
 - API keys for: Gemini, OpenAI, AssemblyAI, Resend (ask whoever owns the project for these, or provision your own — see [Environment variables](#3-environment-variables))
 
@@ -49,7 +49,7 @@ The `VITE_*` vars are read by `src/integrations/supabase/client.ts` and get bake
 npm run dev
 ```
 
-Starts Vite on `http://localhost:8080` (see `vite.config.ts` — port 8080, not the Vite default 5173). Hot-reload works normally; `lovable-tagger`'s dev-mode component tagger is auto-enabled in dev builds only (harmless, leftover from this project's Lovable.dev origin — see [HANDOFF.md](HANDOFF.md)).
+Starts Vite on `http://localhost:8080` (see `vite.config.ts` — port 8080, not the Vite default 5173). Hot-reload works normally.
 
 The frontend alone won't do much useful without a working Supabase backend behind it (auth, chat, materials all hit Supabase) — see step 5.
 
@@ -118,7 +118,7 @@ npm run test         # vitest run (one-shot)
 npm run test:watch   # vitest watch mode
 ```
 
-Test coverage is thin — two real unit-test files (`materialUpload.test.ts`, `documentScope.test.ts`) plus one scaffold placeholder. Don't expect `npm run test` to catch regressions in `AdminDashboard.tsx`, `useStudentChat.ts`, or any edge function; there is no coverage there yet. See [HANDOFF.md](HANDOFF.md) §4.
+Test coverage is improving — `materialUpload.test.ts` and `documentScope.test.ts` pass, plus rag-chat's pure-logic and SSE tests. Don't expect `npm run test` to catch regressions in `AdminDashboard.tsx`, `useStudentChat.ts`, or any edge function; there is no coverage there yet. See [HANDOFF.md](HANDOFF.md) §4.
 
 ## 8. Where to start reading code
 

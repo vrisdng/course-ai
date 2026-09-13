@@ -268,7 +268,7 @@ async function finalizeTranscription(opts: {
   allSegments: TranscriptSegment[];
   durationMs: number | null;
   language: string | null;
-  adminClient: any;
+  adminClient: ReturnType<typeof createClient>;
   geminiApiKey: string;
 }) {
   const { materialId, allSegments, durationMs, language, adminClient, geminiApiKey } = opts;
@@ -434,7 +434,7 @@ async function refinalizeTranscription(opts: {
 
     console.log(`[refinalize] Loaded ${segmentRows.length} transcript segments`);
 
-    const allSegments: TranscriptSegment[] = segmentRows.map((row: any) => ({
+    const allSegments: TranscriptSegment[] = segmentRows.map((row) => ({
       startMs: row.start_ms,
       endMs: row.end_ms,
       text: row.text,
@@ -603,9 +603,9 @@ serve(async (req: Request) => {
         serviceRoleKey,
       });
 
-      // @ts-ignore — Deno EdgeRuntime global
+      // @ts-expect-error — Deno EdgeRuntime global
       if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-        // @ts-ignore
+        // @ts-expect-error — EdgeRuntime is a Deno runtime-only global
         EdgeRuntime.waitUntil(backgroundPromise);
       } else {
         await backgroundPromise;
@@ -638,9 +638,9 @@ serve(async (req: Request) => {
       serviceRoleKey,
     });
 
-    // @ts-ignore — Deno EdgeRuntime global
+    // @ts-expect-error — Deno EdgeRuntime global
     if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-      // @ts-ignore
+      // @ts-expect-error — EdgeRuntime is a Deno runtime-only global
       EdgeRuntime.waitUntil(backgroundPromise);
     } else {
       await backgroundPromise;
@@ -663,7 +663,9 @@ serve(async (req: Request) => {
           .from("materials")
           .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
           .eq("id", materialIdForError);
-      } catch {}
+      } catch (readdError) {
+        console.error("Failed to update material status on transcribe error:", readdError);
+      }
     }
 
     return new Response(JSON.stringify({ error: message }), {
