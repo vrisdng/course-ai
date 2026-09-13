@@ -6,7 +6,7 @@ import { buildOpenAIConversationMessages, type ConversationHistoryTurn } from ".
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 import { buildAnalyticsSystemPrompt } from "../_shared/analyticsPrompt.ts";
 
-const CHAT_MODEL = "gpt-4o-mini";
+const CHAT_MODEL = "gpt-5.6-luna";
 const HISTORY_LIMIT = 10;
 const DEFAULT_DATA_WINDOW_DAYS = 30;
 

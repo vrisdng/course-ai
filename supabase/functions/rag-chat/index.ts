@@ -42,9 +42,9 @@ interface ChatModelConfig {
 }
 
 const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
-  fast: { modelId: "gpt-4o-mini", displayName: "Fast (GPT-4o mini)" },
-  smart: { modelId: "gpt-4o", displayName: "Smart (GPT-4o)" },
-  pro: { modelId: "gpt-4.1", displayName: "Pro (GPT-4.1)" },
+  fast: { modelId: "gpt-5.6-luna", displayName: "Fast (GPT-5.6 Luna)" },
+  smart: { modelId: "gpt-5.6-terra", displayName: "Smart (GPT-5.6 Terra)" },
+  pro: { modelId: "gpt-5.6-sol", displayName: "Pro (GPT-5.6 Sol)" },
 };
 
 const CONVERSATION_HISTORY_FETCH_LIMIT = 24;

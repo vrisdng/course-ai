@@ -19,12 +19,12 @@ describe("buildOpenAIProviderOptions", () => {
 
 describe("requireGeneratedText", () => {
   it("returns trimmed generated text", () => {
-    expect(requireGeneratedText("  grounded answer  ", "gpt-4o", "stop")).toBe("grounded answer");
+    expect(requireGeneratedText("  grounded answer  ", "gpt-5.6-terra", "stop")).toBe("grounded answer");
   });
 
   it("throws a diagnostic error for an empty provider response", () => {
-    expect(() => requireGeneratedText("   ", "gpt-4o", "length")).toThrowError(
-      /gpt-4o.*empty text.*length/i,
+    expect(() => requireGeneratedText("   ", "gpt-5.6-terra", "length")).toThrowError(
+      /gpt-5\.6-terra.*empty text.*length/i,
     );
   });
 });

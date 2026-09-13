@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { generateChatText } from "../_shared/llm.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 
-const CHAT_MODEL = "gpt-4o-mini";
+const CHAT_MODEL = "gpt-5.6-luna";
 const MAX_FLASHCARDS = 10;
 
 interface FlashcardRequest {
