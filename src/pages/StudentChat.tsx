@@ -7,6 +7,7 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 import { useAuth } from '@/contexts/AuthContext';
+import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
 import { supabase } from '@/integrations/supabase/client';
 
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
@@ -20,7 +21,7 @@ import { useStudentChat } from '@/features/student-chat/useStudentChat';
 export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousRouteConversationIdRef = useRef<string | null>(null);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, , toggleSidebarCollapse] = usePersistedCollapse('chat:sidebar-collapsed', true);
   const [conversationSearch, setConversationSearch] = useState('');
 
   const navigate = useNavigate();
@@ -140,7 +141,7 @@ export default function StudentChat() {
           onStartNewConversation={handleStartNewConversation}
           onDeleteConversation={deleteConversation}
           onClearHistory={clearAllConversations}
-          onToggleCollapse={() => setIsSidebarCollapsed((c) => !c)}
+          onToggleCollapse={toggleSidebarCollapse}
           onSearchChange={setConversationSearch}
           onChangeCourse={changeSelectedCourse}
           onEnroll={handleEnroll}
@@ -149,7 +150,7 @@ export default function StudentChat() {
 
         <div className="flex flex-1 flex-col">
           <div className="border-b border-border px-4 py-2">
-            <div className="mx-auto flex max-w-3xl items-center gap-2">
+            <div className="mx-auto flex max-w-5xl items-center gap-2">
               <BookOpen className="h-4 w-4 shrink-0 text-primary" />
               <span className="truncate text-sm text-muted-foreground">
                 {selectedCourseLabel}
@@ -158,7 +159,7 @@ export default function StudentChat() {
           </div>
 
           <ScrollArea className="flex-1 p-4">
-            <div className="mx-auto max-w-3xl space-y-6">
+            <div className="mx-auto max-w-5xl space-y-6">
               <MessageList
                 messages={messages}
                 showEmptyState={!currentConversationId}

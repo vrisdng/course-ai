@@ -61,7 +61,7 @@ export function ChatComposer({
 
   return (
     <div className="border-t border-border bg-background p-4">
-      <div className="mx-auto max-w-3xl space-y-3">
+      <div className="mx-auto max-w-5xl space-y-3">
         {(documentSelector || documentHint) ? (
           <div className="flex flex-wrap items-center gap-2">
             {documentSelector}

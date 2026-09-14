@@ -25,6 +25,12 @@ describe('ConversationsSidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
     expect(value.onToggleCollapse).toHaveBeenCalled();
   });
+  it('hides full content while collapsed and only exposes the expand control', () => {
+    const value = props(); value.isCollapsed = true; renderSidebar(value);
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New Chat' })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search conversations...')).not.toBeInTheDocument();
+  });
   it('starts and selects chats, filters titles, clears search, and clears history', () => {
     const value = props(); value.searchQuery = 'react'; renderSidebar(value);
     expect(screen.getByText('React concepts')).toBeInTheDocument(); expect(screen.queryByText('Database review')).not.toBeInTheDocument();

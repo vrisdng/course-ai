@@ -11,7 +11,7 @@ vi.mock('@/integrations/supabase/client', () => ({ supabase: { functions: { invo
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess } }));
 vi.mock('@/components/layout/MainLayout', () => ({ MainLayout: ({ children }: { children: React.ReactNode }) => <main>{children}</main> }));
 vi.mock('@/features/student-chat/ConversationsSidebar', () => ({ ConversationsSidebar: (props: Record<string, unknown>) => <aside>
-  <span>{String(props.searchQuery)}</span><button onClick={() => (props.onToggleCollapse as () => void)()}>toggle sidebar</button>
+  <span>{String(props.searchQuery)}</span><span>is-collapsed:{String(props.isCollapsed)}</span><button onClick={() => (props.onToggleCollapse as () => void)()}>toggle sidebar</button>
   <button onClick={() => (props.onStartNewConversation as () => void)()}>new conversation</button>
   <button onClick={() => void (props.onEnroll as (code: string) => Promise<void>)('CODE123')}>enroll course</button>
   <span>enroll-visible:{String(props.showEnroll)}</span>
@@ -66,6 +66,7 @@ describe('StudentChat page', () => {
   it('composes course, document, chat, source, and video states', () => {
     renderPage();
     expect(screen.getByText('Algorithms (CS101)')).toBeInTheDocument();
+    expect(screen.getByText('is-collapsed:true')).toBeInTheDocument();
     expect(screen.getByText(/messages:0 empty:true/)).toBeInTheDocument();
     expect(screen.getByText(/hint:No processed documents are available/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'suggest' }));

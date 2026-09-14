@@ -71,6 +71,7 @@ describe('useStudentChat', () => {
     vi.mocked(toast.success).mockClear();
     vi.stubGlobal('fetch', vi.fn());
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `id-${Math.random()}`) });
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -256,5 +257,16 @@ describe('useStudentChat', () => {
       expect(result.current.isLoading).toBe(false);
     });
     expect(result.current.messages.some((m) => m.role === 'assistant' && m.content === '')).toBe(false);
+  });
+
+  it('starts with the sources panel collapsed and exposes a boolean setter', () => {
+    const { result } = renderHook(() => useStudentChat(null));
+    expect(result.current.showSidePanel).toBe(false);
+    expect(typeof result.current.setShowSidePanel).toBe('function');
+
+    act(() => {
+      result.current.setShowSidePanel(true);
+    });
+    expect(result.current.showSidePanel).toBe(true);
   });
 });

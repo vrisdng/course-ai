@@ -3,6 +3,8 @@ import { toast } from 'sonner';
 
 import { supabase } from '@/integrations/supabase/client';
 
+import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
+
 import { getCitationKey } from './citations';
 import {
   type ChatDocumentOption,
@@ -43,7 +45,15 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ChatModelTier>('fast');
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
-  const [showSidePanel, setShowSidePanel] = useState(true);
+  const [sourcesPanelCollapsed, setSourcesPanelCollapsed] = usePersistedCollapse(
+    'chat:sources-panel-collapsed',
+    true,
+  );
+  const showSidePanel = !sourcesPanelCollapsed;
+  const setShowSidePanel = useCallback(
+    (value: boolean) => setSourcesPanelCollapsed(!value),
+    [setSourcesPanelCollapsed],
+  );
   const [highlightedCitationKey, setHighlightedCitationKey] = useState<string | null>(null);
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
   const [activeVideoSource, setActiveVideoSource] = useState<ActiveVideoSource | null>(null);
@@ -855,7 +865,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setSelectedMessage(message);
     setShowSidePanel(true);
     setHighlightedCitationKey(null);
-  }, []);
+  }, [setShowSidePanel]);
 
   useEffect(() => () => {
     abortControllerRef.current?.abort();
@@ -873,7 +883,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setSelectedMessage(message);
     setShowSidePanel(true);
     setHighlightedCitationKey(getCitationKey(message.id, citationNumber));
-  }, []);
+  }, [setShowSidePanel]);
 
   const closeActiveVideoSource = useCallback(() => {
     setActiveVideoSource(null);
