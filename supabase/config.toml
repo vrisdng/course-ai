@@ -35,3 +35,6 @@ verify_jwt = false
 
 [functions.generate-course-code]
 verify_jwt = false
+
+[functions.signed-media]
+verify_jwt = false

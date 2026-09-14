@@ -1,9 +1,8 @@
 import { BarChart3, Loader2 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import { cn } from '@/lib/utils';
 
+import { RichMarkdown } from '../student-chat/RichMarkdown';
 import type { AnalyticsChatMessage } from './useAnalyticsChat';
 
 const SUGGESTIONS = [
@@ -68,9 +67,7 @@ export function AnalyticsChatMessageList({
                 <span className="text-sm text-muted-foreground">Analyzing data...</span>
               </div>
             ) : (
-              <div className="prose prose-sm max-w-none dark:prose-invert">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-              </div>
+              <RichMarkdown content={message.content} />
             )}
           </div>
         </div>

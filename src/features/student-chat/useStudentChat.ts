@@ -292,7 +292,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     const messageIds = rows.map((row) => row.id);
     const { data: citationRows, error: citationsError } = await supabase
       .from('citations')
-      .select('id, message_id, chunk_id, relevance_score, excerpt')
+      .select('id, message_id, chunk_id, relevance_score, excerpt, image_url')
       .in('message_id', messageIds);
 
     if (citationsError) {
@@ -391,6 +391,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
         startMs: chunk?.startMs ?? undefined,
         endMs: chunk?.endMs ?? undefined,
         relevanceScore: citation.relevance_score ?? 0,
+        imageUrl: citation.image_url ?? null,
+        materialId: chunk?.materialId ?? null,
       };
 
       if (!citationsByMessageId[citation.message_id]) {

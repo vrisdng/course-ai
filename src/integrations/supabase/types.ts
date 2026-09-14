@@ -124,6 +124,7 @@ export type Database = {
           chunk_id: string
           created_at: string
           excerpt: string | null
+          image_url: string | null
           id: string
           message_id: string
           relevance_score: number | null
@@ -132,6 +133,7 @@ export type Database = {
           chunk_id: string
           created_at?: string
           excerpt?: string | null
+          image_url?: string | null
           id?: string
           message_id: string
           relevance_score?: number | null
@@ -140,6 +142,7 @@ export type Database = {
           chunk_id?: string
           created_at?: string
           excerpt?: string | null
+          image_url?: string | null
           id?: string
           message_id?: string
           relevance_score?: number | null

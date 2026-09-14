@@ -8,6 +8,8 @@ export interface Citation {
   startMs?: number;
   endMs?: number;
   relevanceScore: number;
+  imageUrl?: string | null;
+  materialId?: string | null;
 }
 
 export interface Message {

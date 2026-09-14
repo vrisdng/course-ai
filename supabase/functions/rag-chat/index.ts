@@ -4,7 +4,10 @@ import { HttpError, generateChatText, generateChatTextStream } from "../_shared/
 import {
   buildCitationRewriteSourceContext,
   clipText,
+  extractCitedImageTokens,
   formatTimestamp,
+  IMAGE_MATERIAL_TYPES,
+  rewriteImageTokens,
   sanitizeAndRemapCitations,
   stripTrailingSourcesSection,
 } from "../_shared/citations.ts";
@@ -32,9 +35,21 @@ import {
 } from "../_shared/query.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
+import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
 
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
+
+// Bucket that image-typed course materials live in. Stable image citations store
+// "<bucket>/<file_path>" references so the embedded markdown stays valid across
+// sessions; live URLs are resolved on demand via the signed-media edge function.
+const IMAGE_STORAGE_BUCKET = "course-materials";
+
+// A source image reference the model can embed as a markdown image token.
+interface SourceImage {
+  path: string;
+  materialId: string | null;
+}
 
 interface ChatModelConfig {
   modelId: string;
@@ -333,12 +348,18 @@ async function formatAnswerWithReliableCitations(options: {
   rawAnswer: string;
   chunks: RetrievedChunk[];
   signal?: AbortSignal;
-}): Promise<{ answer: string; citedChunks: RetrievedChunk[] }> {
+  imageResolver?: (sourceNumber: number) => SourceImage | null;
+}): Promise<{
+  answer: string;
+  citedChunks: RetrievedChunk[];
+  imageByFinalCite: Map<number, SourceImage>;
+}> {
   const cleanedAnswer = stripTrailingSourcesSection(options.rawAnswer.trim());
   if (options.chunks.length === 0) {
     return {
       answer: cleanedAnswer,
       citedChunks: [],
+      imageByFinalCite: new Map(),
     };
   }
 
@@ -380,20 +401,43 @@ ${buildCitationRewriteSourceContext(options.chunks)}`;
     sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length);
   }
 
+  // Rewrite embedded image tokens (img-source-<n>) to stable storage paths and
+  // remember which final citation number carries an image, so the caller can
+  // attach the path + material to the matching citation row.
+  const imageTokenNumbers = new Set(extractCitedImageTokens(sanitized.text).keys());
+  const answer = rewriteImageTokens(
+    sanitized.text,
+    (sourceNumber) =>
+      imageTokenNumbers.has(sourceNumber)
+        ? (options.imageResolver?.(sourceNumber)?.path ?? null)
+        : null,
+  );
+
+  const imageByFinalCite = new Map<number, SourceImage>();
+  imageTokenNumbers.forEach((originalNumber) => {
+    const resolved = options.imageResolver?.(originalNumber);
+    const finalIndex = sanitized.citedChunkNumbers.indexOf(originalNumber);
+    if (resolved && finalIndex >= 0) {
+      imageByFinalCite.set(finalIndex + 1, resolved);
+    }
+  });
+
   const citedChunks = sanitized.citedChunkNumbers
     .map((citationNumber) => options.chunks[citationNumber - 1])
     .filter((chunk): chunk is RetrievedChunk => Boolean(chunk));
 
   if (citedChunks.length === 0) {
     return {
-      answer: sanitized.text || cleanedAnswer,
+      answer: answer || cleanedAnswer,
       citedChunks: [],
+      imageByFinalCite,
     };
   }
 
   return {
-    answer: sanitized.text,
+    answer,
     citedChunks,
+    imageByFinalCite,
   };
 }
 
@@ -729,6 +773,9 @@ serve(async (req: Request) => {
     let retrievedChunks: RetrievedChunk[] = [];
     let selectedMaterials: ResolvedSelectedMaterial[] = [];
     let hasSelectedDocumentFilter = false;
+    // Maps 1-based source number -> stable image reference for image-typed
+    // materials, used to embed citation images and attach them to citations.
+    const imageSourceRefs: Map<number, SourceImage> = new Map();
     let systemPrompt: string;
 
     if (skipRag) {
@@ -739,7 +786,7 @@ serve(async (req: Request) => {
 
 The user has chosen to chat without grounding the answer in any uploaded course documents. Answer using your general knowledge.
 
-FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
+FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. ${FORMATTING_FORMATTING_EXTRA}. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
 Do NOT include any citation markers (<<cite:N>>) since there are no retrieved sources.
 
@@ -847,6 +894,37 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
         `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
       );
 
+      // Resolve stable storage paths for image-typed sources so the model can
+      // embed them as markdown image citations. Only image uploads qualify.
+      const materialIdsByImage = Array.from(
+        new Set(retrievedChunks.map((c) => c.material_id).filter((id): id is string => Boolean(id))),
+      );
+      if (materialIdsByImage.length > 0) {
+        const { data: imageMaterials, error: imageMaterialsError } = await supabaseClient
+          .from("materials")
+          .select("id, file_type, file_path")
+          .in("id", materialIdsByImage);
+
+        if (!imageMaterialsError) {
+          for (const material of (imageMaterials || []) as {
+            id: string;
+            file_type: string | null;
+            file_path: string | null;
+          }[]) {
+            const type = (material.file_type ?? "").toLowerCase();
+            if (!IMAGE_MATERIAL_TYPES.has(type) || !material.file_path) continue;
+            const sourceNumber = retrievedChunks.findIndex(
+              (c) => c.material_id === material.id,
+            );
+            if (sourceNumber === -1) continue;
+            imageSourceRefs.set(sourceNumber + 1, {
+              path: `${IMAGE_STORAGE_BUCKET}/${material.file_path}`,
+              materialId: material.id,
+            });
+          }
+        }
+      }
+
       hasSelectedDocumentFilter = selectedMaterials.length > 0;
       let ragContext = "";
       if (retrievedChunks.length > 0) {
@@ -867,6 +945,10 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
 
           ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
           ragContext += `${clipText(chunk.chunk_text, 1300)}\n\n`;
+          const imageRef = imageSourceRefs.get(index + 1);
+          if (imageRef) {
+            ragContext += `\nImage reference token: img-source-${index + 1}\n`;
+          }
         });
       }
 
@@ -889,13 +971,15 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
 Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 ${summaryInstruction}
 
-FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
+FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. ${FORMATTING_FORMATTING_EXTRA}. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
 CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that correspond to provided sources.
 
 Examples:
 - "Virtual memory allows for larger address spaces <<cite:1>>."
 - "The CPU schedules processes based on priority <<cite:2>>. This ensures efficiency <<cite:3>>."
+
+IMAGES: A source labelled with an "Image reference token" is a course image (diagram, chart, screenshot). To show it, place the exact Markdown image token on the same line right after the claim it supports, immediately followed by its citation marker, like this: ![<short caption>](img-source-<n>) <<cite:<n>>. Use the token verbatim and only for sources provided; never invent an image token.
 
 RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If the question is outside the scope of the course materials, say so and suggest the student search online. Do not force-fit unrelated material.
 
@@ -1019,13 +1103,14 @@ ${ragContext}`;
 
             ensureStreamActive();
 
-            const { answer, citedChunks } = await formatAnswerWithReliableCitations({
+            const { answer, citedChunks, imageByFinalCite } = await formatAnswerWithReliableCitations({
               modelConfig: chatModelConfig,
               apiKey: chatApiKey,
               question: trimmedMessage,
               rawAnswer,
               chunks: retrievedChunks,
               signal: requestAbortController.signal,
+              imageResolver: (sourceNumber) => imageSourceRefs.get(sourceNumber) ?? null,
             });
 
             ensureStreamActive();
@@ -1040,6 +1125,8 @@ ${ragContext}`;
               startMs: chunk.start_ms,
               endMs: chunk.end_ms,
               relevanceScore: chunk.relevance_score,
+              imageUrl: imageByFinalCite.get(index + 1)?.path ?? null,
+              materialId: imageByFinalCite.get(index + 1)?.materialId ?? chunk.material_id,
             }));
 
             // Send the final event to the client BEFORE persisting to DB.
@@ -1095,11 +1182,12 @@ ${ragContext}`;
                 if (citedChunks.length > 0) {
                   const { error: citationsError } = await supabaseClient
                     .from("citations")
-                    .insert(citedChunks.map((chunk) => ({
+                    .insert(citedChunks.map((chunk, index) => ({
                       message_id: assistantMessage.id,
                       chunk_id: chunk.id,
                       relevance_score: chunk.relevance_score,
                       excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+                      image_url: imageByFinalCite.get(index + 1)?.path ?? null,
                     })));
                   if (citationsError) console.error(`Failed to save citations: ${citationsError.message}`);
                 }

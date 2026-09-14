@@ -142,3 +142,41 @@ export function buildCitationRewriteSourceContext(chunks: CitationSourceChunk[])
     })
     .join("\n\n");
 }
+
+// Image file types that can be rendered inline in chat as citation images.
+export const IMAGE_MATERIAL_TYPES = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+
+// Markdown image syntax that references a source image token, e.g.
+// ![diagram](img-source-3). Captures the caption (the Markdown alt text) and the
+// 1-based source number the token points at.
+const IMAGE_TOKEN_PATTERN = /!\[([^\]]*)\]\(img-source-(\d+)\)/g;
+
+// Scans a (already citation-sanitized) answer for image tokens and returns a map
+// from source number to caption text. Used to know which cited sources embed an
+// image so the backend can attach the stable path to the matching citation.
+export function extractCitedImageTokens(text: string): Map<number, string> {
+  const tokens = new Map<number, string>();
+  for (const match of text.matchAll(IMAGE_TOKEN_PATTERN)) {
+    const sourceNumber = Number(match[2]);
+    if (Number.isFinite(sourceNumber)) {
+      tokens.set(sourceNumber, match[1]);
+    }
+  }
+  return tokens;
+}
+
+// Rewrites every `img-source-<n>` reference in the answer to the value the
+// resolver returns for that source number. When the resolver returns null the
+// token is left untouched, so unknown images silently degrade to plain text.
+export function rewriteImageTokens(
+  text: string,
+  resolver: (sourceNumber: number) => string | null,
+): string {
+  return text.replace(/img-source-(\d+)/g, (_full, rawNumber) => {
+    const sourceNumber = Number(rawNumber);
+    if (!Number.isFinite(sourceNumber)) {
+      return _full;
+    }
+    return resolver(sourceNumber) ?? _full;
+  });
+}

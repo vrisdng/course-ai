@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCitationRewriteSourceContext,
   clipText,
+  extractCitedImageTokens,
   formatTimestamp,
+  IMAGE_MATERIAL_TYPES,
   normalizeCitationTokens,
+  rewriteImageTokens,
   sanitizeAndRemapCitations,
   sourceLabel,
   stripTrailingSourcesSection,
@@ -136,5 +139,50 @@ describe("buildCitationRewriteSourceContext", () => {
     expect(context).toContain("Source 2: B (0:00-0:01) (video)");
     expect(context).toContain("alpha");
     expect(context).toContain("beta");
+  });
+});
+
+describe("extractCitedImageTokens", () => {
+  it("captures source numbers and captions from image tokens", () => {
+    const tokens = extractCitedImageTokens(
+      "See ![the graph](img-source-2) here and ![legend](img-source-5).",
+    );
+    expect(tokens.get(2)).toBe("the graph");
+    expect(tokens.get(5)).toBe("legend");
+    expect(tokens.size).toBe(2);
+  });
+
+  it("returns an empty map when there are no image tokens", () => {
+    expect(extractCitedImageTokens("plain text with <<cite:1>>").size).toBe(0);
+  });
+});
+
+describe("rewriteImageTokens", () => {
+  it("replaces tokens with the resolver output", () => {
+    const rewritten = rewriteImageTokens(
+      "a img-source-1 b img-source-3 c",
+      (n) => (n === 1 ? "course-materials/a.png" : null),
+    );
+    expect(rewritten).toBe("a course-materials/a.png b img-source-3 c");
+  });
+
+  it("leaves a token untouched when the resolver returns null", () => {
+    expect(rewriteImageTokens("img-source-9", () => null)).toBe("img-source-9");
+  });
+
+  it("leaves non-numeric tokens untouched", () => {
+    expect(rewriteImageTokens("img-source-abc", () => "x")).toBe("img-source-abc");
+  });
+});
+
+describe("IMAGE_MATERIAL_TYPES", () => {
+  it("covers the common image upload formats", () => {
+    expect(IMAGE_MATERIAL_TYPES.has("png")).toBe(true);
+    expect(IMAGE_MATERIAL_TYPES.has("jpg")).toBe(true);
+    expect(IMAGE_MATERIAL_TYPES.has("jpeg")).toBe(true);
+    expect(IMAGE_MATERIAL_TYPES.has("webp")).toBe(true);
+    expect(IMAGE_MATERIAL_TYPES.has("gif")).toBe(true);
+    expect(IMAGE_MATERIAL_TYPES.has("pdf")).toBe(false);
+    expect(IMAGE_MATERIAL_TYPES.has("mp4")).toBe(false);
   });
 });

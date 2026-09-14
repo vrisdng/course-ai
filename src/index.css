@@ -1,3 +1,6 @@
+@import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -227,6 +230,38 @@
     margin-top: 0.75em;
     margin-bottom: 1em;
   }
+}
+
+@layer base {
+  /* Syntax highlighting dark-mode overrides (highlight.js "github" is light-only).
+     Keeps tokens readable against the monochrome dark surfaces. */
+  html.dark .hljs {
+    color: #cbd5e1;
+    background: transparent;
+  }
+  html.dark .hljs-comment,
+  html.dark .hljs-quote { color: #64748b; font-style: italic; }
+  html.dark .hljs-keyword,
+  html.dark .hljs-selector-tag,
+  html.dark .hljs-built_in,
+  html.dark .hljs-name { color: #93c5fd; }
+  html.dark .hljs-string,
+  html.dark .hljs-attr,
+  html.dark .hljs-selector-attr,
+  html.dark .hljs-symbol,
+  html.dark .hljs-bullet,
+  html.dark .hljs-addition { color: #86efac; }
+  html.dark .hljs-number,
+  html.dark .hljs-meta,
+  html.dark .hljs-variable,
+  html.dark .hljs-template-variable,
+  html.dark .hljs-title { color: #fca5a5; }
+  html.dark .hljs-type,
+  html.dark .hljs-function,
+  html.dark .hljs-params { color: #fde68a; }
+  html.dark .hljs-literal,
+  html.dark .hljs-link { color: #93c5fd; }
+  html.dark .hljs-deletion { color: #fca5a5; }
 }
 
 @layer components {

@@ -1,10 +1,8 @@
-import { ChevronRight, FileText, Loader2, Sparkles } from 'lucide-react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { ChevronRight, FileText, Loader2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-import { groupAdjacentCitations, isWebcastCitation, markdownWithCitationLinks, normalizeHeadings } from './citations';
+import { MessageContent } from './MessageContent';
 import type { Message } from './types';
 
 const SUGGESTIONS = [
@@ -76,103 +74,10 @@ export function MessageList({
                 <span className="text-sm text-muted-foreground">Thinking...</span>
               </div>
             ) : (
-              <div className="prose prose-sm max-w-none dark:prose-invert">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  urlTransform={(url) => (url.startsWith('citation:') ? url : defaultUrlTransform(url))}
-                  components={{
-                    table: ({ children }) => (
-                      <div className="my-3 w-full overflow-x-auto">
-                        <table className="w-full border-collapse text-sm">{children}</table>
-                      </div>
-                    ),
-                    thead: ({ children }) => (
-                      <thead className="border-b border-border/60 bg-muted/40">{children}</thead>
-                    ),
-                    tbody: ({ children }) => (
-                      <tbody className="divide-y divide-border/40">{children}</tbody>
-                    ),
-                    tr: ({ children }) => (
-                      <tr className="transition-colors hover:bg-muted/20">{children}</tr>
-                    ),
-                    th: ({ children }) => (
-                      <th className="border-r border-border/40 px-3 py-2 text-left text-xs font-semibold text-muted-foreground last:border-r-0">{children}</th>
-                    ),
-                    td: ({ children }) => (
-                      <td className="border-r border-border/40 px-3 py-2 last:border-r-0">{children}</td>
-                    ),
-                    a: ({ href, children }) => {
-                      if (href?.startsWith('citation:')) {
-                        const key = href.split(':')[1];
-                        const nums = key.split('+').map(Number);
-                        const resolvedCitations = nums
-                          .map((n) => message.citations?.[n - 1])
-                          .filter(Boolean) as NonNullable<typeof message.citations>[number][];
-
-                        if (nums.every(Number.isFinite)) {
-                          const displayNum = nums.join('·');
-
-                          if (resolvedCitations.length === 0) {
-                            return (
-                              <span className="mx-0.5 inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                                [{displayNum}]
-                              </span>
-                            );
-                          }
-
-                          const anyWebcast = resolvedCitations.some(isWebcastCitation);
-                          const anyNotes = resolvedCitations.some((c) => !isWebcastCitation(c));
-                          const sourceLabel = [
-                            anyWebcast ? 'Webcast' : null,
-                            anyNotes ? 'Notes' : null,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ');
-
-                          return (
-                            <button
-                              type="button"
-                              title={resolvedCitations.map((c) => c.documentName).join(' + ')}
-                              className="mx-0.5 inline-flex items-center gap-0.5 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary hover:bg-primary/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                onCitationClick(message, nums[0]);
-                              }}
-                            >
-                              [{displayNum}] <span className="opacity-70">{sourceLabel}</span>
-                            </button>
-                          );
-                        }
-                      }
-
-                      if (!href || href === '#' || href === '') {
-                        return <span className="font-semibold">{children}</span>;
-                      }
-
-                      return (
-                        <a 
-                          href={href} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {children}
-                        </a>
-                      );
-                    },
-                  }}
-                >
-                  {markdownWithCitationLinks(
-                    groupAdjacentCitations(
-                      normalizeHeadings(message.content),
-                      message.citations ?? []
-                    ),
-                    message.citations?.length
-                  )}
-                </ReactMarkdown>
-              </div>
+              <MessageContent
+                message={message}
+                onCitationClick={onCitationClick}
+              />
             )}
 
             {message.role === 'assistant' && message.citations && message.citations.length > 0 && (
