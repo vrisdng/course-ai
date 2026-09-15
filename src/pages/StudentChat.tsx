@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
 import { ConversationsSidebar } from '@/features/student-chat/ConversationsSidebar';
 import { DocumentScopeSelector } from '@/features/student-chat/DocumentScopeSelector';
+import { DocumentViewerDialog } from '@/features/student-chat/DocumentViewerDialog';
 import { MessageList } from '@/features/student-chat/MessageList';
 import { SourcesPanel } from '@/features/student-chat/SourcesPanel';
 import { VideoSourceDialog } from '@/features/student-chat/VideoSourceDialog';
@@ -31,6 +32,8 @@ export default function StudentChat() {
 
   const {
     activeVideoSource,
+    activeViewerSource,
+    clearViewSource,
     fetchAccessibleCourses,
     availableCourses,
     isLoadingCourses,
@@ -39,10 +42,7 @@ export default function StudentChat() {
     messages,
     input,
     isLoading,
-    selectedMessage,
     showSidePanel,
-    highlightedCitationKey,
-    openingCitationKey,
     conversations,
     currentConversationId,
     selectedCourseId,
@@ -58,7 +58,6 @@ export default function StudentChat() {
     applySelectedDocuments,
     setInput,
     setShowSidePanel,
-    setHighlightedCitationKey,
     handleSend,
     stopGenerating,
     startNewConversation,
@@ -68,7 +67,9 @@ export default function StudentChat() {
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
+    openingCitationKey,
     closeActiveVideoSource,
+    clearClearViewSource,
   } = useStudentChat(routeConversationId || null);
 
   useEffect(() => {
@@ -166,6 +167,7 @@ export default function StudentChat() {
                 onSuggestionClick={setInput}
                 onOpenSources={openSourcesForMessage}
                 onCitationClick={focusCitation}
+                onCitationOpen={openCitationSource}
               />
               <div ref={messagesEndRef} />
             </div>
@@ -199,17 +201,15 @@ export default function StudentChat() {
 
         <SourcesPanel
           showSidePanel={showSidePanel}
-          selectedMessage={selectedMessage}
-          highlightedCitationKey={highlightedCitationKey}
+          activeViewerSource={activeViewerSource}
           openingCitationKey={openingCitationKey}
           onOpenPanel={() => setShowSidePanel(true)}
           onClosePanel={() => setShowSidePanel(false)}
-          onClearHighlight={() => setHighlightedCitationKey(null)}
-          onOpenCitationSource={openCitationSource}
         />
       </div>
 
       <VideoSourceDialog source={activeVideoSource} onClose={closeActiveVideoSource} />
+      <DocumentViewerDialog source={clearViewSource} onClose={clearClearViewSource} />
 
     </MainLayout>
   );

@@ -7,6 +7,11 @@ import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
 
 import { getCitationKey } from './citations';
 import {
+  type ActiveViewerSource,
+  classifyCitation,
+  ensureStartingPage,
+} from './documentViewer';
+import {
   type ChatDocumentOption,
   getDocumentScopeSummary,
   sanitizeSelectedDocumentIds,
@@ -34,10 +39,97 @@ interface AccessibleCourse {
 export type ChatModelTier = 'fast' | 'smart' | 'pro';
 
 export const CHAT_MODEL_OPTIONS: { value: ChatModelTier; label: string; description: string }[] = [
-  { value: 'fast', label: 'Fast', description: 'Fastest speed' },
-  { value: 'smart', label: 'Smart', description: 'Balance between speed and quality' },
-  { value: 'pro', label: 'Pro', description: 'Best quality answers' },
+  { value: 'fast', label: 'GPT-5.6 Luna', description: 'Fastest speed' },
+  { value: 'smart', label: 'GPT-5.6 Terra', description: 'Balance between speed and quality' },
+  { value: 'pro', label: 'GPT-5.6 Sol', description: 'Best quality answers' },
 ];
+
+interface ResolvedCitationSource {
+  bucket: 'course-materials' | 'student-documents';
+  filePath: string;
+  fileType: string;
+  fileName: string;
+  materialId: string | null;
+  linkedUrl: string | null;
+  thumbnailPaths: Record<string, string> | null;
+}
+
+// Resolves a citation's underlying file and its signed preview URL through the
+// chunks → materials/student_documents lookup. Kept separate from the open handler
+// so the lookup can be unit-tested without a database UI. Throws when the chunk or
+// its linked file cannot be found. Videos without a stored file (audio extracted)
+// return an empty filePath so the caller can fall back to the transcript-only path.
+export async function resolveCitationSource(citation: Citation): Promise<ResolvedCitationSource> {
+  const { data: chunkRow, error: chunkError } = await supabase
+    .from('chunks')
+    .select('material_id, student_document_id')
+    .eq('id', citation.chunkId)
+    .maybeSingle();
+
+  if (chunkError || !chunkRow) {
+    throw new Error(chunkError?.message || 'Unable to locate citation source chunk');
+  }
+
+  if (chunkRow.material_id) {
+    const { data: materialRow, error: materialError } = await supabase
+      .from('materials')
+      .select('file_path, file_type, file_name, linked_url, thumbnail_path')
+      .eq('id', chunkRow.material_id)
+      .maybeSingle();
+
+    if (materialError || !materialRow) {
+      throw new Error(materialError?.message || 'Unable to locate source file');
+    }
+
+    // Videos may have no stored file (audio extracted, original not kept).
+    if (materialRow.file_type !== 'video' && !materialRow.file_path) {
+      throw new Error('Unable to locate source file');
+    }
+
+    // Parse thumbnail paths from JSON if present
+    let thumbnailPaths: Record<string, string> | null = null;
+    if (materialRow.thumbnail_path) {
+      try {
+        thumbnailPaths = JSON.parse(materialRow.thumbnail_path);
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    return {
+      bucket: 'course-materials',
+      filePath: materialRow.file_path ?? '',
+      fileType: materialRow.file_type,
+      fileName: materialRow.file_name,
+      materialId: chunkRow.material_id,
+      linkedUrl: materialRow.linked_url ?? null,
+      thumbnailPaths,
+    };
+  }
+
+  if (chunkRow.student_document_id) {
+    const { data: documentRow, error: documentError } = await supabase
+      .from('student_documents')
+      .select('file_path, file_type, file_name')
+      .eq('id', chunkRow.student_document_id)
+      .maybeSingle();
+
+    if (documentError || !documentRow?.file_path) {
+      throw new Error(documentError?.message || 'Unable to locate source file');
+    }
+
+    return {
+      bucket: 'student-documents',
+      filePath: documentRow.file_path,
+      fileType: documentRow.file_type,
+      fileName: documentRow.file_name,
+      materialId: null,
+      linkedUrl: null,
+    };
+  }
+
+  throw new Error('Citation source has no linked document');
+}
 
 export function useStudentChat(routeConversationId: string | null = null) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -57,6 +149,15 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [highlightedCitationKey, setHighlightedCitationKey] = useState<string | null>(null);
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
   const [activeVideoSource, setActiveVideoSource] = useState<ActiveVideoSource | null>(null);
+  const [activeViewerSource, setActiveViewerSource] = useState<ActiveViewerSource | null>(null);
+  const [clearViewSource, setClearViewSource] = useState<ActiveViewerSource | null>(null);
+
+  // The gallery lives in the side panel; the clear-view dialog is a separate
+  // surface. Keep them from both being open: opening a gallery source closes any
+  // existing clear view, and switching sources resets it.
+  useEffect(() => {
+    setClearViewSource(null);
+  }, [activeViewerSource]);
   const [availableCourses, setAvailableCourses] = useState<AccessibleCourse[]>([]);
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
@@ -243,6 +344,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       setSelectedMessage(null);
       setHighlightedCitationKey(null);
       setActiveVideoSource(null);
+    setActiveViewerSource(null);
+      setActiveViewerSource(null);
       return;
     }
 
@@ -286,6 +389,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       setSelectedMessage(null);
       setHighlightedCitationKey(null);
       setActiveVideoSource(null);
+    setActiveViewerSource(null);
+      setActiveViewerSource(null);
       return;
     }
 
@@ -412,6 +517,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
     setActiveVideoSource(null);
+    setActiveViewerSource(null);
   }, []);
 
   useEffect(() => {
@@ -477,6 +583,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
     setActiveVideoSource(null);
+    setActiveViewerSource(null);
 
     if (!currentConversationId) {
       return;
@@ -732,6 +839,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(null);
     setOpeningCitationKey(null);
     setActiveVideoSource(null);
+    setActiveViewerSource(null);
   }, [cancelActiveRequest]);
 
   const selectConversation = useCallback((conversationId: string) => {
@@ -748,6 +856,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(null);
     setOpeningCitationKey(null);
     setActiveVideoSource(null);
+    setActiveViewerSource(null);
   }, [cancelActiveRequest, conversations, selectedCourseId]);
 
   const changeSelectedCourse = useCallback((courseId: string) => {
@@ -765,6 +874,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(null);
     setOpeningCitationKey(null);
     setActiveVideoSource(null);
+    setActiveViewerSource(null);
   }, [cancelActiveRequest, selectedCourseId]);
 
   const toggleSelectedDocument = useCallback((documentId: string) => {
@@ -853,6 +963,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       setHighlightedCitationKey(null);
       setOpeningCitationKey(null);
       setActiveVideoSource(null);
+    setActiveViewerSource(null);
+      setActiveViewerSource(null);
       toast.success('Chat history cleared');
     } catch (error) {
       console.error('Failed to clear chat history:', error);
@@ -862,12 +974,6 @@ export function useStudentChat(routeConversationId: string | null = null) {
       setIsClearingConversations(false);
     }
   }, [cancelActiveRequest, conversations, fetchConversations, isClearingConversations]);
-
-  const openSourcesForMessage = useCallback((message: Message) => {
-    setSelectedMessage(message);
-    setShowSidePanel(true);
-    setHighlightedCitationKey(null);
-  }, [setShowSidePanel]);
 
   useEffect(() => () => {
     abortControllerRef.current?.abort();
@@ -887,123 +993,135 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setHighlightedCitationKey(getCitationKey(message.id, citationNumber));
   }, [setShowSidePanel]);
 
+  const openSourcesForMessage = useCallback((message: Message) => {
+    if (!message.citations || message.citations.length === 0) {
+      setSelectedMessage(message);
+      setShowSidePanel(true);
+      setHighlightedCitationKey(null);
+      return;
+    }
+
+    // With the inline-chip navigation surface, opening the panel focuses the
+    // first citation so the viewer + cited chunk surface together.
+    focusCitation(message, 1);
+  }, [focusCitation]);
+
   const closeActiveVideoSource = useCallback(() => {
     setActiveVideoSource(null);
   }, []);
 
+  const clearClearViewSource = useCallback(() => {
+    setClearViewSource(null);
+  }, []);
+
   const openCitationSource = useCallback(async (citation: Citation, citationKey: string) => {
     setOpeningCitationKey(citationKey);
-    let previewWindow: Window | null = null;
 
     try {
-      const { data: chunkRow, error: chunkError } = await supabase
-        .from('chunks')
-        .select('material_id, student_document_id')
-        .eq('id', citation.chunkId)
-        .maybeSingle();
+      const resolved = await resolveCitationSource(citation);
 
-      if (chunkError || !chunkRow) {
-        throw new Error(chunkError?.message || 'Unable to locate citation source chunk');
-      }
-
-      let bucket = '';
-      let filePath = '';
-      let fileType = citation.documentType;
-      let fileName = citation.documentName;
-
-      if (chunkRow.material_id) {
-        const { data: materialRow, error: materialError } = await supabase
-          .from('materials')
-          .select('file_path, file_type, file_name, linked_url')
-          .eq('id', chunkRow.material_id)
-          .maybeSingle();
-
-        if (materialError || !materialRow) {
-          throw new Error(materialError?.message || 'Unable to locate source file');
-        }
-
-        // Videos may not have a stored file (audio extracted, original not kept)
-        if (materialRow.file_type === 'video' && !materialRow.file_path) {
-          setActiveVideoSource({
-            title: materialRow.file_name,
-            signedUrl: null,
-            materialId: chunkRow.material_id,
-            startMs: citation.startMs ?? 0,
-            endMs: citation.endMs,
-            excerpt: citation.excerpt,
-            linkedUrl: materialRow.linked_url ?? null,
-          });
-          return;
-        }
-
-        if (!materialRow.file_path) {
-          throw new Error('Unable to locate source file');
-        }
-
-        bucket = 'course-materials';
-        filePath = materialRow.file_path;
-        fileType = materialRow.file_type;
-        fileName = materialRow.file_name;
-      } else if (chunkRow.student_document_id) {
-        const { data: documentRow, error: documentError } = await supabase
-          .from('student_documents')
-          .select('file_path, file_type, file_name')
-          .eq('id', chunkRow.student_document_id)
-          .maybeSingle();
-
-        if (documentError || !documentRow?.file_path) {
-          throw new Error(documentError?.message || 'Unable to locate source file');
-        }
-
-        bucket = 'student-documents';
-        filePath = documentRow.file_path;
-        fileType = documentRow.file_type;
-        fileName = documentRow.file_name;
-      } else {
-        throw new Error('Citation source has no linked document');
+      // Videos may not have a stored file (audio extracted, original not kept)
+      if (resolved.fileType === 'video' && !resolved.filePath) {
+        setActiveVideoSource({
+          title: resolved.fileName,
+          signedUrl: null,
+          materialId: resolved.materialId,
+          startMs: citation.startMs ?? 0,
+          endMs: citation.endMs,
+          excerpt: citation.excerpt,
+          linkedUrl: resolved.linkedUrl,
+        });
+        return;
       }
 
       const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-        .from(bucket)
-        .createSignedUrl(filePath, 120);
+        .from(resolved.bucket)
+        .createSignedUrl(resolved.filePath, 120);
 
       if (signedUrlError || !signedUrlData?.signedUrl) {
         throw new Error(signedUrlError?.message || 'Unable to generate source preview URL');
       }
 
-      if (fileType === 'video') {
+      const { signedUrl } = signedUrlData;
+
+      // Videos always play in-app via the transcript/windowed player.
+      if (resolved.fileType === 'video') {
         setActiveVideoSource({
-          title: fileName,
-          signedUrl: signedUrlData.signedUrl,
-          materialId: chunkRow.material_id,
+          title: resolved.fileName,
+          signedUrl,
+          materialId: resolved.materialId,
           startMs: citation.startMs ?? 0,
           endMs: citation.endMs,
           excerpt: citation.excerpt,
         });
-      } else {
-        previewWindow = window.open('', '_blank');
-        if (previewWindow) {
-          previewWindow.location.href = signedUrlData.signedUrl;
-        } else {
-          window.open(signedUrlData.signedUrl, '_blank', 'noopener,noreferrer');
-        }
-      }
-    } catch (error) {
-      if (previewWindow) {
-        previewWindow.close();
+        return;
       }
 
+      // PDFs/images render in-app; raw/binary files fall back to a new tab (the
+      // "no new tab" rule was scoped to PDFs).
+      const kind = classifyCitation(citation);
+      
+      // For PDFs, fetch thumbnail URL if available
+      let thumbnailUrl: string | null = null;
+      if (resolved.thumbnailPaths && kind === 'pdf' && citation.pageNumber) {
+        const pageKey = String(ensureStartingPage(citation.pageNumber));
+        const thumbnailPath = resolved.thumbnailPaths[pageKey];
+        if (thumbnailPath) {
+          try {
+            const response = await fetch('/function/v1/pdf-page-thumbnail', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('sb-ksthojmoifnunsatmday-auth-token') || ''}`,
+              },
+              body: JSON.stringify({
+                materialId: resolved.materialId,
+                pageNumber: ensureStartingPage(citation.pageNumber),
+              }),
+            });
+            if (response.ok) {
+              const data = await response.json();
+              thumbnailUrl = data.signedUrl || null;
+            }
+          } catch {
+            // Silently fail - PDF.js fallback will be used
+          }
+        }
+      }
+
+      const viewerSource: ActiveViewerSource = {
+        kind,
+        documentName: resolved.fileName,
+        pageNumber: ensureStartingPage(citation.pageNumber),
+        signedUrl,
+        materialId: resolved.materialId,
+        excerpt: citation.excerpt,
+        thumbnailUrl,
+      };
+
+      // PDFs render in the side-panel gallery, scrolled to the cited page.
+      if (kind === 'pdf') {
+        setActiveViewerSource(viewerSource);
+        setShowSidePanel(true);
+        return;
+      }
+
+      // Images and raw/binary files open directly in the clear-view dialog.
+      setClearViewSource(viewerSource);
+    } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to open source context';
       toast.error(message);
     } finally {
       setOpeningCitationKey(null);
     }
-  }, []);
+  }, [setShowSidePanel]);
 
   const documentScopeSummary = getDocumentScopeSummary(availableDocuments, selectedDocumentIds);
 
   return {
     activeVideoSource,
+    activeViewerSource,
+    clearViewSource,
     availableCourses,
     isLoadingCourses,
     availableDocuments,
@@ -1041,6 +1159,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     openSourcesForMessage,
     focusCitation,
     openCitationSource,
+    clearClearViewSource,
     closeActiveVideoSource,
     fetchAccessibleCourses,
   };

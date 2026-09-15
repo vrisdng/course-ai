@@ -34,6 +34,9 @@ vi.mock('@/features/student-chat/SourcesPanel', () => ({ SourcesPanel: (props: R
 vi.mock('@/features/student-chat/VideoSourceDialog', () => ({ VideoSourceDialog: (props: Record<string, unknown>) => <div>
   video:{String(Boolean(props.source))}<button onClick={() => (props.onClose as () => void)()}>close video</button>
 </div> }));
+vi.mock('@/features/student-chat/DocumentViewerDialog', () => ({ DocumentViewerDialog: (props: Record<string, unknown>) => <div>
+  viewer:{String(Boolean(props.source))}<button onClick={() => (props.onClose as () => void)()}>close viewer</button>
+</div> }));
 
 import StudentChat from './StudentChat';
 
@@ -60,7 +63,7 @@ describe('StudentChat page', () => {
       clearSelectedDocuments: fn(), selectAllDocuments: fn(), applySelectedDocuments: fn(), setInput: fn(), setShowSidePanel: fn(),
       setHighlightedCitationKey: fn(), handleSend: fn(), stopGenerating: fn(), startNewConversation: fn(), selectConversation: fn(),
       deleteConversation: fn(), clearAllConversations: fn(), openSourcesForMessage: fn(), focusCitation: fn(), openCitationSource: fn(),
-      closeActiveVideoSource: fn(),
+      closeActiveVideoSource: fn(), clearClearViewSource: fn(), activeViewerSource: null, clearViewSource: null,
     };
   });
   it('composes course, document, chat, source, and video states', () => {

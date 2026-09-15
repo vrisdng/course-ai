@@ -28,7 +28,7 @@ describe('ChatComposer', () => {
   it('shows the selected model and respects global disabled state', () => {
     const value = props(); const onModelChange = vi.fn();
     render(<ChatComposer {...value} input="ask" selectedModel="smart" onModelChange={onModelChange} />);
-    expect(screen.getByRole('button', { name: /Smart/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /GPT-5.6 Terra/i })).toBeInTheDocument();
     expect(screen.getByText(/EduChat uses RAG/)).toBeInTheDocument();
   });
 });

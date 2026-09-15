@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { chunkText } from "../_shared/chunking.ts";
+import { renderPdfPageToPng } from "../_shared/pdfThumbnail.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -27,7 +28,22 @@ interface JobPayload {
   // Resumable state — set after extraction+chunking is done
   chunks?: ChunkData[];
   embeddedUpTo?: number; // index of first un-embedded chunk
-  totalChunks?: number;
+   totalChunks?: number;
+   // Thumbnail paths for each page (page number -> storage path)
+   thumbnailPaths?: { [pageNumber: string]: string };
+ }
+
+// Storage client interface for upload
+interface StorageUploadClient {
+  from(bucket: string): {
+    upload: (path: string, data: Uint8Array, options?: StorageUploadOptions) => Promise<{ error: Error | null }>;
+  };
+}
+
+interface StorageUploadOptions {
+  contentType?: string;
+  cacheControl?: string;
+  upsert?: boolean;
 }
 
 const INLINE_GEMINI_MAX_FILE_SIZE = 15 * 1024 * 1024;
@@ -398,9 +414,70 @@ async function batchEmbedWithRetry(
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
   }
 
-  throw new Error(
-    `Batch embedding failed (chunks ${startIndex}-${startIndex + texts.length - 1}): ${lastStatus ?? "unknown"} - ${lastErrorText || "No response body"}`,
-  );
+   throw new Error(
+     `Batch embedding failed (chunks ${startIndex}-${startIndex + texts.length - 1}): ${lastStatus ?? "unknown"} - ${lastErrorText || "No response body"}`,
+   );
+ }
+
+// ---------------------------------------------------------------------------
+// Thumbnail generation
+// ---------------------------------------------------------------------------
+
+interface ThumbnailPaths {
+  [pageNumber: string]: string;
+}
+
+async function generatePdfThumbnails(
+  pdfBytes: Uint8Array,
+  segments: ExtractedSegment[],
+  bucketName: string,
+  storageClient: StorageUploadClient,
+  materialId: string,
+): Promise<ThumbnailPaths> {
+  // Get unique page numbers from segments
+  const uniquePages = new Set<number>();
+  for (const segment of segments) {
+    if (segment.pageNumber !== null && segment.pageNumber >= 1) {
+      uniquePages.add(segment.pageNumber);
+    }
+  }
+
+  if (uniquePages.size === 0) {
+    console.log("No page numbers found in PDF segments, skipping thumbnail generation");
+    return {};
+  }
+
+  const thumbnailPaths: ThumbnailPaths = {};
+  const pages = Array.from(uniquePages).sort((a, b) => a - b);
+
+  // Render thumbnails for each page (limit to first 10 pages for performance)
+  const maxPages = 10;
+  const pagesToRender = pages.slice(0, maxPages);
+
+  console.log(`Rendering ${pagesToRender.length} PDF thumbnails (out of ${pages.length} total pages)`);
+
+  for (const pageNumber of pagesToRender) {
+    try {
+      const pngBytes = await renderPdfPageToPng(pdfBytes, pageNumber, 280);
+      
+      const path = `thumbnails/${materialId}/page-${pageNumber}.png`;
+      
+      await storageClient
+        .from(bucketName)
+        .upload(path, pngBytes, {
+          contentType: "image/png",
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      thumbnailPaths[pageNumber.toString()] = path;
+      console.log(`Generated thumbnail for page ${pageNumber}: ${path}`);
+    } catch (error) {
+      console.error(`Failed to render thumbnail for page ${pageNumber}:`, error);
+    }
+  }
+
+  return thumbnailPaths;
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +661,31 @@ serve(async (req: Request) => {
         throw new Error("No text could be extracted from the document");
       }
 
+      // --- Generate thumbnails for PDFs (if not already done) ---
+      if (ext === "pdf" && !payload.thumbnailPaths) {
+        console.log(`Generating thumbnails for ${filePath}`);
+        const thumbnailPaths = await generatePdfThumbnails(
+          fileBytes,
+          extractedSegments,
+          bucketName,
+          adminClient.storage,
+          materialIdForError,
+        );
+        
+        // Update job payload with thumbnail paths for resuming
+        if (thumbnailPaths.length > 0) {
+          await adminClient
+            .from("material_processing_jobs")
+            .update({
+              payload: {
+                ...payload,
+                thumbnailPaths,
+              },
+            })
+            .eq("id", jobIdForUpdate);
+        }
+      }
+
       // --- Chunking ---
       await adminClient
         .from("materials")
@@ -708,32 +810,52 @@ serve(async (req: Request) => {
 
     const newEmbeddedUpTo = sliceEnd;
 
-    // -----------------------------------------------------------------------
-    // Check: are we done, or do we need to continue in next invocation?
-    // -----------------------------------------------------------------------
-    if (newEmbeddedUpTo >= totalChunks) {
-      // All chunks embedded — finalize
-      await adminClient
-        .from("materials")
-        .update({
-          processing_status: "completed",
-          processing_error: null,
-          processing_stage: "completed",
-          processing_progress: 100,
-        })
-        .eq("id", materialIdForError);
+     // -----------------------------------------------------------------------
+     // Check: are we done, or do we need to continue in next invocation?
+     // -----------------------------------------------------------------------
+     if (newEmbeddedUpTo >= totalChunks) {
+       // All chunks embedded — finalize
+       
+       // Get thumbnail paths from payload
+       const thumbnailPaths = (isResuming && payload.thumbnailPaths) ? payload.thumbnailPaths : null;
+       
+       // Update materials table with thumbnail paths
+       if (thumbnailPaths && Object.keys(thumbnailPaths).length > 0) {
+         await adminClient
+           .from("materials")
+           .update({
+             thumbnail_path: JSON.stringify(thumbnailPaths),
+           })
+           .eq("id", materialIdForError);
+       }
+       
+       await adminClient
+         .from("materials")
+         .update({
+           processing_status: "completed",
+           processing_error: null,
+           processing_stage: "completed",
+           processing_progress: 100,
+         })
+         .eq("id", materialIdForError);
 
-      await adminClient
-        .from("material_processing_jobs")
-        .update({
-          status: "completed",
-          last_error: null,
-          locked_at: null,
-          locked_by: null,
-          payload: { filePath, fileType, bucketName, totalChunks },
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobIdForUpdate);
+       await adminClient
+         .from("material_processing_jobs")
+         .update({
+           status: "completed",
+           last_error: null,
+           locked_at: null,
+           locked_by: null,
+           payload: { 
+             filePath, 
+             fileType, 
+             bucketName, 
+             totalChunks,
+             thumbnailPaths,
+           },
+           updated_at: new Date().toISOString(),
+         })
+         .eq("id", jobIdForUpdate);
 
       return new Response(
         JSON.stringify({
@@ -747,15 +869,16 @@ serve(async (req: Request) => {
       );
     }
 
-    // Not done yet — save cursor and requeue for next invocation
-    const updatedPayload: JobPayload = {
-      filePath,
-      fileType,
-      bucketName,
-      chunks,
-      embeddedUpTo: newEmbeddedUpTo,
-      totalChunks,
-    };
+     // Not done yet — save cursor and requeue for next invocation
+     const updatedPayload: JobPayload = {
+       filePath,
+       fileType,
+       bucketName,
+       chunks,
+       embeddedUpTo: newEmbeddedUpTo,
+       totalChunks,
+       thumbnailPaths,
+     };
 
     await adminClient
       .from("material_processing_jobs")

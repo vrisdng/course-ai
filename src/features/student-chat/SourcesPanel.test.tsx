@@ -1,37 +1,131 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Citation, Message } from './types';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { ActiveViewerSource } from './documentViewer';
 import { SourcesPanel } from './SourcesPanel';
 
-const video: Citation = { id: 'v1', chunkId: 'c1', excerpt: 'video evidence', documentName: 'Lecture', documentType: 'video', startMs: 65_000, endMs: 70_000, relevanceScore: 0.876 };
-const pdf: Citation = { id: 'p1', chunkId: 'c2', excerpt: 'page evidence', documentName: 'Notes', documentType: 'pdf', pageNumber: 4, relevanceScore: 0.7 };
-const message: Message = { id: 'm1', role: 'assistant', content: 'answer', citations: [video, pdf] };
-const props = () => ({ showSidePanel: true, selectedMessage: message, highlightedCitationKey: null, openingCitationKey: null, onOpenPanel: vi.fn(), onClosePanel: vi.fn(), onClearHighlight: vi.fn(), onOpenCitationSource: vi.fn() });
+vi.mock('./PdfReader', () => ({
+  PdfReader: ({ source }: { source: ActiveViewerSource }) => (
+    <div data-testid="pdf-reader">{source.documentName}</div>
+  ),
+}));
+
+vi.mock('./PdfThumbnail', () => ({
+  PdfThumbnail: ({ pageNumber, onClick }: { pageNumber: number; onClick?: () => void }) => (
+    <button type="button" data-testid="pdf-thumb" data-page={pageNumber} onClick={onClick}>
+      Thumb {pageNumber}
+    </button>
+  ),
+}));
+
+vi.mock('./PageViewer', () => ({
+  PageViewer: ({ source }: { source: ActiveViewerSource }) => (
+    <div data-testid="page-viewer">{source.documentName}</div>
+  ),
+}));
+
+function source(overrides: Partial<ActiveViewerSource>): ActiveViewerSource {
+  return {
+    kind: 'pdf',
+    documentName: 'Lecture Notes',
+    pageNumber: 1,
+    signedUrl: 'https://pdf.test/notes.pdf',
+    ...overrides,
+  };
+}
+
+const props = (overrides: Partial<Parameters<typeof SourcesPanel>[0]> = {}) => ({
+  showSidePanel: true,
+  activeViewerSource: null,
+  onOpenPanel: vi.fn(),
+  onClosePanel: vi.fn(),
+  ...overrides,
+});
 
 describe('SourcesPanel', () => {
-  beforeEach(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
-  it('opens and closes the panel and provides an empty-state instruction', () => {
-    const value = props(); const { rerender } = render(<SourcesPanel {...value} selectedMessage={null} />);
-    expect(screen.getByText(/Click on a message with sources/)).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button')[0]); expect(value.onClosePanel).toHaveBeenCalled();
-    rerender(<SourcesPanel {...value} showSidePanel={false} />);
-    fireEvent.click(screen.getByRole('button')); expect(value.onOpenPanel).toHaveBeenCalled();
+  it('closes through the panel control', () => {
+    const value = props();
+    render(<SourcesPanel {...value} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close sources' }));
+    expect(value.onClosePanel).toHaveBeenCalled();
   });
-  it('shows source metadata and opens video and document citations', () => {
-    const value = props(); render(<SourcesPanel {...value} />);
-    expect(screen.getByText('88% match')).toBeInTheDocument(); expect(screen.getByText('70% match')).toBeInTheDocument();
-    expect(screen.getByText('1:05 – 1:10')).toBeInTheDocument(); expect(screen.getByText('Page 4')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Jump to 1:05' }));
-    fireEvent.click(screen.getByRole('button', { name: 'View original file' }));
-    expect(value.onOpenCitationSource).toHaveBeenNthCalledWith(1, video, 'm1-1');
-    expect(value.onOpenCitationSource).toHaveBeenNthCalledWith(2, pdf, 'm1-2');
+
+  it('opens through the toggle when collapsed', () => {
+    const value = props({ showSidePanel: false });
+    render(<SourcesPanel {...value} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open sources' }));
+    expect(value.onOpenPanel).toHaveBeenCalled();
   });
-  it('disables an opening source and clears a highlighted source after the timeout', () => {
-    vi.useFakeTimers(); const value = props();
-    render(<SourcesPanel {...value} highlightedCitationKey="m1-1" openingCitationKey="m1-1" />);
-    expect(screen.getByRole('button', { name: 'Opening source...' })).toBeDisabled();
-    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
-    vi.advanceTimersByTime(1_800); expect(value.onClearHighlight).toHaveBeenCalled();
-    vi.useRealTimers();
+
+  it('opens the document reader from the View document button', () => {
+    const value = props({ showSidePanel: true, activeViewerSource: source() });
+    render(<SourcesPanel {...value} />);
+    expect(screen.queryByTestId('pdf-reader')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View document' }));
+    expect(screen.getByTestId('pdf-reader')).toBeInTheDocument();
+    expect(screen.getByTestId('pdf-reader')).toHaveTextContent('Lecture Notes');
+  });
+
+  it('shows a preview thumbnail of the cited page above the excerpt', () => {
+    const value = props({ showSidePanel: true, activeViewerSource: source({ pageNumber: 2 }) });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByTestId('pdf-thumb')).toHaveAttribute('data-page', '2');
+  });
+
+  it('opens the single-page viewer when the preview thumbnail is tapped', () => {
+    const value = props({ showSidePanel: true, activeViewerSource: source({ pageNumber: 2 }) });
+    render(<SourcesPanel {...value} />);
+    expect(screen.queryByTestId('page-viewer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pdf-thumb'));
+    expect(screen.getByTestId('page-viewer')).toBeInTheDocument();
+    expect(screen.getByTestId('page-viewer')).toHaveTextContent('Lecture Notes');
+  });
+
+  it('shows the destination path for an active source', () => {
+    const value = props({ showSidePanel: true, activeViewerSource: source() });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByText('Lecture Notes - 1')).toBeInTheDocument();
+  });
+
+  it('shows the cited excerpt when present', () => {
+    const value = props({ showSidePanel: true, activeViewerSource: source({ excerpt: 'the cited text' }) });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByText('“the cited text”')).toBeInTheDocument();
+  });
+
+  it('hides the View document button when no source is active', () => {
+    const value = props({ showSidePanel: true, activeViewerSource: null });
+    render(<SourcesPanel {...value} />);
+    expect(screen.queryByRole('button', { name: 'View document' })).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state when no source is active', () => {
+    const value = props({ activeViewerSource: null });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByText('Select a citation to see the source')).toBeInTheDocument();
+    expect(screen.queryByTestId('pdf-gallery')).not.toBeInTheDocument();
+  });
+
+  it('resizes the panel when the handle is dragged', () => {
+    const value = props({ showSidePanel: true });
+    const { container } = render(<SourcesPanel {...value} />);
+    const handle = container.querySelector('[role="slider"]');
+    expect(handle).toBeInTheDocument();
+
+    fireEvent.mouseDown(handle, { clientX: 400 });
+    expect((container.querySelector('aside') as HTMLElement).style.width).toBe('460px');
+
+    fireEvent.mouseMove(window, { clientX: 430 });
+    expect((container.querySelector('aside') as HTMLElement).style.width).toBe('430px');
+
+    fireEvent.mouseMove(window, { clientX: 300 });
+    expect((container.querySelector('aside') as HTMLElement).style.width).toBe('560px');
+
+    fireEvent.mouseMove(window, { clientX: 10 });
+    expect((container.querySelector('aside') as HTMLElement).style.width).toBe('760px');
+
+    fireEvent.mouseUp(window);
   });
 });

@@ -3,7 +3,7 @@ import { ChevronRight, FileText, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { MessageContent } from './MessageContent';
-import type { Message } from './types';
+import type { Citation, Message } from './types';
 
 const SUGGESTIONS = [
   'Explain this concept in simple terms',
@@ -18,6 +18,7 @@ interface MessageListProps {
   onSuggestionClick: (suggestion: string) => void;
   onOpenSources: (message: Message) => void;
   onCitationClick: (message: Message, citationNumber: number) => void;
+  onCitationOpen?: (citation: Citation, citationKey: string) => void;
 }
 
 export function MessageList({
@@ -26,6 +27,7 @@ export function MessageList({
   onSuggestionClick,
   onOpenSources,
   onCitationClick,
+  onCitationOpen,
 }: MessageListProps) {
   if (messages.length === 0) {
     if (!showEmptyState) {
@@ -77,10 +79,11 @@ export function MessageList({
               <MessageContent
                 message={message}
                 onCitationClick={onCitationClick}
+                onCitationOpen={onCitationOpen}
               />
             )}
 
-            {message.role === 'assistant' && message.citations && message.citations.length > 0 && (
+            {/* {message.role === 'assistant' && message.citations && message.citations.length > 0 && (
               <button
                 onClick={() => onOpenSources(message)}
                 className="mt-3 flex items-center gap-1 text-xs text-primary hover:underline"
@@ -89,7 +92,7 @@ export function MessageList({
                 {message.citations.length} source{message.citations.length !== 1 ? 's' : ''}
                 <ChevronRight className="h-3 w-3" />
               </button>
-            )}
+            )} */}
           </div>
         </div>
       ))}

@@ -23,6 +23,7 @@ interface RichMarkdownProps {
   content: string;
   citations?: Citation[];
   onCitationClick?: (citationNumber: number) => void;
+  onCitationOpen?: (citation: Citation, citationNumber: number) => void;
 }
 
 interface LightboxImage {
@@ -98,7 +99,7 @@ function CitationImage({
   );
 }
 
-export function RichMarkdown({ content, citations = [], onCitationClick }: RichMarkdownProps) {
+export function RichMarkdown({ content, citations = [], onCitationClick, onCitationOpen }: RichMarkdownProps) {
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
 
   const citedImageFor = (src: string | undefined): Citation | undefined =>
@@ -193,6 +194,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick }: RichM
                         e.preventDefault();
                         e.stopPropagation();
                         onCitationClick?.(nums[0]);
+                        onCitationOpen?.(resolvedCitations[0], nums[0]);
                       }}
                     >
                       [{displayNum}] <span className="opacity-70">{sourceLabel}</span>
