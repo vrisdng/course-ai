@@ -16,7 +16,6 @@ import { DocumentScopeSelector } from '@/features/student-chat/DocumentScopeSele
 import { DocumentViewerDialog } from '@/features/student-chat/DocumentViewerDialog';
 import { MessageList } from '@/features/student-chat/MessageList';
 import { SourcesPanel } from '@/features/student-chat/SourcesPanel';
-import { VideoSourceDialog } from '@/features/student-chat/VideoSourceDialog';
 import { useStudentChat } from '@/features/student-chat/useStudentChat';
 
 export default function StudentChat() {
@@ -68,7 +67,6 @@ export default function StudentChat() {
     focusCitation,
     openCitationSource,
     openingCitationKey,
-    closeActiveVideoSource,
     clearClearViewSource,
   } = useStudentChat(routeConversationId || null);
 
@@ -202,13 +200,13 @@ export default function StudentChat() {
         <SourcesPanel
           showSidePanel={showSidePanel}
           activeViewerSource={activeViewerSource}
+          activeVideoSource={activeVideoSource}
           openingCitationKey={openingCitationKey}
           onOpenPanel={() => setShowSidePanel(true)}
           onClosePanel={() => setShowSidePanel(false)}
         />
       </div>
 
-      <VideoSourceDialog source={activeVideoSource} onClose={closeActiveVideoSource} />
       <DocumentViewerDialog source={clearViewSource} onClose={clearClearViewSource} />
 
     </MainLayout>

@@ -1020,8 +1020,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
     try {
       const resolved = await resolveCitationSource(citation);
 
-      // Videos may not have a stored file (audio extracted, original not kept)
+      // Videos without a stored file open in the sources panel as a transcript view
       if (resolved.fileType === 'video' && !resolved.filePath) {
+        setShowSidePanel(true);
         setActiveVideoSource({
           title: resolved.fileName,
           signedUrl: null,
@@ -1044,8 +1045,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       const { signedUrl } = signedUrlData;
 
-      // Videos always play in-app via the transcript/windowed player.
+      // Videos open in the sources panel with their transcript
       if (resolved.fileType === 'video') {
+        setShowSidePanel(true);
         setActiveVideoSource({
           title: resolved.fileName,
           signedUrl,

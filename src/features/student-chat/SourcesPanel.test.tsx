@@ -24,6 +24,16 @@ vi.mock('./PageViewer', () => ({
   ),
 }));
 
+vi.mock('./useTranscriptWindow', () => ({
+  useTranscriptWindow: () => ({
+    segments: [
+      { start_ms: 35_000, end_ms: 42_000, text: 'Relevant explanation.' },
+      { start_ms: 42_000, end_ms: 48_000, text: 'More context.' },
+    ],
+    isLoading: false,
+  }),
+}));
+
 function source(overrides: Partial<ActiveViewerSource>): ActiveViewerSource {
   return {
     kind: 'pdf',
@@ -127,5 +137,41 @@ describe('SourcesPanel', () => {
     expect((container.querySelector('aside') as HTMLElement).style.width).toBe('760px');
 
     fireEvent.mouseUp(window);
+  });
+
+  it('shows the cited transcript with timestamps for a video source', () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const value = props({
+      showSidePanel: true,
+      activeViewerSource: null,
+      activeVideoSource: { title: 'Lecture', signedUrl: null, materialId: 'm1', startMs: 40_000, endMs: 45_000 },
+    });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByText('Cited segment: 0:40-0:45')).toBeInTheDocument();
+    expect(screen.getByText('Lecture')).toBeInTheDocument();
+    expect(screen.getByText('Relevant explanation. More context.')).toBeInTheDocument();
+    expect(screen.getByText('0:35–0:48')).toBeInTheDocument();
+  });
+
+  it('opens the stored video when a signed video source is active', () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const value = props({
+      showSidePanel: true,
+      activeViewerSource: null,
+      activeVideoSource: { title: 'Lecture', signedUrl: 'https://storage.test/video.mp4', materialId: 'm1', startMs: 40_000, endMs: 45_000 },
+    });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByRole('link', { name: 'Open video' })).toHaveAttribute('href', 'https://storage.test/video.mp4');
+  });
+
+  it('hides the transcript for a video source when the panel is collapsed', () => {
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const value = props({
+      showSidePanel: false,
+      activeViewerSource: null,
+      activeVideoSource: { title: 'Lecture', signedUrl: null, materialId: 'm1', startMs: 40_000, endMs: 45_000 },
+    });
+    render(<SourcesPanel {...value} />);
+    expect(screen.queryByText('Relevant explanation. More context.')).not.toBeInTheDocument();
   });
 });

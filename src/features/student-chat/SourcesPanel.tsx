@@ -8,11 +8,14 @@ import { cn } from '@/lib/utils';
 import { PdfReader } from './PdfReader';
 import { PdfThumbnail } from './PdfThumbnail';
 import { PageViewer } from './PageViewer';
+import { VideoTranscript } from './VideoTranscript';
 import { type ActiveViewerSource, ensureStartingPage } from './documentViewer';
+import type { ActiveVideoSource } from './VideoSourceDialog';
 
 interface SourcesPanelProps {
   showSidePanel: boolean;
   activeViewerSource: ActiveViewerSource | null;
+  activeVideoSource?: ActiveVideoSource | null;
   openingCitationKey?: string | null;
   onOpenPanel: () => void;
   onClosePanel: () => void;
@@ -25,6 +28,7 @@ const DEFAULT_WIDTH = 460;
 export function SourcesPanel({
   showSidePanel,
   activeViewerSource,
+  activeVideoSource,
   openingCitationKey,
   onOpenPanel,
   onClosePanel,
@@ -152,9 +156,13 @@ export function SourcesPanel({
                        </p>
                      </div>
                    ) : null}
-                 </div>
-               ) : (
-                <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
+                  </div>
+                ) : activeVideoSource ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                    <VideoTranscript source={activeVideoSource} />
+                  </div>
+                ) : (
+                 <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
                   <Info className="mb-2 h-8 w-8 text-muted-foreground/50" />
                   <p className="text-sm text-muted-foreground">Select a citation to see the source</p>
                 </div>
