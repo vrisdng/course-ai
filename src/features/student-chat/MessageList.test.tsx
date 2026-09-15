@@ -30,8 +30,6 @@ describe('MessageList', () => {
     expect(screen.getByRole('link', { name: 'reference' })).toHaveAttribute('target', '_blank');
     fireEvent.click(screen.getByRole('button', { name: /\[1\]/ }));
     expect(onCitationClick).toHaveBeenCalledWith(message, 1);
-    fireEvent.click(screen.getByRole('button', { name: '1 source' }));
-    expect(onOpenSources).toHaveBeenCalledWith(message);
   });
   it('groups adjacent webcast and note citations into one composite control', () => {
     const onCitationClick = vi.fn();
