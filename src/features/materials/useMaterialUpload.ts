@@ -86,13 +86,14 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
             // The abortable client is created with persistSession:false, so it
             // owns no session of its own (unlike the main `supabase` client).
             // Reuse the main client's live session so authenticated requests
-            // (e.g. the materials INSERT) are not rejected with a 401.
+            // (e.g. the materials INSERT) are not rejected with a 401. Build a
+            // Headers instance (not a spread) so the apikey/header set by the
+            // client is preserved.
             const { data: { session } } = await supabase.auth.getSession();
             if (session?.access_token) {
-              init = {
-                ...init,
-                headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${session.access_token}` },
-              };
+              const headers = new Headers(init.headers);
+              headers.set('Authorization', `Bearer ${session.access_token}`);
+              init = { ...init, headers };
             }
             return fetch(input, init);
           },
