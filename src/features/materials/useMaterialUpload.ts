@@ -78,10 +78,21 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
         auth: { persistSession: false },
         global: {
-          fetch: (input: RequestInfo | URL, init: RequestInit = {}) => {
+          fetch: async (input: RequestInfo | URL, init: RequestInit = {}) => {
             const controller = abortControllerRef.current;
             if (controller && !init.signal) {
               init = { ...init, signal: controller.signal };
+            }
+            // The abortable client is created with persistSession:false, so it
+            // owns no session of its own (unlike the main `supabase` client).
+            // Reuse the main client's live session so authenticated requests
+            // (e.g. the materials INSERT) are not rejected with a 401.
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.access_token) {
+              init = {
+                ...init,
+                headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${session.access_token}` },
+              };
             }
             return fetch(input, init);
           },
