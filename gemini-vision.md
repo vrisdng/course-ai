@@ -8,7 +8,7 @@ Reference documentation for how this project uses the Google Gemini API for docu
 
 | Purpose | Endpoint | Model |
 |---------|----------|-------|
-| **Text extraction (Vision)** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent` | `gemini-2.5-flash` |
+| **Text extraction (Vision)** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent` | `gemini-3.6-flash` |
 | **Embeddings** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent` | `gemini-embedding-001` |
 
 Both are called from the `parse-document` edge function using the `GEMINI_API_KEY` secret.
