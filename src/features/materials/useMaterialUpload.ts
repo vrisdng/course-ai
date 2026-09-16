@@ -5,8 +5,11 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
 import {
+  ALLOWED_UPLOAD_KEY_CHARS,
   getDeferredUploadValidationError,
   getImmediateUploadValidationError,
+  findFirstInvalidKeyChar,
+  formatInvalidKeyMessage,
   isTextLikeUpload,
   isVideoUpload,
 } from '@/lib/materialUpload';
@@ -127,12 +130,19 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
     const unsupported: string[] = [];
     const oversized: string[] = [];
+    const invalidName: { name: string; char: string }[] = [];
     const knownKeys = new Set(pendingFiles.map((item) => getPendingFileKey(item)));
     const accepted: File[] = [];
 
     for (const candidate of candidates) {
       if (!isFileSupported(candidate)) {
         unsupported.push(candidate.name);
+        continue;
+      }
+
+      const invalidChar = findFirstInvalidKeyChar(candidate.name);
+      if (invalidChar) {
+        invalidName.push({ name: candidate.name, char: invalidChar });
         continue;
       }
 
@@ -168,7 +178,15 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       );
     }
 
-    if (accepted.length === 0 && unsupported.length === 0 && oversized.length === 0) {
+    if (invalidName.length > 0) {
+      const reason =
+        invalidName.length === 1
+          ? formatInvalidKeyMessage(invalidName[0].name, invalidName[0].char)
+          : `Skipped ${invalidName.length} files with disallowed characters in their names: ${invalidName.map(({ name, char }) => `"${name}" (${char})`).join(', ')}. Use ${ALLOWED_UPLOAD_KEY_CHARS}.`;
+      toast.error(reason);
+    }
+
+    if (accepted.length === 0 && unsupported.length === 0 && oversized.length === 0 && invalidName.length === 0) {
       toast.info('These files are already in your review list.');
     }
   };

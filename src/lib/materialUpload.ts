@@ -69,6 +69,24 @@ export function getImmediateUploadValidationError(candidate: Pick<File, 'name' |
   return null;
 }
 
+// Mirror of the Supabase storage engine's VALID_OBJECT_KEY allowlist
+// (https://github.com/supabase/storage/blob/master/src/storage/limits.ts:88).
+const VALID_OBJECT_KEY_REGEX = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/;
+export const ALLOWED_UPLOAD_KEY_CHARS = "letters, numbers, spaces, and / _ ! . * ' ( ) & = @ ; : + , - ?";
+
+export function findFirstInvalidKeyChar(name: string): string | null {
+  return name.split('').find((char) => !VALID_OBJECT_KEY_REGEX.test(char)) ?? null;
+}
+
+export function formatInvalidKeyMessage(name: string, char: string): string {
+  return `File name "${name}" contains the character "${char}", which is not allowed. Use ${ALLOWED_UPLOAD_KEY_CHARS}.`;
+}
+
+export function getInvalidUploadKeyError(candidate: Pick<File, 'name'>): string | null {
+  const invalidChar = findFirstInvalidKeyChar(candidate.name);
+  return invalidChar ? formatInvalidKeyMessage(candidate.name, invalidChar) : null;
+}
+
 export async function getDeferredUploadValidationError(candidate: File) {
   const immediateError = getImmediateUploadValidationError(candidate);
   if (immediateError) {
