@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ authState: {} as Record<string, unknown>, signIn: vi.fn(), signUp: vi.fn(), verifyOtp: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authState: {} as Record<string, unknown>, signIn: vi.fn(), signUp: vi.fn(), verifyOtp: vi.fn(), resetPasswordForEmail: vi.fn() }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => mocks.authState }));
-vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { signInWithPassword: mocks.signIn, signUp: mocks.signUp, verifyOtp: mocks.verifyOtp } } }));
+vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { signInWithPassword: mocks.signIn, signUp: mocks.signUp, verifyOtp: mocks.verifyOtp, resetPasswordForEmail: mocks.resetPasswordForEmail } } }));
 import Auth from './Auth';
 
 const renderPage = (entry = '/auth') => render(<MemoryRouter initialEntries={[entry]}><Routes>
@@ -12,7 +12,7 @@ const renderPage = (entry = '/auth') => render(<MemoryRouter initialEntries={[en
 </Routes></MemoryRouter>);
 
 describe('Auth', () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.authState = { user: null, profile: null, isLoading: false }; mocks.signIn.mockResolvedValue({ error: null }); mocks.signUp.mockResolvedValue({ error: null }); mocks.verifyOtp.mockResolvedValue({ error: null }); });
+  beforeEach(() => { vi.clearAllMocks(); mocks.authState = { user: null, profile: null, isLoading: false }; mocks.signIn.mockResolvedValue({ error: null }); mocks.signUp.mockResolvedValue({ error: null }); mocks.verifyOtp.mockResolvedValue({ error: null }); mocks.resetPasswordForEmail.mockResolvedValue({ error: null }); });
   it('validates credentials and maps authentication provider errors', async () => {
     mocks.signIn.mockResolvedValue({ error: { message: 'Invalid login credentials' } }); renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Sign In' }));
@@ -48,5 +48,23 @@ describe('Auth', () => {
     expect(await screen.findByText('Name must be at least 2 characters')).toBeInTheDocument(); expect(screen.getByText("Passwords don't match")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Ada' } }); fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ada@example.test' } }); fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: 'secret12' } }); fireEvent.click(screen.getByRole('button', { name: 'Create Account' }));
     expect(await screen.findByText('An account with this email already exists. Please sign in instead.')).toBeInTheDocument();
+  });
+  it('sends a password reset email from the forgot-password view and returns to sign in', async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    expect(screen.getByText('Reset your password')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send Reset Link' }));
+    expect(await screen.findByText('Please enter a valid email address')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'student@example.test' } }); fireEvent.click(screen.getByRole('button', { name: 'Send Reset Link' }));
+    await waitFor(() => expect(mocks.resetPasswordForEmail).toHaveBeenCalledWith('student@example.test', { redirectTo: `${window.location.origin}/reset-password` }));
+    expect(await screen.findByText(/we've sent a password reset link/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Sign In' }));
+    expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
+  });
+  it('opens the forgot-password view directly via mode=forgot and shows provider errors', async () => {
+    mocks.resetPasswordForEmail.mockResolvedValue({ error: { message: 'For security purposes, you can only request this after 60 seconds.' } }); renderPage('/auth?mode=forgot');
+    expect(screen.getByText('Reset your password')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'student@example.test' } }); fireEvent.click(screen.getByRole('button', { name: 'Send Reset Link' }));
+    expect(await screen.findByText(/only request this after 60 seconds/)).toBeInTheDocument();
   });
 });
