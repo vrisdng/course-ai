@@ -87,6 +87,52 @@ export function getInvalidUploadKeyError(candidate: Pick<File, 'name'>): string 
   return invalidChar ? formatInvalidKeyMessage(candidate.name, invalidChar) : null;
 }
 
+// Same set minus "/" (which would nest folders) — used to sanitise a single
+// path segment derived from a user-supplied filename.
+const DISALLOWED_FILENAME_CHAR_REGEX = /[^A-Za-z0-9_!.*'() &$=@;:+,?-]/g;
+const MAX_STORAGE_STEM_LENGTH = 200;
+const FALLBACK_STORAGE_STEM = 'file';
+
+export function isStorageSafeKey(key: string): boolean {
+  return key.length > 0 && VALID_OBJECT_KEY_REGEX.test(key);
+}
+
+function stripDiacritics(value: string): string {
+  return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function sanitiseSegment(value: string): string {
+  return stripDiacritics(value)
+    .replace(DISALLOWED_FILENAME_CHAR_REGEX, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/ {2,}/g, ' ');
+}
+
+/**
+ * Maps an arbitrary filename onto a Supabase-storage-safe path segment.
+ * The extension is preserved so downstream parsers that read the type off the
+ * storage path keep working; the original name should still be stored in
+ * `materials.file_name` for display.
+ */
+export function toStorageSafeFileName(fileName: string): string {
+  const trimmed = fileName.trim();
+  const dotIndex = trimmed.lastIndexOf('.');
+  const hasExtension = dotIndex > -1 && dotIndex < trimmed.length - 1;
+  const rawStem = hasExtension ? trimmed.slice(0, dotIndex) : trimmed;
+  const rawExtension = hasExtension ? trimmed.slice(dotIndex + 1) : '';
+
+  let stem = sanitiseSegment(rawStem)
+    .replace(/^[\s._]+|[\s._]+$/g, '')
+    .slice(0, MAX_STORAGE_STEM_LENGTH)
+    .replace(/[\s._]+$/g, '');
+  if (!stem) {
+    stem = FALLBACK_STORAGE_STEM;
+  }
+
+  const extension = sanitiseSegment(rawExtension).replace(/^[\s._]+|[\s._]+$/g, '');
+  return extension ? `${stem}.${extension}` : stem;
+}
+
 export async function getDeferredUploadValidationError(candidate: File) {
   const immediateError = getImmediateUploadValidationError(candidate);
   if (immediateError) {
