@@ -5,13 +5,11 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
 import {
-  ALLOWED_UPLOAD_KEY_CHARS,
   getDeferredUploadValidationError,
   getImmediateUploadValidationError,
-  findFirstInvalidKeyChar,
-  formatInvalidKeyMessage,
   isTextLikeUpload,
   isVideoUpload,
+  toStorageSafeFileName,
 } from '@/lib/materialUpload';
 import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
 import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
@@ -130,19 +128,12 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
     const unsupported: string[] = [];
     const oversized: string[] = [];
-    const invalidName: { name: string; char: string }[] = [];
     const knownKeys = new Set(pendingFiles.map((item) => getPendingFileKey(item)));
     const accepted: File[] = [];
 
     for (const candidate of candidates) {
       if (!isFileSupported(candidate)) {
         unsupported.push(candidate.name);
-        continue;
-      }
-
-      const invalidChar = findFirstInvalidKeyChar(candidate.name);
-      if (invalidChar) {
-        invalidName.push({ name: candidate.name, char: invalidChar });
         continue;
       }
 
@@ -178,15 +169,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       );
     }
 
-    if (invalidName.length > 0) {
-      const reason =
-        invalidName.length === 1
-          ? formatInvalidKeyMessage(invalidName[0].name, invalidName[0].char)
-          : `Skipped ${invalidName.length} files with disallowed characters in their names: ${invalidName.map(({ name, char }) => `"${name}" (${char})`).join(', ')}. Use ${ALLOWED_UPLOAD_KEY_CHARS}.`;
-      toast.error(reason);
-    }
-
-    if (accepted.length === 0 && unsupported.length === 0 && oversized.length === 0 && invalidName.length === 0) {
+    if (accepted.length === 0 && unsupported.length === 0 && oversized.length === 0) {
       toast.info('These files are already in your review list.');
     }
   };
@@ -296,7 +279,11 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
     setCurrentUploadStatusText(`Uploading ${targetFile.name}... 0%`);
     setCurrentUploadProgress(0);
 
-    const filePath = `${courseId}/${crypto.randomUUID()}-${targetFile.name}`;
+    // Storage object keys are restricted to an S3-safe character set, so the
+    // key uses a sanitised copy of the name. The original name is kept in
+    // materials.file_name for display.
+    const storageFileName = toStorageSafeFileName(targetFile.name);
+    const filePath = `${courseId}/${crypto.randomUUID()}-${storageFileName}`;
     console.log('[admin-upload]', `Uploading "${targetFile.name}" (${(targetFile.size / 1024 / 1024).toFixed(1)} MB) to ${filePath}`);
     const uploadStart = performance.now();
 

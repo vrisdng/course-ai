@@ -71,22 +71,9 @@ export function getImmediateUploadValidationError(candidate: Pick<File, 'name' |
 
 // Mirror of the Supabase storage engine's VALID_OBJECT_KEY allowlist
 // (https://github.com/supabase/storage/blob/master/src/storage/limits.ts:88).
+// Any object key containing a character outside this set is rejected with a
+// 400 InvalidKey before the upload is stored.
 const VALID_OBJECT_KEY_REGEX = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/;
-export const ALLOWED_UPLOAD_KEY_CHARS = "letters, numbers, spaces, and / _ ! . * ' ( ) & = @ ; : + , - ?";
-
-export function findFirstInvalidKeyChar(name: string): string | null {
-  return name.split('').find((char) => !VALID_OBJECT_KEY_REGEX.test(char)) ?? null;
-}
-
-export function formatInvalidKeyMessage(name: string, char: string): string {
-  return `File name "${name}" contains the character "${char}", which is not allowed. Use ${ALLOWED_UPLOAD_KEY_CHARS}.`;
-}
-
-export function getInvalidUploadKeyError(candidate: Pick<File, 'name'>): string | null {
-  const invalidChar = findFirstInvalidKeyChar(candidate.name);
-  return invalidChar ? formatInvalidKeyMessage(candidate.name, invalidChar) : null;
-}
-
 // Same set minus "/" (which would nest folders) — used to sanitise a single
 // path segment derived from a user-supplied filename.
 const DISALLOWED_FILENAME_CHAR_REGEX = /[^A-Za-z0-9_!.*'() &$=@;:+,?-]/g;

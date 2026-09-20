@@ -112,6 +112,25 @@ describe('useMaterialUpload', () => {
     }));
   });
 
+  it('sanitises the storage key for names with disallowed characters but keeps the original display name', async () => {
+    mocks.invoke.mockResolvedValueOnce({ data: { queued: true }, error: null });
+    const result = setup();
+    const tilde = file('~CE5010QB Ch1 Slides.pdf');
+    add(result, [tilde]);
+    expect(result.current.pendingFiles).toEqual([tilde]);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(mocks.uploadStorage).toHaveBeenCalledWith(expect.objectContaining({
+      path: 'course-1/uuid-CE5010QB Ch1 Slides.pdf',
+    }));
+    expect(db.insert).toHaveBeenCalledWith(expect.objectContaining({
+      file_name: '~CE5010QB Ch1 Slides.pdf', file_path: 'course-1/uuid-CE5010QB Ch1 Slides.pdf', file_type: 'pdf',
+    }));
+    expect(mocks.invoke).toHaveBeenCalledWith('parse-document', expect.objectContaining({
+      body: { materialId: 'material-1', filePath: 'course-1/uuid-CE5010QB Ch1 Slides.pdf', fileType: 'pdf' },
+    }));
+  });
+
   it('retains failed files for retry and summarizes mixed outcomes', async () => {
     mocks.invoke
       .mockResolvedValueOnce({ data: {}, error: null })
