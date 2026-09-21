@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { stackedTable } from '@/lib/responsiveTable';
 import type { Course } from '@/features/materials/types';
 
 type AcademicTerm = {
@@ -129,7 +130,7 @@ export function CoursesOverviewTab({
         </CardHeader>
         <CardContent>
           <Table>
-            <TableHeader>
+            <TableHeader className={stackedTable.header}>
               <TableRow>
                 <TableHead>Course Name</TableHead>
                 <TableHead>Code</TableHead>
@@ -155,12 +156,12 @@ export function CoursesOverviewTab({
                 </TableRow>
               ) : (
                 courses.map((course) => (
-                  <TableRow key={course.id}>
-                    <TableCell className="font-medium">{course.name}</TableCell>
-                    <TableCell>{course.code || '-'}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{enrollmentCodeByCourseId[course.id] ?? 'N/A'}</TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
+                  <TableRow key={course.id} className={stackedTable.row}>
+                    <TableCell className={`${stackedTable.plainCell} text-base font-semibold sm:text-sm sm:font-medium sm:whitespace-nowrap`}>{course.name}</TableCell>
+                    <TableCell data-label="Code" className={stackedTable.cell}>{course.code || '-'}</TableCell>
+                    <TableCell data-label="Enrollment code" className={`${stackedTable.cell} font-mono text-xs text-muted-foreground sm:whitespace-nowrap`}>{enrollmentCodeByCourseId[course.id] ?? 'N/A'}</TableCell>
+                    <TableCell className={stackedTable.actionsCell}>
+                      <div className={stackedTable.actions}>
                         <Button type="button" size="sm" variant="outline" onClick={() => onOpenAddStudentsDialog(course)}>
                           Generate Code
                         </Button>
@@ -234,7 +235,7 @@ export function CoursesOverviewTab({
           )}
 
           <Table>
-            <TableHeader>
+            <TableHeader className={stackedTable.header}>
               <TableRow>
                 <TableHead>Term</TableHead>
                 <TableHead>Status</TableHead>
@@ -259,17 +260,17 @@ export function CoursesOverviewTab({
                 </TableRow>
               ) : (
                 academicTerms.map((term) => (
-                  <TableRow key={term.id}>
-                    <TableCell className="font-medium">{term.label}</TableCell>
-                    <TableCell>
+                  <TableRow key={term.id} className={stackedTable.row}>
+                    <TableCell className={`${stackedTable.plainCell} text-base font-semibold sm:text-sm sm:font-medium sm:whitespace-nowrap`}>{term.label}</TableCell>
+                    <TableCell data-label="Status" className={stackedTable.cell}>
                       {term.is_active ? (
                         <Badge variant="default">Active</Badge>
                       ) : (
                         <Badge variant="outline">Inactive</Badge>
                       )}
                     </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
+                    <TableCell className={stackedTable.actionsCell}>
+                      <div className={stackedTable.actions}>
                         {isAdmin ? (
                           <>
                             <Button

@@ -131,26 +131,26 @@ export default function Settings() {
 
   return (
     <MainLayout>
-      <div className="mx-auto max-w-4xl py-8 px-4">
-        <h1 className="text-3xl font-bold mb-8">Settings</h1>
+      <div className="mx-auto max-w-4xl py-6 px-4 sm:py-8">
+        <h1 className="text-2xl font-bold mb-6 sm:text-3xl sm:mb-8">Settings</h1>
         
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="mb-8 w-full justify-start border-b rounded-none h-auto p-0 bg-transparent">
+          <TabsList className="scrollbar-hide mb-6 flex w-full justify-start overflow-x-auto border-b rounded-none h-auto p-0 bg-transparent sm:mb-8">
             <TabsTrigger 
               value="profile"
-              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
+              className="-mb-px shrink-0 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
             >
               Profile
             </TabsTrigger>
             <TabsTrigger 
               value="ai-preferences"
-              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
+              className="-mb-px shrink-0 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
             >
               AI Preferences
             </TabsTrigger>
             <TabsTrigger 
               value="courses"
-              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
+              className="-mb-px shrink-0 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
             >
               Courses
             </TabsTrigger>

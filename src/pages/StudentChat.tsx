@@ -1,10 +1,12 @@
-import { BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen, PanelLeft } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
+import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
@@ -23,6 +25,8 @@ export default function StudentChat() {
   const previousRouteConversationIdRef = useRef<string | null>(null);
   const [isSidebarCollapsed, , toggleSidebarCollapse] = usePersistedCollapse('chat:sidebar-collapsed', true);
   const [conversationSearch, setConversationSearch] = useState('');
+  // Phone-width sheet that hosts the conversations sidebar (the rail itself is hidden below `md`).
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -123,41 +127,79 @@ export default function StudentChat() {
       ? `${selectedCourse.name}${selectedCourse.code ? ` (${selectedCourse.code})` : ''}`
       : 'No course selected';
 
+  const sidebarProps = {
+    conversations,
+    currentConversationId,
+    deletingConversationId,
+    isClearingConversations,
+    isCollapsed: isSidebarCollapsed,
+    searchQuery: conversationSearch,
+    availableCourses,
+    selectedCourseId,
+    isLoadingCourses,
+    onSelectConversation: selectConversation,
+    onStartNewConversation: handleStartNewConversation,
+    onDeleteConversation: deleteConversation,
+    onClearHistory: clearAllConversations,
+    onToggleCollapse: toggleSidebarCollapse,
+    onSearchChange: setConversationSearch,
+    onChangeCourse: changeSelectedCourse,
+    onEnroll: handleEnroll,
+    showEnroll: !isAdmin,
+  };
+
+  const closeMobileNav = () => setIsMobileNavOpen(false);
+
   return (
     <MainLayout showFooter={false}>
-      <div className="flex h-[calc(100vh-4rem)]">
-        <ConversationsSidebar
-          conversations={conversations}
-          currentConversationId={currentConversationId}
-          deletingConversationId={deletingConversationId}
-          isClearingConversations={isClearingConversations}
-          isCollapsed={isSidebarCollapsed}
-          searchQuery={conversationSearch}
-          availableCourses={availableCourses}
-          selectedCourseId={selectedCourseId}
-          isLoadingCourses={isLoadingCourses}
-          onSelectConversation={selectConversation}
-          onStartNewConversation={handleStartNewConversation}
-          onDeleteConversation={deleteConversation}
-          onClearHistory={clearAllConversations}
-          onToggleCollapse={toggleSidebarCollapse}
-          onSearchChange={setConversationSearch}
-          onChangeCourse={changeSelectedCourse}
-          onEnroll={handleEnroll}
-          showEnroll={!isAdmin}
-        />
+      <div className="flex h-[calc(100vh-4rem)] supports-[height:100dvh]:h-[calc(100dvh-4rem)]">
+        <ConversationsSidebar {...sidebarProps} />
 
-        <div className="flex flex-1 flex-col">
-          <div className="border-b border-border px-4 py-2">
+        <Sheet open={isMobileNavOpen} onOpenChange={setIsMobileNavOpen}>
+          <SheetContent side="left" className="w-[85vw] max-w-sm p-0">
+            <SheetTitle className="sr-only">Conversations</SheetTitle>
+            <SheetDescription className="sr-only">Switch course, search, or start a new chat</SheetDescription>
+            {isMobileNavOpen && (
+              <ConversationsSidebar
+                {...sidebarProps}
+                layout="drawer"
+                onSelectConversation={(conversationId) => {
+                  selectConversation(conversationId);
+                  closeMobileNav();
+                }}
+                onStartNewConversation={() => {
+                  handleStartNewConversation();
+                  closeMobileNav();
+                }}
+                onChangeCourse={(courseId) => {
+                  changeSelectedCourse(courseId);
+                  closeMobileNav();
+                }}
+              />
+            )}
+          </SheetContent>
+        </Sheet>
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="border-b border-border px-3 py-2 sm:px-4">
             <div className="mx-auto flex max-w-5xl items-center gap-2">
-              <BookOpen className="h-4 w-4 shrink-0 text-primary" />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 md:hidden"
+                aria-label="Open conversations"
+                onClick={() => setIsMobileNavOpen(true)}
+              >
+                <PanelLeft className="h-4 w-4" />
+              </Button>
+              <BookOpen className="hidden h-4 w-4 shrink-0 text-primary md:block" />
               <span className="truncate text-sm text-muted-foreground">
                 {selectedCourseLabel}
               </span>
             </div>
           </div>
 
-          <ScrollArea className="flex-1 p-4">
+          <ScrollArea className="flex-1 p-3 sm:p-4">
             <div className="mx-auto max-w-5xl space-y-6">
               <MessageList
                 messages={messages}

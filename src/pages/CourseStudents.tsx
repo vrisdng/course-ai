@@ -4,6 +4,7 @@ import { ArrowLeft, Loader2, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
+import { stackedTable } from '@/lib/responsiveTable';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -163,7 +164,7 @@ export default function CourseStudents() {
 
   return (
     <MainLayout showFooter={false}>
-      <div className="container py-8">
+      <div className="container py-6 sm:py-8">
         <Button variant="ghost" size="sm" className="mb-4 gap-2 text-muted-foreground" asChild>
           <Link to="/admin-dashboard">
             <ArrowLeft className="h-4 w-4" />
@@ -216,7 +217,7 @@ export default function CourseStudents() {
             </div>
 
             <Table>
-              <TableHeader>
+              <TableHeader className={stackedTable.header}>
                 <TableRow>
                   <TableHead className="w-10">
                     <Checkbox
@@ -250,21 +251,21 @@ export default function CourseStudents() {
                   </TableRow>
                 ) : (
                   filteredRoster.map((entry) => (
-                    <TableRow key={entry.enrollmentId}>
-                      <TableCell>
+                    <TableRow key={entry.enrollmentId} className={`${stackedTable.row} relative`}>
+                      <TableCell className="absolute right-0 top-3 p-0 sm:static sm:table-cell sm:p-4">
                         <Checkbox
                           checked={selectedIds.has(entry.enrollmentId)}
                           onCheckedChange={() => toggleSelect(entry.enrollmentId)}
                           aria-label={`Select ${entry.name}`}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{entry.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{entry.email}</TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className={`${stackedTable.plainCell} pr-10 text-base font-semibold sm:pr-4 sm:text-sm sm:font-medium sm:whitespace-nowrap`}>{entry.name}</TableCell>
+                      <TableCell data-label="Email" className={`${stackedTable.cell} break-all text-muted-foreground`}>{entry.email}</TableCell>
+                      <TableCell data-label="Enrolled" className={`${stackedTable.cell} text-muted-foreground`}>
                         {new Date(entry.enrolledAt).toLocaleDateString()}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end">
+                      <TableCell className={stackedTable.actionsCell}>
+                        <div className={stackedTable.actions}>
                           <Button
                             type="button"
                             variant="outline"

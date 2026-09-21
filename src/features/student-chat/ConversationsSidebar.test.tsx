@@ -75,4 +75,16 @@ describe('ConversationsSidebar', () => {
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Invalid invite'));
     expect(screen.getByText('Enroll in a Course')).toBeInTheDocument();
   });
+  it('renders drawer layout without the desktop rail chrome', () => {
+    const value = props(); value.isCollapsed = true;
+    render(<MemoryRouter><ConversationsSidebar {...value} layout="drawer" /></MemoryRouter>);
+    // Collapsed state is a desktop-only concept; the drawer always shows full content.
+    expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Chat' })).toBeInTheDocument();
+    expect(screen.getByText('React concepts')).toBeInTheDocument();
+    const aside = screen.getByRole('complementary');
+    expect(aside.className).not.toContain('hidden');
+    expect(aside.className).toContain('w-full');
+  });
 });

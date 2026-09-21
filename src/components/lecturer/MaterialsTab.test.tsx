@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -99,5 +99,13 @@ describe('MaterialsTab', () => {
     await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ academic_term_id: 't2' }));
     expect(mocks.in).toHaveBeenCalledWith('id', ['m1', 'm2']);
     expect(mocks.list.fetchMaterials).toHaveBeenCalled();
+  });
+
+  it('stacks material rows into labelled cards below the sm breakpoint', () => {
+    renderTab();
+    const row = screen.getByText('notes.pdf').closest('tr') as HTMLTableRowElement;
+    expect(row.className).toContain('sm:table-row');
+    expect(within(row).getByText('Algorithms (CS101)').closest('td')).toHaveAttribute('data-label', 'Course');
+    expect(screen.getByRole('columnheader', { name: 'Document Name' }).closest('thead')?.className).toContain('hidden');
   });
 });

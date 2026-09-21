@@ -345,10 +345,10 @@ export default function AdminDashboard() {
         onGenerateCode={() => void handleGenerateCourseCode()}
       />
 
-      <div className="container py-8">
+      <div className="container py-6 sm:py-8">
         <div className="mb-6 flex flex-col gap-4 border-b border-border pb-6 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Document Details</h1>
+            <h1 className="text-2xl font-bold text-foreground sm:text-3xl">Document Details</h1>
             <p className="mt-3 max-w-3xl text-sm text-muted-foreground">
               Manage course documents for RAG. Only enrolled students and course staff can access uploaded files.
             </p>
@@ -356,23 +356,23 @@ export default function AdminDashboard() {
         </div>
 
         <Tabs defaultValue="add-document" className="space-y-6">
-          <TabsList className="h-auto bg-transparent p-0 text-sm">
+          <TabsList className="scrollbar-hide flex h-auto w-full justify-start overflow-x-auto border-b border-border bg-transparent p-0 text-sm">
             <TabsTrigger
               value="overview"
-              className="rounded-none border-b-2 border-transparent px-4 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+              className="-mb-px shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-4"
             >
               Courses Overview
             </TabsTrigger>
             <TabsTrigger
               value="add-document"
-              className="rounded-none border-b-2 border-transparent px-4 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+              className="-mb-px shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-4"
             >
               + Add Document
             </TabsTrigger>
             {profile?.role === 'admin' && (
               <TabsTrigger
                 value="maintenance"
-                className="rounded-none border-b-2 border-transparent px-4 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                className="-mb-px shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-4"
               >
                 System Maintenance
               </TabsTrigger>

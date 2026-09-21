@@ -220,7 +220,7 @@ export default function AdminAnalytics() {
   if (isLoadingCourses) {
     return (
       <MainLayout showFooter={false}>
-        <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
+        <div className="flex h-[calc(100vh-4rem)] items-center justify-center supports-[height:100dvh]:h-[calc(100dvh-4rem)]">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       </MainLayout>
@@ -229,23 +229,23 @@ export default function AdminAnalytics() {
 
   return (
     <MainLayout showFooter={false}>
-      <div className="flex h-[calc(100vh-4rem)] flex-col">
+      <div className="flex h-[calc(100vh-4rem)] flex-col supports-[height:100dvh]:h-[calc(100dvh-4rem)]">
         {/* Header */}
         <div className="border-b border-border px-4 py-3">
-          <div className="flex flex-col gap-3 px-2 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col gap-3 sm:px-2 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <h1 className="text-lg font-semibold">Course Analytics</h1>
               <p className="text-xs text-muted-foreground">
                 Ask questions about student activity and course usage
               </p>
             </div>
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
               <Select
                 value={selectedCourseId}
                 onValueChange={setSelectedCourseId}
                 disabled={courses.length === 0}
               >
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="col-span-2 w-full sm:w-[200px]">
                   <SelectValue placeholder="Select a course" />
                 </SelectTrigger>
                 <SelectContent>
@@ -256,47 +256,49 @@ export default function AdminAnalytics() {
                   ))}
                 </SelectContent>
               </Select>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label htmlFor="analytics-start-at" className="text-xs text-muted-foreground">Start</Label>
                 <Input
                   id="analytics-start-at"
                   type="datetime-local"
                   value={rangeStartInput}
                   onChange={(event) => setRangeStartInput(event.target.value)}
-                  className="w-[220px]"
+                  className="w-full min-w-0 text-sm sm:w-[220px]"
                 />
               </div>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label htmlFor="analytics-end-at" className="text-xs text-muted-foreground">End</Label>
                 <Input
                   id="analytics-end-at"
                   type="datetime-local"
                   value={rangeEndInput}
                   onChange={(event) => setRangeEndInput(event.target.value)}
-                  className="w-[220px]"
+                  className="w-full min-w-0 text-sm sm:w-[220px]"
                 />
               </div>
-              <Button variant="outline" onClick={handleResetDateRange}>
-                Last 30 days
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={clearChat}
-                title="Clear chat"
-                disabled={messages.length === 0 && !isLoading}
-              >
-                <RotateCcw className="h-4 w-4" />
-              </Button>
+              <div className="col-span-2 flex gap-2">
+                <Button variant="outline" onClick={handleResetDateRange} className="flex-1 sm:flex-none">
+                  Last 30 days
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={clearChat}
+                  title="Clear chat"
+                  disabled={messages.length === 0 && !isLoading}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
           {analyticsRangeError ? (
-            <div className="mt-3 flex items-center gap-2 px-2 text-xs text-destructive">
+            <div className="mt-3 flex items-center gap-2 text-xs text-destructive sm:px-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{analyticsRangeError}</span>
             </div>
           ) : (
-            <p className="mt-3 px-2 text-xs text-muted-foreground">
+            <p className="mt-3 text-xs text-muted-foreground sm:px-2">
               Showing analytics for {formatAnalyticsRangeLabel(analyticsStartAt, analyticsEndAt)}.
             </p>
           )}

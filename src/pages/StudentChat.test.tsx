@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -97,5 +97,18 @@ describe('StudentChat page', () => {
     mocks.auth.isAdmin = true; mocks.chat.isLoadingCourses = true; mocks.chat.selectedCourseId = null;
     renderPage(); expect(screen.getByText('Loading course...')).toBeInTheDocument();
     expect(screen.getByText('enroll-visible:false')).toBeInTheDocument();
+  });
+  it('opens the conversations drawer on phones and closes it after choosing a conversation', () => {
+    renderPage();
+    // Desktop rail is always mounted; the drawer copy only mounts while open.
+    expect(screen.getAllByText(/is-collapsed/)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversations' }));
+    expect(screen.getByRole('dialog', { name: 'Conversations' })).toBeInTheDocument();
+    expect(screen.getAllByText(/is-collapsed/)).toHaveLength(2);
+    const drawer = screen.getByRole('dialog', { name: 'Conversations' });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'new conversation' }));
+    expect(mocks.chat.startNewConversation).toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: 'Conversations' })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/is-collapsed/)).toHaveLength(1);
   });
 });

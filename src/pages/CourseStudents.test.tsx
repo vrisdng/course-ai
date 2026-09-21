@@ -84,4 +84,16 @@ describe('CourseStudents', () => {
     vi.clearAllMocks(); arrange({ enrollmentError: 'load failed' }); renderPage();
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('load failed'));
   });
+
+  it('stacks each roster row into a labelled card below the sm breakpoint', async () => {
+    arrange(); renderPage();
+    await screen.findByText('Ada Lovelace');
+    expect(screen.getByRole('columnheader', { name: 'Enrolled' }).closest('thead')?.className).toContain('hidden');
+    const row = screen.getByText('Ada Lovelace').closest('tr') as HTMLTableRowElement;
+    expect(row.className).toContain('sm:table-row');
+    const email = within(row).getByText('ada@example.test');
+    expect(email).toHaveAttribute('data-label', 'Email');
+    expect(email.className).toContain('sm:table-cell');
+    expect(within(row).getByText(new Date('2026-01-02T00:00:00Z').toLocaleDateString())).toHaveAttribute('data-label', 'Enrolled');
+  });
 });

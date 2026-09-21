@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -26,5 +26,26 @@ describe('MainLayout', () => {
   it('falls back to email initials when the profile has no name', () => {
     auth.value = { user: { email: 'student@example.test' }, profile: { full_name: null, role: 'student', avatar_url: null }, isAdmin: false, signOut: vi.fn() };
     renderLayout(); expect(screen.getByText('ST')).toBeInTheDocument(); expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument();
+  });
+  it('offers the primary destinations inside the account menu for phone widths', () => {
+    auth.value = { user: { email: 'admin@example.test' }, profile: { full_name: 'Ada Lovelace', role: 'admin', avatar_url: null }, isAdmin: true, signOut: vi.fn() };
+    renderLayout();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Open account menu' }), { key: 'Enter' });
+    const menu = screen.getByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: 'Admin' })).toHaveAttribute('href', '/admin-dashboard');
+    expect(within(menu).getByRole('menuitem', { name: 'Analytics' })).toHaveAttribute('href', '/admin-analytics');
+    expect(within(menu).getByRole('menuitem', { name: 'Chat' })).toHaveAttribute('href', '/chat');
+    expect(within(menu).getByRole('menuitem', { name: 'Settings' })).toHaveAttribute('href', '/settings');
+    // The menu copies are phone-only; the inline desktop links are still rendered for md+ viewports.
+    expect(within(menu).getByRole('menuitem', { name: 'Chat' }).closest('[class*="md:hidden"]')).not.toBeNull();
+    expect(screen.getAllByRole('link', { name: 'Chat', hidden: true }).some((link) => link.className.includes('md:block'))).toBe(true);
+  });
+  it('hides admin destinations from students in the account menu', () => {
+    auth.value = { user: { email: 'student@example.test' }, profile: { full_name: null, role: 'student', avatar_url: null }, isAdmin: false, signOut: vi.fn() };
+    renderLayout();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Open account menu' }), { key: 'Enter' });
+    const menu = screen.getByRole('menu');
+    expect(within(menu).queryByRole('menuitem', { name: 'Admin' })).not.toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Chat' })).toBeInTheDocument();
   });
 });

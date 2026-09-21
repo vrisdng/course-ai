@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ActiveViewerSource } from './documentViewer';
 import { SourcesPanel } from './SourcesPanel';
 
+const viewport = vi.hoisted(() => ({ isMobile: false }));
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => viewport.isMobile }));
+
 vi.mock('./PdfReader', () => ({
   PdfReader: ({ source }: { source: ActiveViewerSource }) => (
     <div data-testid="pdf-reader">{source.documentName}</div>
@@ -173,5 +176,35 @@ describe('SourcesPanel', () => {
     });
     render(<SourcesPanel {...value} />);
     expect(screen.queryByText('Relevant explanation. More context.')).not.toBeInTheDocument();
+  });
+
+  it('shares the row with a draggable width on desktop', () => {
+    viewport.isMobile = false;
+    render(<SourcesPanel {...props()} />);
+    const aside = screen.getByRole('complementary');
+    expect(aside).toHaveStyle({ width: '460px' });
+    expect(aside.className).toContain('relative');
+    expect(screen.getByRole('slider', { name: 'Resize sources panel' })).toBeInTheDocument();
+  });
+
+  it('covers the chat as a full-width overlay on phones without a resize handle', () => {
+    viewport.isMobile = true;
+    render(<SourcesPanel {...props()} />);
+    const aside = screen.getByRole('complementary');
+    expect(aside.style.width).toBe('');
+    expect(aside.className).toContain('fixed');
+    expect(aside.className).toContain('w-full');
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close sources' })).toBeInTheDocument();
+    viewport.isMobile = false;
+  });
+
+  it('collapses to zero width on phones when closed so the chat keeps the full row', () => {
+    viewport.isMobile = true;
+    render(<SourcesPanel {...props({ showSidePanel: false })} />);
+    const aside = screen.getByRole('complementary');
+    expect(aside).toHaveStyle({ width: '0px' });
+    expect(aside.className).not.toContain('fixed');
+    viewport.isMobile = false;
   });
 });

@@ -51,6 +51,11 @@ interface ConversationsSidebarProps {
   /** Called with the trimmed, uppercased invite code. Should throw on failure. */
   onEnroll: (code: string) => Promise<void>;
   showEnroll: boolean;
+  /**
+   * `sidebar` (default) renders the collapsible desktop rail, hidden below `md`.
+   * `drawer` renders the same content without the rail chrome, for use inside a phone sheet.
+   */
+  layout?: 'sidebar' | 'drawer';
 }
 
 export function ConversationsSidebar({
@@ -72,7 +77,9 @@ export function ConversationsSidebar({
   onChangeCourse,
   onEnroll,
   showEnroll,
+  layout = 'sidebar',
 }: ConversationsSidebarProps) {
+  const isDrawer = layout === 'drawer';
   const [isCourseDialogOpen, setIsCourseDialogOpen] = useState(false);
   const [enrollCode, setEnrollCode] = useState('');
   const [isEnrolling, setIsEnrolling] = useState(false);
@@ -114,7 +121,7 @@ export function ConversationsSidebar({
 
   const CourseIcon = !hasCourses && showEnroll ? UserPlus : BookOpen;
 
-  if (isCollapsed) {
+  if (isCollapsed && !isDrawer) {
     return (
       <aside className="hidden shrink-0 border-r border-border bg-muted/30 md:flex md:flex-col md:items-center md:py-3 md:w-12">
         <Button
@@ -132,22 +139,29 @@ export function ConversationsSidebar({
 
   return (
     <>
-      <aside className="hidden w-64 shrink-0 border-r border-border bg-muted/30 md:block">
+      <aside
+        className={cn(
+          'flex h-full flex-col',
+          isDrawer ? 'w-full' : 'hidden w-64 shrink-0 border-r border-border bg-muted/30 md:flex',
+        )}
+      >
         <div className="flex h-full flex-col">
-          {/* Header row: New Chat + collapse button */}
-          <div className="flex items-center gap-2 p-3">
+          {/* Header row: New Chat + collapse button (the drawer closes via the sheet instead) */}
+          <div className={cn('flex items-center gap-2 p-3', isDrawer && 'pr-14')}>
             <Button className="h-9 flex-1 gap-2" variant="outline" onClick={onStartNewConversation}>
               <Plus className="h-4 w-4" />
               New Chat
             </Button>
-            <Button
-              variant="ghost"
-              onClick={onToggleCollapse}
-              aria-label="Collapse sidebar"
-              className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
+            {!isDrawer && (
+              <Button
+                variant="ghost"
+                onClick={onToggleCollapse}
+                aria-label="Collapse sidebar"
+                className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+            )}
           </div>
 
           {/* Search */}
