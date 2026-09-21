@@ -4,8 +4,10 @@ import {
   buildExtractionPrompt,
   encodeBytesToBase64,
   fetchWithRetry,
+  initialPagesPerCall,
   isRetryableStatus,
   nextExtractionRange,
+  shrinkPagesPerCall,
   normalizeRangeSegments,
   parseGeminiPageSegments,
 } from './extraction';
@@ -97,6 +99,25 @@ describe('nextExtractionRange', () => {
 
   it('returns null once every page has been extracted', () => {
     expect(nextExtractionRange({ nextPage: 48, totalPages: 47, pagesPerCall: 16 })).toBeNull();
+  });
+});
+
+describe('range sizing', () => {
+  it('uses larger ranges for light pages and smaller ones for dense pages', () => {
+    expect(initialPagesPerCall({ fileBytes: 47 * 21_000, totalPages: 47 })).toBe(16);
+    expect(initialPagesPerCall({ fileBytes: 65 * 60_000, totalPages: 65 })).toBe(8);
+    expect(initialPagesPerCall({ fileBytes: 20 * 150_000, totalPages: 20 })).toBe(4);
+  });
+
+  it('never returns fewer than the minimum range size', () => {
+    expect(initialPagesPerCall({ fileBytes: 5 * 1_000_000, totalPages: 5 })).toBeGreaterThanOrEqual(2);
+  });
+
+  it('halves the range size on shrink and floors at the minimum', () => {
+    expect(shrinkPagesPerCall(16)).toBe(8);
+    expect(shrinkPagesPerCall(8)).toBe(4);
+    expect(shrinkPagesPerCall(3)).toBe(2);
+    expect(shrinkPagesPerCall(2)).toBe(2);
   });
 });
 

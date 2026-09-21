@@ -7,9 +7,12 @@ import {
   buildExtractionPrompt,
   encodeBytesToBase64,
   fetchWithRetry,
+  initialPagesPerCall,
+  MIN_PAGES_PER_CALL,
   nextExtractionRange,
   normalizeRangeSegments,
   parseGeminiPageSegments,
+  shrinkPagesPerCall,
   type ExtractedSegment,
   type PageRange,
 } from "../_shared/extraction.ts";
@@ -29,10 +32,13 @@ interface ChunkData {
 }
 
 // Resumable extraction state for multi-page PDFs: pages [1, nextPage) are done.
+// Persisted to the job payload after every range, so a killed run loses at
+// most one range. pagesPerCall shrinks when a call times out.
 interface ExtractionState {
   segments: ExtractedSegment[];
   nextPage: number;
   totalPages: number;
+  pagesPerCall: number;
 }
 
 interface JobPayload {
@@ -85,19 +91,14 @@ const GEMINI_VISION_MODEL = "gemini-3.8-flash";
 const GEMINI_GENERATE_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent`;
 
-// Extraction of a long PDF is split into page ranges so that no single OCR
-// call, and no single invocation, approaches the Edge Runtime wall-clock limit
-// (150s on the free plan). Measured on a 47-page deck with gpt-5.6-luna:
-// 8 pages in 27s, all 47 in 85s (~15s fixed + ~1.5s/page), so a 16-page
-// range is ~40s. After each range the segments are persisted to the job
-// payload; once the invocation budget is spent the job is requeued and the
-// next invocation resumes from the next page. The budget is checked between
-// ranges, so worst case per invocation is budget + one range + chunk/embed
-// slice: ~45s + ~40s + ~15s, comfortably inside the 150s free-plan limit.
-// (A 47-page deck ran 3 ranges + embedding in one 114s invocation at 70s.)
-const EXTRACTION_PAGES_PER_CALL = 16;
-const EXTRACTION_CALL_TIMEOUT_MS = 90_000;
-const EXTRACTION_INVOCATION_BUDGET_MS = 45_000;
+// A long PDF is OCR'd one page range per invocation: claim, download, one
+// OCR call, save the range into the job payload, requeue, self-invoke. The
+// Edge Runtime kills a run at its wall clock (150s on the free plan) with no
+// error handler, so each run must stay well inside that: the OCR call gets
+// its own timeout, and a timeout shrinks the range for the retry instead of
+// failing the job. Range size starts from page density (see extraction.ts).
+const EXTRACTION_CALL_TIMEOUT_MS = 100_000;
+const EXTRACTION_SINGLE_CALL_MAX_PAGES = 16;
 const EXTRACTION_PROGRESS_START = 25;
 const EXTRACTION_PROGRESS_END = 50;
 
@@ -312,18 +313,38 @@ interface OpenAiExtractionOptions {
   range?: PageRange;
 }
 
+class ExtractionTimeoutError extends Error {
+  constructor(range?: PageRange) {
+    super(
+      range
+        ? `OCR call for pages ${range.start}-${range.end} exceeded ${EXTRACTION_CALL_TIMEOUT_MS / 1000}s`
+        : `OCR call exceeded ${EXTRACTION_CALL_TIMEOUT_MS / 1000}s`,
+    );
+    this.name = "ExtractionTimeoutError";
+  }
+}
+
 async function extractTextWithOpenAI(
   options: OpenAiExtractionOptions,
 ): Promise<{ text: string; segments: ExtractedSegment[] }> {
-  const text = await generateDocumentText({
-    apiKey: options.openAiApiKey,
-    model: OCR_MODEL,
-    prompt: buildExtractionPrompt({ pageMarkers: options.pageMarkers, range: options.range }),
-    file: { base64Data: options.base64Data, mimeType: options.mimeType, filename: options.filename },
-    maxOutputTokens: OCR_MAX_OUTPUT_TOKENS,
-    maxRetries: 3,
-    signal: AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS),
-  });
+  const timeoutSignal = AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS);
+  let text: string;
+  try {
+    text = await generateDocumentText({
+      apiKey: options.openAiApiKey,
+      model: OCR_MODEL,
+      prompt: buildExtractionPrompt({ pageMarkers: options.pageMarkers, range: options.range }),
+      file: { base64Data: options.base64Data, mimeType: options.mimeType, filename: options.filename },
+      maxOutputTokens: OCR_MAX_OUTPUT_TOKENS,
+      maxRetries: 3,
+      signal: timeoutSignal,
+    });
+  } catch (error) {
+    if (timeoutSignal.aborted) {
+      throw new ExtractionTimeoutError(options.range);
+    }
+    throw error;
+  }
 
   if (!options.pageMarkers) {
     return { text, segments: [{ text, pageNumber: null }] };
@@ -340,29 +361,29 @@ async function extractTextWithOpenAI(
   return { text, segments: [{ text, pageNumber: options.range?.start ?? 1 }] };
 }
 
-interface PdfExtractionResult {
+interface PdfExtractionStep {
   done: boolean;
   state: ExtractionState;
+  // True when this run's OCR call timed out: no pages were added and the
+  // range size was shrunk for the retry.
+  timedOut: boolean;
 }
 
-// Extracts a PDF in page ranges, resuming from `state` if given. Returns early
-// (done=false) once the invocation budget is spent so the caller can persist
-// the state and requeue.
-async function extractPdfInRanges(options: {
+// Performs exactly one OCR call for a PDF: either the whole document when it
+// is short, or the next page range of a long one. Resumes from `state`.
+async function extractNextPdfRange(options: {
   fileBytes: Uint8Array;
   base64Data: string;
   filename: string;
   openAiApiKey: string;
   state: ExtractionState | null;
-  startedAt: number;
-  onProgress: (progress: number) => Promise<void>;
-}): Promise<PdfExtractionResult> {
+}): Promise<PdfExtractionStep> {
   let state = options.state;
 
   if (!state) {
     const totalPages = await countPdfPages(options.fileBytes);
-    if (totalPages === null || totalPages <= EXTRACTION_PAGES_PER_CALL) {
-      // Short document (or unknown length): one call, as before.
+    if (totalPages === null || totalPages <= EXTRACTION_SINGLE_CALL_MAX_PAGES) {
+      // Short document (or unknown length): one call for everything.
       const extraction = await extractTextWithOpenAI({
         base64Data: options.base64Data,
         mimeType: "application/pdf",
@@ -371,20 +392,33 @@ async function extractPdfInRanges(options: {
         pageMarkers: true,
       });
       const pages = totalPages ?? Math.max(1, ...extraction.segments.map((s) => s.pageNumber ?? 1));
-      return { done: true, state: { segments: extraction.segments, nextPage: pages + 1, totalPages: pages } };
+      return {
+        done: true,
+        timedOut: false,
+        state: { segments: extraction.segments, nextPage: pages + 1, totalPages: pages, pagesPerCall: pages },
+      };
     }
-    state = { segments: [], nextPage: 1, totalPages };
+    state = {
+      segments: [],
+      nextPage: 1,
+      totalPages,
+      pagesPerCall: initialPagesPerCall({ fileBytes: options.fileBytes.length, totalPages }),
+    };
   }
 
-  let range = nextExtractionRange({
+  const range = nextExtractionRange({
     nextPage: state.nextPage,
     totalPages: state.totalPages,
-    pagesPerCall: EXTRACTION_PAGES_PER_CALL,
+    pagesPerCall: state.pagesPerCall,
   });
+  if (!range) {
+    return { done: true, timedOut: false, state };
+  }
 
-  while (range) {
-    console.log(`Extracting pages ${range.start}-${range.end} of ${state.totalPages}`);
-    const extraction = await extractTextWithOpenAI({
+  console.log(`Extracting pages ${range.start}-${range.end} of ${state.totalPages} (${state.pagesPerCall}/call)`);
+  let extraction: { segments: ExtractedSegment[] };
+  try {
+    extraction = await extractTextWithOpenAI({
       base64Data: options.base64Data,
       mimeType: "application/pdf",
       filename: options.filename,
@@ -392,30 +426,21 @@ async function extractPdfInRanges(options: {
       pageMarkers: true,
       range,
     });
-    const rangeSegments = normalizeRangeSegments(extraction.segments, range);
-    state = {
-      segments: [...state.segments, ...rangeSegments],
-      nextPage: range.end + 1,
-      totalPages: state.totalPages,
-    };
-
-    const ratio = Math.min(1, (state.nextPage - 1) / state.totalPages);
-    await options.onProgress(
-      Math.round(EXTRACTION_PROGRESS_START + (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) * ratio),
-    );
-
-    range = nextExtractionRange({
-      nextPage: state.nextPage,
-      totalPages: state.totalPages,
-      pagesPerCall: EXTRACTION_PAGES_PER_CALL,
-    });
-
-    if (range && Date.now() - options.startedAt > EXTRACTION_INVOCATION_BUDGET_MS) {
-      return { done: false, state };
+  } catch (error) {
+    if (error instanceof ExtractionTimeoutError && state.pagesPerCall > MIN_PAGES_PER_CALL) {
+      const pagesPerCall = shrinkPagesPerCall(state.pagesPerCall);
+      console.warn(`${error.message}; retrying with ${pagesPerCall} pages per call`);
+      return { done: false, timedOut: true, state: { ...state, pagesPerCall } };
     }
+    throw error;
   }
 
-  return { done: true, state };
+  const nextState: ExtractionState = {
+    ...state,
+    segments: [...state.segments, ...normalizeRangeSegments(extraction.segments, range)],
+    nextPage: range.end + 1,
+  };
+  return { done: nextState.nextPage > nextState.totalPages, timedOut: false, state: nextState };
 }
 
 function getMimeType(fileType: string, fileName: string): string {
@@ -723,7 +748,6 @@ serve(async (req: Request) => {
     if (!filePath) {
       throw new Error("Queued parse job is missing filePath");
     }
-    const invocationStartedAt = Date.now();
 
     // -----------------------------------------------------------------------
     // Check if this is a RESUMED invocation (chunks already extracted)
@@ -786,40 +810,48 @@ serve(async (req: Request) => {
       let extractedSegments: ExtractedSegment[] = [];
       switch (ext) {
         case "pdf": {
-          const result = await extractPdfInRanges({
+          const step = await extractNextPdfRange({
             fileBytes,
             base64Data,
             filename: filePath.split("/").pop() || "document.pdf",
             openAiApiKey,
             state: payload.extraction ?? null,
-            startedAt: invocationStartedAt,
-            onProgress: updateExtractionProgress,
           });
-          if (!result.done) {
-            // Budget spent with pages remaining: persist progress and hand the
-            // rest to the next invocation.
+          if (!step.done) {
+            // Save this range (or the shrunk range size after a timeout) and
+            // hand the next range to a fresh invocation.
+            const pagesDone = step.state.nextPage - 1;
+            await updateExtractionProgress(
+              Math.round(
+                EXTRACTION_PROGRESS_START +
+                  (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) * (pagesDone / step.state.totalPages),
+              ),
+            );
             await requeueJobAndContinue({
               adminClient,
               supabaseUrl,
               supabaseKey,
               jobId: claimedJobId,
               materialId: claimedMaterialId,
-              attemptCount: claimedAttemptCount,
-              payload: { filePath, fileType, bucketName, extraction: result.state },
+              // A timeout counts as an attempt; a normal continuation does not.
+              attemptCount: step.timedOut ? claimedAttemptCount + 1 : claimedAttemptCount,
+              payload: { filePath, fileType, bucketName, extraction: step.state },
             });
             return new Response(
               JSON.stringify({
                 success: true,
-                jobId: jobIdForUpdate,
-                materialId: materialIdForError,
-                pagesExtracted: result.state.nextPage - 1,
-                totalPages: result.state.totalPages,
+                jobId: claimedJobId,
+                materialId: claimedMaterialId,
+                pagesExtracted: pagesDone,
+                totalPages: step.state.totalPages,
+                pagesPerCall: step.state.pagesPerCall,
+                timedOut: step.timedOut,
                 continuing: true,
               }),
               { headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
           }
-          extractedSegments = result.state.segments;
+          extractedSegments = step.state.segments;
           break;
         }
         case "png":

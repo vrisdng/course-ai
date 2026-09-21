@@ -117,6 +117,24 @@ export function nextExtractionRange(options: {
   };
 }
 
+// Pages per OCR call, chosen from page density. Measured with gpt-5.6-luna:
+// ~21 KB/page slide decks take ~40 s per 16 pages; a ~60 KB/page deck ran
+// past 100 s on a 16-page range. Each call must finish well inside the Edge
+// Runtime wall clock (150 s on the free plan) including claim + download.
+export const MIN_PAGES_PER_CALL = 2;
+
+export function initialPagesPerCall(options: { fileBytes: number; totalPages: number }): number {
+  const bytesPerPage = options.fileBytes / Math.max(1, options.totalPages);
+  if (bytesPerPage < 30_000) return 16;
+  if (bytesPerPage < 80_000) return 8;
+  return 4;
+}
+
+// After a call times out, retry the same pages in a smaller bite.
+export function shrinkPagesPerCall(current: number): number {
+  return Math.max(MIN_PAGES_PER_CALL, Math.floor(current / 2));
+}
+
 export function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
