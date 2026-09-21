@@ -1,17 +1,23 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { chunkText } from "../_shared/chunking.ts";
 import { renderPdfPageToPng } from "../_shared/pdfThumbnail.ts";
+import {
+  buildExtractionPrompt,
+  encodeBytesToBase64,
+  fetchWithRetry,
+  nextExtractionRange,
+  normalizeRangeSegments,
+  parseGeminiPageSegments,
+  type ExtractedSegment,
+  type PageRange,
+} from "../_shared/extraction.ts";
+import { countPdfPages } from "../_shared/pdfPages.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
   workerId?: string;
-}
-
-interface ExtractedSegment {
-  text: string;
-  pageNumber: number | null;
 }
 
 interface ChunkData {
@@ -21,10 +27,19 @@ interface ChunkData {
   pageNumber: number | null;
 }
 
+// Resumable extraction state for multi-page PDFs: pages [1, nextPage) are done.
+interface ExtractionState {
+  segments: ExtractedSegment[];
+  nextPage: number;
+  totalPages: number;
+}
+
 interface JobPayload {
   filePath: string;
   fileType: string;
   bucketName: string;
+  // Resumable state — set while a PDF is being extracted in page ranges
+  extraction?: ExtractionState;
   // Resumable state — set after extraction+chunking is done
   chunks?: ChunkData[];
   embeddedUpTo?: number; // index of first un-embedded chunk
@@ -59,6 +74,22 @@ const EMBEDDING_BATCH_API_SIZE = 100;
 
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
+
+const GEMINI_VISION_MODEL = "gemini-3.8-flash";
+const GEMINI_GENERATE_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent`;
+
+// Extraction of a long PDF is split into page ranges so that no single Gemini
+// call, and no single invocation, approaches the Edge Runtime wall-clock limit
+// (150s on the free plan). Measured on a 47-page deck: ~1.4s/page, so a
+// 16-page range is ~25s. After each range the segments are persisted to the
+// job payload; once the invocation budget is spent the job is requeued and the
+// next invocation resumes from the next page.
+const EXTRACTION_PAGES_PER_CALL = 16;
+const EXTRACTION_CALL_TIMEOUT_MS = 90_000;
+const EXTRACTION_INVOCATION_BUDGET_MS = 70_000;
+const EXTRACTION_PROGRESS_START = 25;
+const EXTRACTION_PROGRESS_END = 50;
 
 declare const EdgeRuntime:
   | { waitUntil?: (promise: Promise<unknown>) => void }
@@ -101,41 +132,6 @@ function extractParagraphText(xml: string, textTagPattern: RegExp): string {
   }
 
   return lines.join("\n").trim();
-}
-
-function parseGeminiPageSegments(rawText: string): ExtractedSegment[] {
-  const markerRegex = /^\s*\[Page\s+(\d+)\]\s*$/gim;
-  const markers = Array.from(rawText.matchAll(markerRegex));
-
-  if (markers.length === 0) {
-    return [];
-  }
-
-  const segments: ExtractedSegment[] = [];
-
-  for (let i = 0; i < markers.length; i++) {
-    const current = markers[i];
-    const next = markers[i + 1];
-    const pageNumber = Number(current[1]);
-
-    if (!Number.isFinite(pageNumber) || pageNumber < 1) {
-      continue;
-    }
-
-    const markerStart = current.index ?? 0;
-    const markerEnd = markerStart + current[0].length;
-    const segmentEnd = next?.index ?? rawText.length;
-    const segmentText = rawText.slice(markerEnd, segmentEnd).trim();
-
-    if (segmentText) {
-      segments.push({
-        text: segmentText,
-        pageNumber,
-      });
-    }
-  }
-
-  return segments;
 }
 
 async function extractSegmentsFromDocx(fileBytes: Uint8Array): Promise<ExtractedSegment[]> {
@@ -217,61 +213,32 @@ async function extractSegmentsFromPptx(fileBytes: Uint8Array): Promise<Extracted
   return segments;
 }
 
-async function extractTextWithGemini(
-  fileBytes: Uint8Array,
-  mimeType: string,
-  geminiApiKey: string,
-  requestPageMarkers: boolean
-): Promise<{ text: string; segments: ExtractedSegment[] }> {
-  const base64Data = btoa(
-    Array.from(fileBytes)
-      .map((b) => String.fromCharCode(b))
-      .join("")
-  );
+interface GeminiExtractionOptions {
+  base64Data: string;
+  mimeType: string;
+  geminiApiKey: string;
+  pageMarkers: boolean;
+  range?: PageRange;
+}
 
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+async function extractTextWithGemini(
+  options: GeminiExtractionOptions,
+): Promise<{ text: string; segments: ExtractedSegment[] }> {
+  const response = await fetchWithRetry(
+    GEMINI_GENERATE_URL,
     {
       method: "POST",
       headers: {
-        "x-goog-api-key": geminiApiKey,
+        "x-goog-api-key": options.geminiApiKey,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS),
       body: JSON.stringify({
         contents: [
           {
             parts: [
-              {
-                text: requestPageMarkers
-                  ? `Extract ALL text content from this document verbatim.
-Return output page-by-page in this exact format:
-[Page 1]
-<text from page 1>
-[Page 2]
-<text from page 2>
-
-Rules:
-- Keep page markers exactly as [Page N].
-- Include every page in order.
-- Do NOT summarize.
-- Do NOT add commentary.
-- Return ONLY extracted text content with these page markers.`
-                  : `Extract ALL text content from this document verbatim. Preserve the original structure including:
-- Headings and subheadings
-- Paragraphs
-- Bullet points and numbered lists
-- Table content (format as readable text)
-- Captions and labels
-- Any mathematical formulas (in plain text or LaTeX notation)
-
-Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.`,
-              },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data,
-                },
-              },
+              { text: buildExtractionPrompt({ pageMarkers: options.pageMarkers, range: options.range }) },
+              { inlineData: { mimeType: options.mimeType, data: options.base64Data } },
             ],
           },
         ],
@@ -280,16 +247,18 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
           maxOutputTokens: 65536,
         },
       }),
-    }
+    },
+    {
+      maxRetries: 3,
+      onRetry: ({ attempt, status, delayMs }) =>
+        console.warn(`Gemini Vision ${status ?? "network error"}; retry ${attempt} in ${delayMs}ms`),
+    },
   );
 
   if (!response.ok) {
     const errorText = await response.text();
-
     if (response.status === 429) {
-      throw new Error(
-        "Gemini API rate limit exceeded. Free tier allows 15 requests/min and 1500 requests/day. Please wait and retry."
-      );
+      throw new Error("Gemini API rate limit exceeded after retries. Please wait and retry.");
     }
     if (response.status === 413 || errorText.includes("payload size")) {
       throw new Error(
@@ -309,11 +278,8 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
     throw new Error("Gemini Vision returned no text content");
   }
 
-  if (!requestPageMarkers) {
-    return {
-      text,
-      segments: [{ text, pageNumber: null }],
-    };
+  if (!options.pageMarkers) {
+    return { text, segments: [{ text, pageNumber: null }] };
   }
 
   const parsedSegments = parseGeminiPageSegments(text);
@@ -324,10 +290,82 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
     };
   }
 
-  return {
-    text,
-    segments: [{ text, pageNumber: 1 }],
-  };
+  return { text, segments: [{ text, pageNumber: options.range?.start ?? 1 }] };
+}
+
+interface PdfExtractionResult {
+  done: boolean;
+  state: ExtractionState;
+}
+
+// Extracts a PDF in page ranges, resuming from `state` if given. Returns early
+// (done=false) once the invocation budget is spent so the caller can persist
+// the state and requeue.
+async function extractPdfInRanges(options: {
+  fileBytes: Uint8Array;
+  base64Data: string;
+  geminiApiKey: string;
+  state: ExtractionState | null;
+  startedAt: number;
+  onProgress: (progress: number) => Promise<void>;
+}): Promise<PdfExtractionResult> {
+  let state = options.state;
+
+  if (!state) {
+    const totalPages = await countPdfPages(options.fileBytes);
+    if (totalPages === null || totalPages <= EXTRACTION_PAGES_PER_CALL) {
+      // Short document (or unknown length): one call, as before.
+      const extraction = await extractTextWithGemini({
+        base64Data: options.base64Data,
+        mimeType: "application/pdf",
+        geminiApiKey: options.geminiApiKey,
+        pageMarkers: true,
+      });
+      const pages = totalPages ?? Math.max(1, ...extraction.segments.map((s) => s.pageNumber ?? 1));
+      return { done: true, state: { segments: extraction.segments, nextPage: pages + 1, totalPages: pages } };
+    }
+    state = { segments: [], nextPage: 1, totalPages };
+  }
+
+  let range = nextExtractionRange({
+    nextPage: state.nextPage,
+    totalPages: state.totalPages,
+    pagesPerCall: EXTRACTION_PAGES_PER_CALL,
+  });
+
+  while (range) {
+    console.log(`Extracting pages ${range.start}-${range.end} of ${state.totalPages}`);
+    const extraction = await extractTextWithGemini({
+      base64Data: options.base64Data,
+      mimeType: "application/pdf",
+      geminiApiKey: options.geminiApiKey,
+      pageMarkers: true,
+      range,
+    });
+    const rangeSegments = normalizeRangeSegments(extraction.segments, range);
+    state = {
+      segments: [...state.segments, ...rangeSegments],
+      nextPage: range.end + 1,
+      totalPages: state.totalPages,
+    };
+
+    const ratio = Math.min(1, (state.nextPage - 1) / state.totalPages);
+    await options.onProgress(
+      Math.round(EXTRACTION_PROGRESS_START + (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) * ratio),
+    );
+
+    range = nextExtractionRange({
+      nextPage: state.nextPage,
+      totalPages: state.totalPages,
+      pagesPerCall: EXTRACTION_PAGES_PER_CALL,
+    });
+
+    if (range && Date.now() - options.startedAt > EXTRACTION_INVOCATION_BUDGET_MS) {
+      return { done: false, state };
+    }
+  }
+
+  return { done: true, state };
 }
 
 function getMimeType(fileType: string, fileName: string): string {
@@ -481,6 +519,50 @@ async function generatePdfThumbnails(
 }
 
 // ---------------------------------------------------------------------------
+// Requeue + self-invoke (shared by the extraction and embedding stages)
+// ---------------------------------------------------------------------------
+
+async function requeueJobAndContinue(options: {
+  adminClient: SupabaseClient;
+  supabaseUrl: string;
+  supabaseKey: string;
+  jobId: string;
+  materialId: string;
+  payload: JobPayload;
+}): Promise<void> {
+  await options.adminClient
+    .from("material_processing_jobs")
+    .update({
+      status: "pending",
+      last_error: null,
+      locked_at: null,
+      locked_by: null,
+      payload: options.payload as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", options.jobId);
+
+  // Fire-and-forget: trigger next invocation
+  const continueWorker = fetch(`${options.supabaseUrl}/functions/v1/process-material-job`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.supabaseKey}`,
+      apikey: options.supabaseKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ materialId: options.materialId }),
+  }).catch((err) => {
+    console.error("Failed to trigger continuation:", err);
+  });
+
+  if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+    EdgeRuntime.waitUntil(continueWorker);
+  } else {
+    void continueWorker;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 
@@ -534,6 +616,8 @@ serve(async (req: Request) => {
 
     jobIdForUpdate = job.id;
     materialIdForError = job.material_id;
+    const claimedJobId: string = job.id;
+    const claimedMaterialId: string = job.material_id;
 
     // Max attempts guard (also enforced in SQL, but belt-and-suspenders)
     if (job.attempt_count > MAX_JOB_ATTEMPTS) {
@@ -574,11 +658,14 @@ serve(async (req: Request) => {
     if (!filePath) {
       throw new Error("Queued parse job is missing filePath");
     }
+    const invocationStartedAt = Date.now();
 
     // -----------------------------------------------------------------------
     // Check if this is a RESUMED invocation (chunks already extracted)
     // -----------------------------------------------------------------------
     const isResuming = Array.isArray(payload.chunks) && payload.chunks.length > 0;
+    // Carried across invocations via the payload; generated on the fresh path.
+    let thumbnailPaths: ThumbnailPaths | undefined = payload.thumbnailPaths;
     let chunks: ChunkData[];
     let totalChunks: number;
     let embeddedUpTo: number;
@@ -602,7 +689,7 @@ serve(async (req: Request) => {
           processing_status: "processing",
           processing_error: null,
           processing_stage: "extracting",
-          processing_progress: 25,
+          processing_progress: EXTRACTION_PROGRESS_START,
         })
         .eq("id", materialIdForError);
 
@@ -623,12 +710,49 @@ serve(async (req: Request) => {
         );
       }
 
-      let extractedSegments: ExtractedSegment[] = [];
+      const base64Data = usesInlineGeminiExtraction(ext) ? encodeBytesToBase64(fileBytes) : "";
+      const updateExtractionProgress = async (progress: number) => {
+        await adminClient
+          .from("materials")
+          .update({ processing_status: "processing", processing_stage: "extracting", processing_progress: progress })
+          .eq("id", materialIdForError);
+      };
 
+      let extractedSegments: ExtractedSegment[] = [];
       switch (ext) {
         case "pdf": {
-          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
-          extractedSegments = extraction.segments;
+          const result = await extractPdfInRanges({
+            fileBytes,
+            base64Data,
+            geminiApiKey,
+            state: payload.extraction ?? null,
+            startedAt: invocationStartedAt,
+            onProgress: updateExtractionProgress,
+          });
+          if (!result.done) {
+            // Budget spent with pages remaining: persist progress and hand the
+            // rest to the next invocation.
+            await requeueJobAndContinue({
+              adminClient,
+              supabaseUrl,
+              supabaseKey,
+              jobId: claimedJobId,
+              materialId: claimedMaterialId,
+              payload: { filePath, fileType, bucketName, extraction: result.state },
+            });
+            return new Response(
+              JSON.stringify({
+                success: true,
+                jobId: jobIdForUpdate,
+                materialId: materialIdForError,
+                pagesExtracted: result.state.nextPage - 1,
+                totalPages: result.state.totalPages,
+                continuing: true,
+              }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          extractedSegments = result.state.segments;
           break;
         }
         case "png":
@@ -636,7 +760,12 @@ serve(async (req: Request) => {
         case "jpeg":
         case "webp":
         case "gif": {
-          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, false);
+          const extraction = await extractTextWithGemini({
+            base64Data,
+            mimeType: getMimeType(ext, filePath),
+            geminiApiKey,
+            pageMarkers: false,
+          });
           extractedSegments = extraction.segments;
           break;
         }
@@ -645,7 +774,12 @@ serve(async (req: Request) => {
           break;
         }
         case "doc": {
-          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
+          const extraction = await extractTextWithGemini({
+            base64Data,
+            mimeType: getMimeType(ext, filePath),
+            geminiApiKey,
+            pageMarkers: true,
+          });
           extractedSegments = extraction.segments;
           break;
         }
@@ -656,7 +790,6 @@ serve(async (req: Request) => {
         default:
           throw new Error(`Unsupported file type: ${ext}`);
       }
-
       if (extractedSegments.length === 0) {
         throw new Error("No text could be extracted from the document");
       }
@@ -664,7 +797,7 @@ serve(async (req: Request) => {
       // --- Generate thumbnails for PDFs (if not already done) ---
       if (ext === "pdf" && !payload.thumbnailPaths) {
         console.log(`Generating thumbnails for ${filePath}`);
-        const thumbnailPaths = await generatePdfThumbnails(
+        thumbnailPaths = await generatePdfThumbnails(
           fileBytes,
           extractedSegments,
           bucketName,
@@ -673,7 +806,7 @@ serve(async (req: Request) => {
         );
         
         // Update job payload with thumbnail paths for resuming
-        if (thumbnailPaths.length > 0) {
+        if (Object.keys(thumbnailPaths).length > 0) {
           await adminClient
             .from("material_processing_jobs")
             .update({
@@ -816,8 +949,6 @@ serve(async (req: Request) => {
      if (newEmbeddedUpTo >= totalChunks) {
        // All chunks embedded — finalize
        
-       // Get thumbnail paths from payload
-       const thumbnailPaths = (isResuming && payload.thumbnailPaths) ? payload.thumbnailPaths : null;
        
        // Update materials table with thumbnail paths
        if (thumbnailPaths && Object.keys(thumbnailPaths).length > 0) {
@@ -880,36 +1011,14 @@ serve(async (req: Request) => {
        thumbnailPaths,
      };
 
-    await adminClient
-      .from("material_processing_jobs")
-      .update({
-        status: "pending",
-        last_error: null,
-        locked_at: null,
-        locked_by: null,
-        payload: updatedPayload as unknown as Record<string, unknown>,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", jobIdForUpdate);
-
-    // Fire-and-forget: trigger next invocation
-    const continueWorker = fetch(`${supabaseUrl}/functions/v1/process-material-job`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${supabaseKey}`,
-        apikey: supabaseKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ materialId: materialIdForError }),
-    }).catch((err) => {
-      console.error("Failed to trigger continuation:", err);
+    await requeueJobAndContinue({
+      adminClient,
+      supabaseUrl,
+      supabaseKey,
+      jobId: claimedJobId,
+      materialId: claimedMaterialId,
+      payload: updatedPayload,
     });
-
-    if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-      EdgeRuntime.waitUntil(continueWorker);
-    } else {
-      void continueWorker;
-    }
 
     return new Response(
       JSON.stringify({
