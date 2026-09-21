@@ -8,7 +8,7 @@ vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { signInWit
 import Auth from './Auth';
 
 const renderPage = (entry = '/auth') => render(<MemoryRouter initialEntries={[entry]}><Routes>
-  <Route path="/auth" element={<Auth />} /><Route path="/chat" element={<div>chat destination</div>} /><Route path="/admin-dashboard" element={<div>admin destination</div>} /><Route path="/" element={<div>invite destination</div>} />
+  <Route path="/auth" element={<Auth />} /><Route path="/chat" element={<div>chat destination</div>} /><Route path="/admin-dashboard" element={<div>admin destination</div>} /><Route path="/" element={<div>invite destination</div>} /><Route path="/reset-password" element={<div>reset destination</div>} />
 </Routes></MemoryRouter>);
 
 describe('Auth', () => {
@@ -49,22 +49,25 @@ describe('Auth', () => {
     fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Ada' } }); fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ada@example.test' } }); fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: 'secret12' } }); fireEvent.click(screen.getByRole('button', { name: 'Create Account' }));
     expect(await screen.findByText('An account with this email already exists. Please sign in instead.')).toBeInTheDocument();
   });
-  it('sends a password reset email from the forgot-password view and returns to sign in', async () => {
+  it('sends a reset code from the forgot-password view and hands off to the code entry page', async () => {
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
     expect(screen.getByText('Reset your password')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Send Reset Link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Reset Code' }));
     expect(await screen.findByText('Please enter a valid email address')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'student@example.test' } }); fireEvent.click(screen.getByRole('button', { name: 'Send Reset Link' }));
-    await waitFor(() => expect(mocks.resetPasswordForEmail).toHaveBeenCalledWith('student@example.test', { redirectTo: `${window.location.origin}/reset-password` }));
-    expect(await screen.findByText(/we've sent a password reset link/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'Student@Example.test' } }); fireEvent.click(screen.getByRole('button', { name: 'Send Reset Code' }));
+    await waitFor(() => expect(mocks.resetPasswordForEmail).toHaveBeenCalledWith('student@example.test'));
+    expect(await screen.findByText('reset destination')).toBeInTheDocument();
+  });
+  it('returns from the forgot-password view to sign in', () => {
+    renderPage('/auth?mode=forgot');
     fireEvent.click(screen.getByRole('button', { name: 'Back to Sign In' }));
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
   });
   it('opens the forgot-password view directly via mode=forgot and shows provider errors', async () => {
     mocks.resetPasswordForEmail.mockResolvedValue({ error: { message: 'For security purposes, you can only request this after 60 seconds.' } }); renderPage('/auth?mode=forgot');
     expect(screen.getByText('Reset your password')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'student@example.test' } }); fireEvent.click(screen.getByRole('button', { name: 'Send Reset Link' }));
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'student@example.test' } }); fireEvent.click(screen.getByRole('button', { name: 'Send Reset Code' }));
     expect(await screen.findByText(/only request this after 60 seconds/)).toBeInTheDocument();
   });
 });

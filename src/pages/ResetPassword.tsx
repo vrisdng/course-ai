@@ -10,9 +10,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle, CheckCircle2, GraduationCap, Loader2, Lock } from 'lucide-react';
+import { AlertCircle, CheckCircle2, GraduationCap, KeyRound, Loader2, Lock, Mail } from 'lucide-react';
 
-const resetPasswordSchema = z.object({
+const verifyCodeSchema = z.object({
+  email: z.string().email('Please enter a valid email address'),
+  code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code from the email'),
+});
+
+const newPasswordSchema = z.object({
   password: z.string().min(6, 'Password must be at least 6 characters'),
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
@@ -20,14 +25,15 @@ const resetPasswordSchema = z.object({
   path: ['confirmPassword'],
 });
 
-type ResetPasswordFormData = z.infer<typeof resetPasswordSchema>;
+type VerifyCodeFormData = z.infer<typeof verifyCodeSchema>;
+type NewPasswordFormData = z.infer<typeof newPasswordSchema>;
 
 // How long the success message stays visible before redirecting.
 const REDIRECT_DELAY_MS = 500;
 
-// Supabase reports link problems (expired, already used) as URL parameters in
-// either the hash (implicit flow) or the query string (PKCE flow) rather than
-// via an auth event, so the page reads them directly.
+// Older recovery emails carried a one-time link. If one of those is opened
+// after being consumed, Supabase reports the problem as URL parameters rather
+// than an auth event, so the page reads them to show a useful message.
 function readAuthErrorFromLocation(location: { hash: string; search: string }): string | null {
   for (const raw of [location.hash.replace(/^#/, ''), location.search.replace(/^\?/, '')]) {
     if (!raw) continue;
@@ -59,8 +65,17 @@ export default function ResetPassword() {
     [],
   );
 
-  const form = useForm<ResetPasswordFormData>({
-    resolver: zodResolver(resetPasswordSchema),
+  // The forgot-password form hands the email over via router state so it is
+  // not exposed in the URL; the field stays editable for direct visits.
+  const handedOverEmail = ((location.state as { email?: string } | null)?.email ?? '').trim().toLowerCase();
+
+  const verifyForm = useForm<VerifyCodeFormData>({
+    resolver: zodResolver(verifyCodeSchema),
+    defaultValues: { email: handedOverEmail, code: '' },
+  });
+
+  const passwordForm = useForm<NewPasswordFormData>({
+    resolver: zodResolver(newPasswordSchema),
     defaultValues: { password: '', confirmPassword: '' },
   });
 
@@ -71,7 +86,29 @@ export default function ResetPassword() {
     return () => window.clearTimeout(handle);
   }, [successMessage, profile, navigate]);
 
-  const handleSubmit = async (data: ResetPasswordFormData) => {
+  const handleVerifyCode = async (data: VerifyCodeFormData) => {
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      // A successful verification establishes a session; the auth context
+      // picks it up and this page switches to the new-password form.
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        email: data.email.trim().toLowerCase(),
+        token: data.code,
+        type: 'recovery',
+      });
+      if (verifyError) {
+        setError(verifyError.message);
+      }
+    } catch {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdatePassword = async (data: NewPasswordFormData) => {
     setIsSubmitting(true);
     setError(null);
 
@@ -97,7 +134,7 @@ export default function ResetPassword() {
     );
   }
 
-  const hasRecoverySession = Boolean(user);
+  const hasSession = Boolean(user);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-primary/5 to-background p-4">
@@ -109,8 +146,8 @@ export default function ResetPassword() {
       </Link>
 
       <Card className="w-full max-w-md">
-        {hasRecoverySession ? (
-          <form onSubmit={form.handleSubmit(handleSubmit)}>
+        {hasSession ? (
+          <form onSubmit={passwordForm.handleSubmit(handleUpdatePassword)}>
             <CardHeader>
               <CardTitle>Choose a new password</CardTitle>
               <CardDescription>Enter and confirm the new password for your account.</CardDescription>
@@ -140,11 +177,11 @@ export default function ResetPassword() {
                     autoComplete="new-password"
                     placeholder="••••••••"
                     className="pl-10"
-                    {...form.register('password')}
+                    {...passwordForm.register('password')}
                   />
                 </div>
-                {form.formState.errors.password && (
-                  <p className="text-sm text-destructive">{form.formState.errors.password.message}</p>
+                {passwordForm.formState.errors.password && (
+                  <p className="text-sm text-destructive">{passwordForm.formState.errors.password.message}</p>
                 )}
               </div>
 
@@ -158,11 +195,11 @@ export default function ResetPassword() {
                     autoComplete="new-password"
                     placeholder="••••••••"
                     className="pl-10"
-                    {...form.register('confirmPassword')}
+                    {...passwordForm.register('confirmPassword')}
                   />
                 </div>
-                {form.formState.errors.confirmPassword && (
-                  <p className="text-sm text-destructive">{form.formState.errors.confirmPassword.message}</p>
+                {passwordForm.formState.errors.confirmPassword && (
+                  <p className="text-sm text-destructive">{passwordForm.formState.errors.confirmPassword.message}</p>
                 )}
               </div>
             </CardContent>
@@ -180,22 +217,83 @@ export default function ResetPassword() {
             </CardFooter>
           </form>
         ) : (
-          <>
+          <form onSubmit={verifyForm.handleSubmit(handleVerifyCode)}>
             <CardHeader>
-              <CardTitle>Reset link not valid</CardTitle>
+              <CardTitle>Enter your reset code</CardTitle>
               <CardDescription>
-                {linkError ?? 'This password reset link is invalid or has expired. Reset links can only be used once.'}
+                {handedOverEmail
+                  ? `We emailed a 6-digit code to ${handedOverEmail}. It expires in 60 minutes.`
+                  : 'Enter the email for your account and the 6-digit code from the reset email.'}
               </CardDescription>
             </CardHeader>
+            <CardContent className="space-y-4">
+              {(error || linkError) && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{error ?? linkError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="reset-email">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="reset-email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@university.edu"
+                    className="pl-10"
+                    {...verifyForm.register('email')}
+                  />
+                </div>
+                {verifyForm.formState.errors.email && (
+                  <p className="text-sm text-destructive">{verifyForm.formState.errors.email.message}</p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="reset-code">Verification Code</Label>
+                <div className="relative">
+                  <KeyRound className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="reset-code"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="123456"
+                    className="pl-10 tracking-[0.3em]"
+                    {...verifyForm.register('code')}
+                  />
+                </div>
+                {verifyForm.formState.errors.code && (
+                  <p className="text-sm text-destructive">{verifyForm.formState.errors.code.message}</p>
+                )}
+              </div>
+            </CardContent>
             <CardFooter className="flex flex-col gap-2">
-              <Button asChild className="w-full">
-                <Link to="/auth?mode=forgot">Request a new link</Link>
+              <Button type="submit" className="w-full" disabled={isSubmitting}>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Verifying...
+                  </>
+                ) : (
+                  'Verify Code'
+                )}
               </Button>
+              <p className="text-center text-sm text-muted-foreground">
+                Didn't get it?{' '}
+                <Link to="/auth?mode=forgot" className="font-medium text-primary hover:underline">
+                  Request a new code
+                </Link>
+              </p>
               <Button asChild variant="ghost" className="w-full">
                 <Link to="/auth">Back to Sign In</Link>
               </Button>
             </CardFooter>
-          </>
+          </form>
         )}
       </Card>
     </div>

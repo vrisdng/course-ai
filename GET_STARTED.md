@@ -26,7 +26,7 @@ Email + password only — no OAuth/social login, no magic-link-only flow. Passwo
 - Sign-up triggers Supabase's built-in email confirmation, supporting **both** a clickable email link and a 6-digit OTP code entered in-app.
 - Invite-aware: a `?invite=<code>` query param on the auth page is preserved through sign-in/sign-up and forwarded after login so the invite/course-code redemption flow can pick it up.
 - Session handling relies entirely on the Supabase JS client's default token refresh — no custom session TTL logic in this app.
-- Password reset: "Forgot password?" on the sign-in tab emails a Supabase recovery link that opens `/reset-password`, where the user sets a new password. ⏱ Recovery links are single-use and expire per the Supabase project's OTP expiry setting (default 1 hour).
+- Password reset: "Forgot password?" on the sign-in tab emails a 6-digit code (no link — mail-security scanners consume single-use links). The user enters the code at `/reset-password`, then sets a new password. ⏱ Codes are single-use and expire after 1 hour (project OTP expiry). ⏱ The built-in Supabase mailer sends at most 2 emails/hour project-wide until custom SMTP is configured.
 - Post-login redirect: admins → `/admin-dashboard`, students → `/chat` (or back to wherever `ProtectedRoute` redirected them from).
 
 ## Student chat (RAG)

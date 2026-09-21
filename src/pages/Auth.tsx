@@ -178,18 +178,18 @@ export default function Auth() {
     const email = data.email.trim().toLowerCase();
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      });
+      // The recovery email template delivers a 6-digit code ({{ .Token }})
+      // rather than a link, so mail-security link scanners cannot consume it.
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
 
       if (error) {
         setError(error.message);
-      } else {
-        // Supabase does not reveal whether the address is registered, so the
-        // message is phrased neutrally rather than confirming an account exists.
-        setSuccessMessage(`If an account exists for ${email}, we've sent a password reset link. Check your inbox and spam folder.`);
-        forgotPasswordForm.reset();
+        return;
       }
+
+      // Hand the email over via router state (not the URL) so the code-entry
+      // page can prefill it without confirming whether the account exists.
+      navigate('/reset-password', { state: { email } });
     } catch (err) {
       setError('An unexpected error occurred. Please try again.');
     } finally {
@@ -325,7 +325,7 @@ export default function Auth() {
             <CardHeader>
               <CardTitle>Reset your password</CardTitle>
               <CardDescription>
-                Enter the email for your account and we'll send you a link to choose a new password.
+                Enter the email for your account and we'll send you a 6-digit code to choose a new password.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -369,7 +369,7 @@ export default function Auth() {
                     Sending...
                   </>
                 ) : (
-                  'Send Reset Link'
+                  'Send Reset Code'
                 )}
               </Button>
               <Button type="button" variant="ghost" className="w-full" onClick={closeForgotPassword}>
