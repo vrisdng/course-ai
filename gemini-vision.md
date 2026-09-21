@@ -8,10 +8,10 @@ Reference documentation for how this project uses the Google Gemini API for docu
 
 | Purpose | Endpoint | Model |
 |---------|----------|-------|
-| **Text extraction (Vision)** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent` | `gemini-3.6-flash` |
+| **Text extraction (Vision)** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent` | `gemini-3.8-flash` |
 | **Embeddings** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent` | `gemini-embedding-001` |
 
-Both are called from the `parse-document` edge function using the `GEMINI_API_KEY` secret.
+Both are called from the `process-material-job` edge function (queued by `parse-document`) using the `GEMINI_API_KEY` secret. The pure helpers (prompt, base64, page-range planning, retry) live in `supabase/functions/_shared/extraction.ts` and are unit tested.
 
 ---
 
@@ -35,7 +35,7 @@ We send files to Gemini's multimodal `generateContent` API using the **base64 in
 ```
 
 ### Extraction prompt
-The system prompt instructs Gemini to preserve structure (headings, lists, tables, formulas) and return **only** raw text — no summaries or commentary.
+The system prompt instructs Gemini to preserve structure (headings, lists, tables, formulas) and return **only** raw text — no summaries or commentary. For PDFs longer than 16 pages the prompt is scoped to a page range (`pages A to B`, labelled with the document's real page numbers) and the whole file is sent each time; see §5.
 
 ### Temperature
 Set to `0` for deterministic, faithful text extraction. This minimizes hallucination and ensures consistent output across retries.
@@ -76,9 +76,11 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 
 ### Free Tier (Google AI Studio API key)
 
+> ⚠️ Measured 2026-09-21: on the free tier this project's key was limited to **5 RPM per model** (`GenerateRequestsPerMinutePerProjectPerModel-FreeTier`) and received `503 UNAVAILABLE "high demand"` on every model, including plain text requests, because free traffic is shed first under load. Billing was enabled that day; the project is now on the paid tier and the burst test went 30/30 with no 429/503. The numbers below are Google's published free-tier figures, kept for reference.
+
 | Constraint | Limit |
 |------------|-------|
-| Requests per minute (RPM) | 15 |
+| Requests per minute (RPM) | 15 (measured: 5 on `gemini-3.8-flash`) |
 | Requests per day (RPD) | 1,500 |
 | Tokens per minute (TPM) | 1,000,000 |
 | Max inline data size | ~20 MB base64 (~15 MB raw file) |
@@ -109,9 +111,9 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 ## 5. Large File Handling
 
 - **Hard limit**: Files over **15 MB** raw are rejected before sending to Gemini (the 20 MB base64 ceiling would be exceeded).
-- **PDF page count**: Documents with >50 pages may time out or produce truncated output. Consider splitting into page ranges for large PDFs.
-- **Edge function timeout**: Default is **60 seconds**. Large documents with many chunks may exceed this. The function processes chunks sequentially.
-- **Chunk batching**: Embeddings are generated one chunk at a time. A 50-page PDF may produce ~40+ chunks, requiring ~40 embedding API calls.
+- **Page-range extraction** (`process-material-job`): `pdf-lib` counts the pages (<100 ms even for a 5 MB deck). PDFs of ≤16 pages are extracted in one call. Longer PDFs are extracted 16 pages per call; after each range the segments are saved into the job payload (`payload.extraction`), and once an invocation has used ~70 s the job is requeued and re-invoked so the next run resumes from the next page. A killed or timed-out run therefore loses at most one range, not the whole document. Measured on `gemini-3.8-flash`, paid tier: ~1.4 s/page (47 pages in 89 s as one call; 8 pages in 11 s).
+- **Per-call timeout**: every Vision call has a 90 s `AbortSignal.timeout` so a hung request fails the attempt instead of freezing the job.
+- **Embedding batching**: chunks are embedded via `batchEmbedContents` (100 per call) in resumable slices of 50 per invocation.
 
 ---
 
@@ -119,20 +121,14 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 
 ### Current implementation
 
-1. If a **429 (rate limited)** response is received during embedding generation:
-   - Wait **2 seconds**
-   - Retry the request **once**
-   - If the retry also fails, the entire job is marked as `failed`
+1. **Vision text extraction** (`fetchWithRetry` in `_shared/extraction.ts`): `429`, any `5xx` (incl. the `503 "high demand"` shed), and network errors are retried up to 3 times with exponential backoff **2 s → 4 s → 8 s** plus up to 1 s jitter. Aborts (the 90 s per-call timeout) are not retried. After the retry budget the job attempt fails with the last error; the job keeps its `attempt_count` (max 5) and can be re-claimed.
 
-2. If a **429** is received during Vision text extraction:
-   - The error is thrown immediately with a descriptive message
-   - The material is marked as `failed` with the error details
+2. **Embedding generation**: unchanged — wait 2 s, retry once, then fail the attempt.
 
-### Recommendations for improvement
+### Remaining recommendations
 
-- Implement exponential backoff (2s → 4s → 8s) for embedding calls
-- Add a request queue to stay within 15 RPM on free tier
-- For bulk uploads, add delays between documents (4s minimum between Vision calls)
+- Apply the same backoff helper to the embedding calls
+- Schedule `reap-stale-jobs` (no `pg_cron` entry exists) so failed/stale attempts are actually retried without an admin click
 
 ---
 
@@ -141,13 +137,12 @@ Set to `0` for deterministic, faithful text extraction. This minimizes hallucina
 | Document type | Typical processing time | Risk |
 |---------------|------------------------|------|
 | Single image (OCR) | 3–8 seconds | Low |
-| Short PDF (<10 pages) | 5–15 seconds | Low |
-| Medium PDF (10–30 pages) | 15–40 seconds | Medium |
-| Large PDF (30–50 pages) | 30–60+ seconds | High — may timeout |
+| PDF ≤16 pages (one call) | 5–25 seconds | Low |
+| PDF >16 pages (page ranges) | ~1.4 s/page across several invocations | Low — resumable |
 | DOCX (any size) | 1–3 seconds | Very low (no API call) |
 | PPTX (any size) | 1–5 seconds | Very low (no API call) |
 
-The edge function timeout is **60 seconds** by default. Processing includes: download + extraction + chunking + N embedding calls.
+Supabase Edge Runtime limits (hosted): **150 s wall clock per worker on the free plan (400 s paid), 2 s CPU time per request, 256 MB memory**. Before page-range extraction a single full-document call on a 47-page deck took 89–125 s on the paid tier and never returned within 290 s on the free tier, which is how jobs ended up frozen at "extracting".
 
 ---
 
@@ -187,7 +182,7 @@ A typical 20-page PDF costs approximately **$0.005–0.01** total.
 
 | Error | HTTP Status | Cause | Action |
 |-------|-------------|-------|--------|
-| Rate limit exceeded | `429` | Too many requests per minute/day | Retry after backoff; material marked `failed` |
+| Rate limit exceeded / unavailable | `429` / `503` | Quota or Google-side load shedding | Retried with backoff (3×); attempt marked `failed` if all retries fail |
 | Payload too large | `413` | File exceeds inline data limit | Reject with message to split document |
 | No text extracted | N/A | Gemini returned empty response | Material marked `failed` with error |
 | GEMINI_API_KEY missing | `500` | Secret not configured | Return 500 before processing |
