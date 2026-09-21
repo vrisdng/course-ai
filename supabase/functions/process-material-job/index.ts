@@ -578,6 +578,8 @@ async function requeueJobAndContinue(options: {
   supabaseKey: string;
   jobId: string;
   materialId: string;
+  // attempt_count as returned by the claim (already incremented for this run).
+  attemptCount: number;
   payload: JobPayload;
 }): Promise<void> {
   await options.adminClient
@@ -587,6 +589,11 @@ async function requeueJobAndContinue(options: {
       last_error: null,
       locked_at: null,
       locked_by: null,
+      // A continuation is not a failed attempt. The next claim increments
+      // again, so handing back this run's increment keeps the count flat
+      // across continuations and only genuine failures consume the budget
+      // of MAX_JOB_ATTEMPTS.
+      attempt_count: Math.max(0, options.attemptCount - 1),
       payload: options.payload as unknown as Record<string, unknown>,
       updated_at: new Date().toISOString(),
     })
@@ -675,6 +682,7 @@ serve(async (req: Request) => {
     materialIdForError = job.material_id;
     const claimedJobId: string = job.id;
     const claimedMaterialId: string = job.material_id;
+    const claimedAttemptCount: number = Number(job.attempt_count) || 0;
 
     // Max attempts guard (also enforced in SQL, but belt-and-suspenders)
     if (job.attempt_count > MAX_JOB_ATTEMPTS) {
@@ -796,6 +804,7 @@ serve(async (req: Request) => {
               supabaseKey,
               jobId: claimedJobId,
               materialId: claimedMaterialId,
+              attemptCount: claimedAttemptCount,
               payload: { filePath, fileType, bucketName, extraction: result.state },
             });
             return new Response(
@@ -1076,6 +1085,7 @@ serve(async (req: Request) => {
       supabaseKey,
       jobId: claimedJobId,
       materialId: claimedMaterialId,
+      attemptCount: claimedAttemptCount,
       payload: updatedPayload,
     });
 
