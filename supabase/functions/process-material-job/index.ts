@@ -14,6 +14,7 @@ import {
   type PageRange,
 } from "../_shared/extraction.ts";
 import { countPdfPages } from "../_shared/pdfPages.ts";
+import { generateDocumentText } from "../_shared/llm.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -75,15 +76,21 @@ const EMBEDDING_BATCH_API_SIZE = 100;
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
 
+// OCR for PDFs and images goes through OpenAI via the shared llm.ts wrapper
+// (file/image parts inline). Gemini Vision is kept only for legacy .doc,
+// which OpenAI does not accept as a file input.
+const OCR_MODEL = "gpt-5.6-luna";
+const OCR_MAX_OUTPUT_TOKENS = 32_000;
 const GEMINI_VISION_MODEL = "gemini-3.8-flash";
 const GEMINI_GENERATE_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent`;
 
-// Extraction of a long PDF is split into page ranges so that no single Gemini
+// Extraction of a long PDF is split into page ranges so that no single OCR
 // call, and no single invocation, approaches the Edge Runtime wall-clock limit
-// (150s on the free plan). Measured on a 47-page deck: ~1.4s/page, so a
-// 16-page range is ~25s. After each range the segments are persisted to the
-// job payload; once the invocation budget is spent the job is requeued and the
+// (150s on the free plan). Measured on a 47-page deck with gpt-5.6-luna:
+// 8 pages in 27s, all 47 in 85s (~15s fixed + ~1.5s/page), so a 16-page
+// range is ~40s. After each range the segments are persisted to the job
+// payload; once the invocation budget is spent the job is requeued and the
 // next invocation resumes from the next page.
 const EXTRACTION_PAGES_PER_CALL = 16;
 const EXTRACTION_CALL_TIMEOUT_MS = 90_000;
@@ -293,6 +300,43 @@ async function extractTextWithGemini(
   return { text, segments: [{ text, pageNumber: options.range?.start ?? 1 }] };
 }
 
+interface OpenAiExtractionOptions {
+  base64Data: string;
+  mimeType: string;
+  filename: string;
+  openAiApiKey: string;
+  pageMarkers: boolean;
+  range?: PageRange;
+}
+
+async function extractTextWithOpenAI(
+  options: OpenAiExtractionOptions,
+): Promise<{ text: string; segments: ExtractedSegment[] }> {
+  const text = await generateDocumentText({
+    apiKey: options.openAiApiKey,
+    model: OCR_MODEL,
+    prompt: buildExtractionPrompt({ pageMarkers: options.pageMarkers, range: options.range }),
+    file: { base64Data: options.base64Data, mimeType: options.mimeType, filename: options.filename },
+    maxOutputTokens: OCR_MAX_OUTPUT_TOKENS,
+    maxRetries: 3,
+    signal: AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS),
+  });
+
+  if (!options.pageMarkers) {
+    return { text, segments: [{ text, pageNumber: null }] };
+  }
+
+  const parsedSegments = parseGeminiPageSegments(text);
+  if (parsedSegments.length > 0) {
+    return {
+      text: parsedSegments.map((segment) => segment.text).join("\n\n"),
+      segments: parsedSegments,
+    };
+  }
+
+  return { text, segments: [{ text, pageNumber: options.range?.start ?? 1 }] };
+}
+
 interface PdfExtractionResult {
   done: boolean;
   state: ExtractionState;
@@ -304,7 +348,8 @@ interface PdfExtractionResult {
 async function extractPdfInRanges(options: {
   fileBytes: Uint8Array;
   base64Data: string;
-  geminiApiKey: string;
+  filename: string;
+  openAiApiKey: string;
   state: ExtractionState | null;
   startedAt: number;
   onProgress: (progress: number) => Promise<void>;
@@ -315,10 +360,11 @@ async function extractPdfInRanges(options: {
     const totalPages = await countPdfPages(options.fileBytes);
     if (totalPages === null || totalPages <= EXTRACTION_PAGES_PER_CALL) {
       // Short document (or unknown length): one call, as before.
-      const extraction = await extractTextWithGemini({
+      const extraction = await extractTextWithOpenAI({
         base64Data: options.base64Data,
         mimeType: "application/pdf",
-        geminiApiKey: options.geminiApiKey,
+        filename: options.filename,
+        openAiApiKey: options.openAiApiKey,
         pageMarkers: true,
       });
       const pages = totalPages ?? Math.max(1, ...extraction.segments.map((s) => s.pageNumber ?? 1));
@@ -335,10 +381,11 @@ async function extractPdfInRanges(options: {
 
   while (range) {
     console.log(`Extracting pages ${range.start}-${range.end} of ${state.totalPages}`);
-    const extraction = await extractTextWithGemini({
+    const extraction = await extractTextWithOpenAI({
       base64Data: options.base64Data,
       mimeType: "application/pdf",
-      geminiApiKey: options.geminiApiKey,
+      filename: options.filename,
+      openAiApiKey: options.openAiApiKey,
       pageMarkers: true,
       range,
     });
@@ -578,6 +625,13 @@ serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!openAiApiKey) {
+      return new Response(
+        JSON.stringify({ error: "OPENAI_API_KEY is not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!geminiApiKey) {
       return new Response(
@@ -724,7 +778,8 @@ serve(async (req: Request) => {
           const result = await extractPdfInRanges({
             fileBytes,
             base64Data,
-            geminiApiKey,
+            filename: filePath.split("/").pop() || "document.pdf",
+            openAiApiKey,
             state: payload.extraction ?? null,
             startedAt: invocationStartedAt,
             onProgress: updateExtractionProgress,
@@ -760,10 +815,11 @@ serve(async (req: Request) => {
         case "jpeg":
         case "webp":
         case "gif": {
-          const extraction = await extractTextWithGemini({
+          const extraction = await extractTextWithOpenAI({
             base64Data,
             mimeType: getMimeType(ext, filePath),
-            geminiApiKey,
+            filename: filePath.split("/").pop() || `image.${ext}`,
+            openAiApiKey,
             pageMarkers: false,
           });
           extractedSegments = extraction.segments;

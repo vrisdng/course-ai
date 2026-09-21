@@ -65,9 +65,9 @@ Admins upload course materials in two pipelines, both async and job-tracked.
 
 - ⏱ **15 MB** size limit (Gemini inline-vision constraint).
 - Supported: `pdf, png, jpg, jpeg, webp, gif, doc, docx, pptx`. Not supported: legacy `.ppt`, `.xls`/`.xlsx`.
-- `docx`/`pptx` are parsed directly from their XML (no AI call); `pdf`/images/`doc` go through Gemini Vision for text extraction.
+- `docx`/`pptx` are parsed directly from their XML (no AI call); `pdf`/images are OCR'd by OpenAI (`gpt-5.6-luna`, file/image sent inline via the shared `_shared/llm.ts` wrapper); legacy `.doc` still goes through Gemini Vision.
 - Upload enqueues a `material_processing_jobs` row and fires the worker; extraction happens off the upload request.
-- ⏱ Runs under Supabase's edge limits (**150 s** wall clock on the free plan, 2 s CPU). PDFs over 16 pages are OCR'd in **16-page ranges** with progress saved to the job after each range, so long decks span several worker runs instead of timing out. Gemini `429`/`503` responses are retried with exponential backoff (2 s → 4 s → 8 s, 3 retries); each Vision call has a 90 s timeout.
+- ⏱ Runs under Supabase's edge limits (**150 s** wall clock on the free plan, 2 s CPU). PDFs over 16 pages are OCR'd in **16-page ranges** with progress saved to the job after each range, so long decks span several worker runs instead of timing out. `429`/`5xx` responses are retried with exponential backoff (3 retries); each OCR call has a 90 s timeout.
 - Extracted text is chunked (⏱ 1200 chars/chunk, 200-char overlap, ~1000-char step) and embedded, ⏱ up to 3 retry attempts per embedding call.
 - ⏱ Hard caps: 500,000 characters of extracted text, and 250 chunks per document — documents exceeding either are rejected rather than silently truncated.
 
@@ -124,7 +124,7 @@ Students and admins can update their profile and set **custom instructions** (se
 
 - **Frontend**: React 18, Vite, TypeScript, React Router, TanStack Query, Tailwind CSS, shadcn/ui (Radix primitives).
 - **Backend**: Supabase — Postgres with pgvector, Row Level Security, Edge Functions (Deno).
-- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat; `gpt-5.6-luna` for flashcards), Gemini (`gemini-embedding-001` for embeddings, `gemini-3.8-flash` Vision for document OCR), AssemblyAI (video transcription).
+- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat; `gpt-5.6-luna` for flashcards), Gemini (`gemini-embedding-001` for embeddings; `gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-5.6-luna`, AssemblyAI (video transcription).
 
 ## Local development
 

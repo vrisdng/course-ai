@@ -2,13 +2,16 @@
 
 Reference documentation for how this project uses the Google Gemini API for document text extraction and embedding generation.
 
+> **2026-09-21:** PDF and image OCR moved to **OpenAI `gpt-5.6-luna`** (file/image parts inline, via `_shared/llm.ts#generateDocumentText`), so the deployed Gemini key no longer gates ingestion of the common formats. Gemini Vision now handles only legacy `.doc`; embeddings are unchanged. The page-range/resume/backoff mechanics described below apply to both providers. Measured on the same 47-page deck: luna 8 pages in 27 s, all 47 in 85 s; identical text for the first 8 pages whether asked for a range or the whole document.
+
 ---
 
 ## 1. API Endpoint & Model
 
 | Purpose | Endpoint | Model |
 |---------|----------|-------|
-| **Text extraction (Vision)** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent` | `gemini-3.8-flash` |
+| **Text extraction (Vision)** — legacy `.doc` only | `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent` | `gemini-3.8-flash` |
+| **Text extraction** — PDF + images | OpenAI chat completions via `_shared/llm.ts` | `gpt-5.6-luna` |
 | **Embeddings** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent` | `gemini-embedding-001` |
 
 Both are called from the `process-material-job` edge function (queued by `parse-document`) using the `GEMINI_API_KEY` secret. The pure helpers (prompt, base64, page-range planning, retry) live in `supabase/functions/_shared/extraction.ts` and are unit tested.

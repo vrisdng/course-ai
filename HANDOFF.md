@@ -91,7 +91,7 @@ The items below are **resolved** and kept here only as history. The active backl
 
 **Not swapped — still on Gemini, deliberately:**
 - **Embeddings** (`gemini-embedding-001`, used in `ingest-material`, `process-material-job`, `transcribe-video`, `rag-chat`'s `embedQuery`). Switching embedding models means re-embedding every existing chunk in pgvector — vectors from different models aren't comparable. Not attempted; would need its own migration.
-- **`process-material-job`'s `extractTextWithGemini`** — this isn't chat, it's document OCR: raw PDF/image bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.
+- **`process-material-job`'s `extractTextWithGemini`** — now used only for legacy `.doc` (PDF/image OCR moved to OpenAI `gpt-5.6-luna` via `_shared/llm.ts#generateDocumentText` on 2026-09-21). It's document OCR: raw file bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.
 
 ## Candidate: GLM-OCR as a cheaper document-OCR alternative
 

@@ -4,8 +4,10 @@
 import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
 import { generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
 import {
+  buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
   requireGeneratedText,
+  type DocumentInput,
   type ReasoningEffort,
 } from "./llmConfig.ts";
 
@@ -101,6 +103,36 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
       await options.onTextDelta(fallbackText);
     }
     return fallbackText;
+  } catch (error) {
+    wrapProviderError(error);
+  }
+}
+
+export interface DocumentTextOptions {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  file: DocumentInput;
+  maxOutputTokens?: number;
+  // Retries on 429/5xx with the SDK's exponential backoff.
+  maxRetries?: number;
+  signal?: AbortSignal;
+}
+
+// Text extraction from a PDF or image: the file travels inline as a message
+// part, so no upload step is needed. Same provider/model plumbing as chat.
+export async function generateDocumentText(options: DocumentTextOptions): Promise<string> {
+  try {
+    const result = await generateText({
+      model: toOpenAiModel(options.apiKey, options.model),
+      messages: buildDocumentExtractionMessages(options.prompt, options.file),
+      temperature: 0,
+      // AI SDK v4 option name (v5 renamed it to maxOutputTokens).
+      maxTokens: options.maxOutputTokens ?? 32_000,
+      maxRetries: options.maxRetries ?? 3,
+      abortSignal: options.signal,
+    });
+    return requireGeneratedText(result.text, options.model, result.finishReason);
   } catch (error) {
     wrapProviderError(error);
   }
