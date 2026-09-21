@@ -769,8 +769,17 @@ serve(async (req: Request) => {
         `Resuming job ${jobIdForUpdate}: embedding from chunk ${embeddedUpTo}/${totalChunks}`,
       );
     } else {
-      // Fresh job — extract text, chunk, then start embedding
+      // Fresh job, or a continuation of a partly extracted PDF — extract
+      // text, chunk, then start embedding
       embeddedUpTo = 0;
+      const resumedExtraction = payload.extraction;
+      const initialProgress = resumedExtraction
+        ? Math.round(
+            EXTRACTION_PROGRESS_START +
+              (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) *
+                ((resumedExtraction.nextPage - 1) / resumedExtraction.totalPages),
+          )
+        : EXTRACTION_PROGRESS_START;
 
       await adminClient
         .from("materials")
@@ -778,7 +787,7 @@ serve(async (req: Request) => {
           processing_status: "processing",
           processing_error: null,
           processing_stage: "extracting",
-          processing_progress: EXTRACTION_PROGRESS_START,
+          processing_progress: initialProgress,
         })
         .eq("id", materialIdForError);
 
