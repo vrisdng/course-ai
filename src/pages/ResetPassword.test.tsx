@@ -57,11 +57,18 @@ describe('ResetPassword', () => {
       expect(mocks.verifyOtp).not.toHaveBeenCalled();
     });
 
-    it('requires a 6-digit numeric code', async () => {
+    it('accepts any project OTP length from 6 to 10 digits', async () => {
+      renderPage(withEmail('student@example.test'));
+      fireEvent.change(screen.getByLabelText('Verification Code'), { target: { value: '33526675' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
+      await waitFor(() => expect(mocks.verifyOtp).toHaveBeenCalledWith(expect.objectContaining({ token: '33526675' })));
+    });
+
+    it('rejects non-numeric or too-short codes', async () => {
       renderPage(withEmail('student@example.test'));
       fireEvent.change(screen.getByLabelText('Verification Code'), { target: { value: '12ab' } });
       fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
-      expect(await screen.findByText('Enter the 6-digit code from the email')).toBeInTheDocument();
+      expect(await screen.findByText('Enter the numeric code from the email')).toBeInTheDocument();
       expect(mocks.verifyOtp).not.toHaveBeenCalled();
     });
 

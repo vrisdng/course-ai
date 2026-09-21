@@ -178,7 +178,7 @@ export default function Auth() {
     const email = data.email.trim().toLowerCase();
 
     try {
-      // The recovery email template delivers a 6-digit code ({{ .Token }})
+      // The recovery email template delivers a one-time code ({{ .Token }})
       // rather than a link, so mail-security link scanners cannot consume it.
       const { error } = await supabase.auth.resetPasswordForEmail(email);
 
@@ -325,7 +325,7 @@ export default function Auth() {
             <CardHeader>
               <CardTitle>Reset your password</CardTitle>
               <CardDescription>
-                Enter the email for your account and we'll send you a 6-digit code to choose a new password.
+                Enter the email for your account and we'll send you a one-time code to choose a new password.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

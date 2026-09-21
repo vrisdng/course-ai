@@ -14,7 +14,7 @@ import { AlertCircle, CheckCircle2, GraduationCap, KeyRound, Loader2, Lock, Mail
 
 const verifyCodeSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
-  code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code from the email'),
+  code: z.string().regex(/^\d{6,10}$/, 'Enter the numeric code from the email'),
 });
 
 const newPasswordSchema = z.object({
@@ -91,6 +91,8 @@ export default function ResetPassword() {
     setError(null);
 
     try {
+      // Supabase OTP length is a project setting (6-10 digits), so the
+      // exact length is not enforced here.
       // A successful verification establishes a session; the auth context
       // picks it up and this page switches to the new-password form.
       const { error: verifyError } = await supabase.auth.verifyOtp({
@@ -222,8 +224,8 @@ export default function ResetPassword() {
               <CardTitle>Enter your reset code</CardTitle>
               <CardDescription>
                 {handedOverEmail
-                  ? `We emailed a 6-digit code to ${handedOverEmail}. It expires in 60 minutes.`
-                  : 'Enter the email for your account and the 6-digit code from the reset email.'}
+                  ? `We emailed a one-time code to ${handedOverEmail}. It expires in 60 minutes.`
+                  : 'Enter the email for your account and the one-time code from the reset email.'}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -261,8 +263,8 @@ export default function ResetPassword() {
                     type="text"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    maxLength={6}
-                    placeholder="123456"
+                    maxLength={10}
+                    placeholder="12345678"
                     className="pl-10 tracking-[0.3em]"
                     {...verifyForm.register('code')}
                   />
