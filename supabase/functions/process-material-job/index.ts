@@ -91,10 +91,13 @@ const GEMINI_GENERATE_URL =
 // 8 pages in 27s, all 47 in 85s (~15s fixed + ~1.5s/page), so a 16-page
 // range is ~40s. After each range the segments are persisted to the job
 // payload; once the invocation budget is spent the job is requeued and the
-// next invocation resumes from the next page.
+// next invocation resumes from the next page. The budget is checked between
+// ranges, so worst case per invocation is budget + one range + chunk/embed
+// slice: ~45s + ~40s + ~15s, comfortably inside the 150s free-plan limit.
+// (A 47-page deck ran 3 ranges + embedding in one 114s invocation at 70s.)
 const EXTRACTION_PAGES_PER_CALL = 16;
 const EXTRACTION_CALL_TIMEOUT_MS = 90_000;
-const EXTRACTION_INVOCATION_BUDGET_MS = 70_000;
+const EXTRACTION_INVOCATION_BUDGET_MS = 45_000;
 const EXTRACTION_PROGRESS_START = 25;
 const EXTRACTION_PROGRESS_END = 50;
 
