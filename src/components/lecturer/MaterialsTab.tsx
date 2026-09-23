@@ -44,6 +44,7 @@ import { useMaterialActions } from '@/features/materials/useMaterialActions';
 import { useBulkAcademicTermUpdate } from '@/features/materials/useBulkAcademicTermUpdate';
 import { useMaterialsList } from '@/features/materials/useMaterialsList';
 import type { AcademicTerm, AccessScope, Course, Material } from '@/features/materials/types';
+import { stackedTable } from '@/lib/responsiveTable';
 
 function formatDuration(durationMs: number | null | undefined) {
   if (typeof durationMs !== 'number' || durationMs <= 0) {
@@ -703,8 +704,8 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
           )}
 
           <div className="overflow-x-auto">
-            <Table className="min-w-[760px]">
-              <TableHeader>
+            <Table className="sm:min-w-[760px]">
+              <TableHeader className={stackedTable.header}>
                 <TableRow>
                   {bulkTermUpdate.isSelecting && (
                     <TableHead className="w-10">
@@ -747,9 +748,9 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                   </TableRow>
                 ) : (
                   list.materials.map((material) => (
-                    <TableRow key={material.id}>
+                    <TableRow key={material.id} className={`${stackedTable.row} relative`}>
                       {bulkTermUpdate.isSelecting && (
-                        <TableCell>
+                        <TableCell className={`${stackedTable.plainCell} float-left pr-3 pt-1.5 sm:float-none sm:pr-4`}>
                           <Checkbox
                             aria-label={`Select ${material.file_name}`}
                             checked={bulkTermUpdate.selectedMaterialIds.has(material.id)}
@@ -757,7 +758,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                           />
                         </TableCell>
                       )}
-                      <TableCell className="font-medium">
+                      <TableCell className={`${stackedTable.plainCell} pr-10 font-medium sm:pr-4`}>
                         <div className="flex items-center gap-2">
                           {material.file_type === 'video' ? <Video className="h-4 w-4 text-primary" /> : <FileText className="h-4 w-4 text-muted-foreground" />}
                           <div className="min-w-0">
@@ -768,11 +769,11 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>{material.academic_term_id ? termLabelById[material.academic_term_id] || 'Unknown term' : '-'}</TableCell>
-                      <TableCell>{courseLabelById[material.course_id] || 'Unknown course'}</TableCell>
-                      <TableCell>{renderAccessBadge(material.access_scope)}</TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
+                      <TableCell data-label="Term" className={stackedTable.cell}>{material.academic_term_id ? termLabelById[material.academic_term_id] || 'Unknown term' : '-'}</TableCell>
+                      <TableCell data-label="Course" className={stackedTable.cell}>{courseLabelById[material.course_id] || 'Unknown course'}</TableCell>
+                      <TableCell data-label="Access" className={stackedTable.cell}>{renderAccessBadge(material.access_scope)}</TableCell>
+                      <TableCell data-label="Status" className={stackedTable.cell}>
+                        <div className="inline-block space-y-1 align-top sm:block">
                           {renderStatusBadge(material)}
                           {material.processing_status === 'processing' ? (
                             <div className="max-w-56 space-y-1">
@@ -783,8 +784,8 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                           ) : null}
                         </div>
                       </TableCell>
-                      <TableCell>{formatBytes(material.file_size)}</TableCell>
-                      <TableCell className="sticky right-0 z-10 border-l bg-inherit px-2">
+                      <TableCell data-label="Size" className={stackedTable.cell}>{formatBytes(material.file_size)}</TableCell>
+                      <TableCell className="absolute right-0 top-2 z-10 p-0 sm:sticky sm:top-auto sm:table-cell sm:border-l sm:bg-inherit sm:px-2 sm:py-4">
                         <div className="flex justify-end">
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>

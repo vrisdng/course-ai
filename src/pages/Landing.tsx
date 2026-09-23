@@ -211,7 +211,7 @@ export default function Landing() {
     <div className="min-h-screen bg-background text-foreground">
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
-        <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+        <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
           <Link to="/" className="flex items-baseline gap-1">
             <img src="/logo.png" alt="" className="mr-2 h-6 w-6" />
             <span className="text-lg font-semibold tracking-tight">EduChat</span>
@@ -236,7 +236,7 @@ export default function Landing() {
       {/* Hero */}
       <section className="relative overflow-hidden bg-grid">
         <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-1/2 particle-field md:block" aria-hidden="true" />
-        <div className="relative mx-auto max-w-6xl px-6 pb-20 pt-16 md:pt-24">
+        <div className="relative mx-auto max-w-6xl px-4 sm:px-6 pb-20 pt-16 md:pt-24">
           <div className="mb-6 flex items-center gap-3">
             <span className="h-px w-8 bg-foreground/40" />
             <span className="mono-label">Simple answers from your course</span>
@@ -262,7 +262,7 @@ export default function Landing() {
 
       {/* Invite card — shown inline when arriving via an enrollment link */}
       {showInviteCard && (
-        <section id="access" className="mx-auto max-w-6xl px-6 py-12">
+        <section id="access" className="mx-auto max-w-6xl px-4 sm:px-6 py-12">
           <Card className="mx-auto w-full max-w-xl rounded-none border-border text-left">
             <CardHeader>
               <CardTitle>Course Enrollment Invite</CardTitle>
@@ -398,7 +398,7 @@ export default function Landing() {
 
       {/* How it works — a real sequence, so numbered markers earn their place */}
       <section id="how" className="bg-primary text-primary-foreground">
-        <div className="mx-auto max-w-6xl px-6 py-24">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-24">
           <span className="mono-label text-primary-foreground/60">How it works</span>
           <div className="mt-12 grid gap-px overflow-hidden border border-primary-foreground/15 bg-primary-foreground/15 md:grid-cols-3">
             {[
@@ -430,7 +430,7 @@ export default function Landing() {
 
       {/* For courses */}
       <section id="courses" className="border-t border-border">
-        <div className="mx-auto grid max-w-6xl gap-12 px-6 py-24 md:grid-cols-2">
+        <div className="mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 py-24 md:grid-cols-2">
           <div>
             <span className="mono-label">For courses</span>
             <h2 className="mt-6 max-w-md text-3xl font-medium tracking-tight md:text-4xl">
@@ -457,7 +457,7 @@ export default function Landing() {
 
       {/* Closing CTA */}
       <section className="border-t border-border bg-grid">
-        <div className="mx-auto max-w-6xl px-6 py-24 text-center">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-24 text-center">
           <h2 className="display-xl mx-auto max-w-3xl text-foreground" style={{ fontSize: 'clamp(2.5rem, 7vw, 5rem)' }}>
             Start asking
           </h2>
@@ -470,7 +470,7 @@ export default function Landing() {
       </section>
 
       <footer className="border-t border-border">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-10 text-sm text-muted-foreground sm:flex-row">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:px-6 py-10 text-sm text-muted-foreground sm:flex-row">
           <div className="flex items-center gap-2">
             <img src="/logo.png" alt="" className="h-5 w-5" />
             <span className="font-medium text-foreground">EduChat</span>

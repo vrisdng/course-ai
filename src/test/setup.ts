@@ -13,3 +13,13 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => {},
   }),
 });
+
+// Radix popovers/menus measure their anchors; jsdom has no ResizeObserver.
+if (typeof window.ResizeObserver === "undefined") {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  window.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}

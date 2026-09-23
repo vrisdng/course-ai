@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, FileText, Info, Loader2 } from 'lucide-react
 
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 
 import { PdfReader } from './PdfReader';
@@ -33,6 +34,7 @@ export function SourcesPanel({
   onOpenPanel,
   onClosePanel,
 }: SourcesPanelProps) {
+  const isMobile = useIsMobile();
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [dragging, setDragging] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -73,27 +75,34 @@ export function SourcesPanel({
 
   const isPdf = activeViewerSource?.kind === 'pdf';
   const page = ensureStartingPage(activeViewerSource?.pageNumber);
+  // On phones the panel covers the chat instead of sharing the row, so the drag width is ignored.
+  const isMobileOverlay = isMobile && showSidePanel;
 
   return (
     <>
       <aside
-        style={{ width: showSidePanel ? width : 0 }}
+        style={isMobileOverlay ? undefined : { width: showSidePanel ? width : 0 }}
         className={cn(
-          'relative h-full shrink-0 border-l border-border bg-muted/30 overflow-hidden',
+          'shrink-0 border-l border-border bg-muted/30 overflow-hidden',
+          isMobileOverlay
+            ? 'fixed inset-x-0 bottom-0 top-16 z-40 w-full bg-background'
+            : 'relative h-full',
           dragging ? 'transition-none' : 'transition-[width] duration-150',
         )}
       >
         {showSidePanel && (
           <>
-            <div
-              onMouseDown={startResize}
-              className="absolute left-0 top-0 z-20 h-full w-1.5 cursor-ew-resize hover:bg-border/60"
-              role="slider"
-              aria-label="Resize sources panel"
-              aria-valuemin={MIN_WIDTH}
-              aria-valuemax={MAX_WIDTH}
-              aria-valuenow={width}
-            />
+            {!isMobile && (
+              <div
+                onMouseDown={startResize}
+                className="absolute left-0 top-0 z-20 h-full w-1.5 cursor-ew-resize hover:bg-border/60"
+                role="slider"
+                aria-label="Resize sources panel"
+                aria-valuemin={MIN_WIDTH}
+                aria-valuemax={MAX_WIDTH}
+                aria-valuenow={width}
+              />
+            )}
             <div className="flex h-full flex-col pl-2">
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-2 py-2">
                 <h3 className="flex items-center gap-2 font-semibold text-foreground">
