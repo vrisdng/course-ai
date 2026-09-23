@@ -1,17 +1,27 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { chunkText } from "../_shared/chunking.ts";
 import { renderPdfPageToPng } from "../_shared/pdfThumbnail.ts";
+import {
+  buildExtractionPrompt,
+  encodeBytesToBase64,
+  fetchWithRetry,
+  initialPagesPerCall,
+  MIN_PAGES_PER_CALL,
+  nextExtractionRange,
+  normalizeRangeSegments,
+  parseGeminiPageSegments,
+  shrinkPagesPerCall,
+  type ExtractedSegment,
+  type PageRange,
+} from "../_shared/extraction.ts";
+import { countPdfPages } from "../_shared/pdfPages.ts";
+import { generateDocumentText } from "../_shared/llm.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
   workerId?: string;
-}
-
-interface ExtractedSegment {
-  text: string;
-  pageNumber: number | null;
 }
 
 interface ChunkData {
@@ -21,10 +31,22 @@ interface ChunkData {
   pageNumber: number | null;
 }
 
+// Resumable extraction state for multi-page PDFs: pages [1, nextPage) are done.
+// Persisted to the job payload after every range, so a killed run loses at
+// most one range. pagesPerCall shrinks when a call times out.
+interface ExtractionState {
+  segments: ExtractedSegment[];
+  nextPage: number;
+  totalPages: number;
+  pagesPerCall: number;
+}
+
 interface JobPayload {
   filePath: string;
   fileType: string;
   bucketName: string;
+  // Resumable state — set while a PDF is being extracted in page ranges
+  extraction?: ExtractionState;
   // Resumable state — set after extraction+chunking is done
   chunks?: ChunkData[];
   embeddedUpTo?: number; // index of first un-embedded chunk
@@ -59,6 +81,26 @@ const EMBEDDING_BATCH_API_SIZE = 100;
 
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
+
+// OCR for PDFs and images goes through OpenAI via the shared llm.ts wrapper
+// (file/image parts inline). Gemini Vision is kept only for legacy .doc,
+// which OpenAI does not accept as a file input.
+const OCR_MODEL = "gpt-5.6-luna";
+const OCR_MAX_OUTPUT_TOKENS = 32_000;
+const GEMINI_VISION_MODEL = "gemini-3.8-flash";
+const GEMINI_GENERATE_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent`;
+
+// A long PDF is OCR'd one page range per invocation: claim, download, one
+// OCR call, save the range into the job payload, requeue, self-invoke. The
+// Edge Runtime kills a run at its wall clock (150s on the free plan) with no
+// error handler, so each run must stay well inside that: the OCR call gets
+// its own timeout, and a timeout shrinks the range for the retry instead of
+// failing the job. Range size starts from page density (see extraction.ts).
+const EXTRACTION_CALL_TIMEOUT_MS = 100_000;
+const EXTRACTION_SINGLE_CALL_MAX_PAGES = 16;
+const EXTRACTION_PROGRESS_START = 25;
+const EXTRACTION_PROGRESS_END = 50;
 
 declare const EdgeRuntime:
   | { waitUntil?: (promise: Promise<unknown>) => void }
@@ -101,41 +143,6 @@ function extractParagraphText(xml: string, textTagPattern: RegExp): string {
   }
 
   return lines.join("\n").trim();
-}
-
-function parseGeminiPageSegments(rawText: string): ExtractedSegment[] {
-  const markerRegex = /^\s*\[Page\s+(\d+)\]\s*$/gim;
-  const markers = Array.from(rawText.matchAll(markerRegex));
-
-  if (markers.length === 0) {
-    return [];
-  }
-
-  const segments: ExtractedSegment[] = [];
-
-  for (let i = 0; i < markers.length; i++) {
-    const current = markers[i];
-    const next = markers[i + 1];
-    const pageNumber = Number(current[1]);
-
-    if (!Number.isFinite(pageNumber) || pageNumber < 1) {
-      continue;
-    }
-
-    const markerStart = current.index ?? 0;
-    const markerEnd = markerStart + current[0].length;
-    const segmentEnd = next?.index ?? rawText.length;
-    const segmentText = rawText.slice(markerEnd, segmentEnd).trim();
-
-    if (segmentText) {
-      segments.push({
-        text: segmentText,
-        pageNumber,
-      });
-    }
-  }
-
-  return segments;
 }
 
 async function extractSegmentsFromDocx(fileBytes: Uint8Array): Promise<ExtractedSegment[]> {
@@ -217,61 +224,32 @@ async function extractSegmentsFromPptx(fileBytes: Uint8Array): Promise<Extracted
   return segments;
 }
 
-async function extractTextWithGemini(
-  fileBytes: Uint8Array,
-  mimeType: string,
-  geminiApiKey: string,
-  requestPageMarkers: boolean
-): Promise<{ text: string; segments: ExtractedSegment[] }> {
-  const base64Data = btoa(
-    Array.from(fileBytes)
-      .map((b) => String.fromCharCode(b))
-      .join("")
-  );
+interface GeminiExtractionOptions {
+  base64Data: string;
+  mimeType: string;
+  geminiApiKey: string;
+  pageMarkers: boolean;
+  range?: PageRange;
+}
 
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+async function extractTextWithGemini(
+  options: GeminiExtractionOptions,
+): Promise<{ text: string; segments: ExtractedSegment[] }> {
+  const response = await fetchWithRetry(
+    GEMINI_GENERATE_URL,
     {
       method: "POST",
       headers: {
-        "x-goog-api-key": geminiApiKey,
+        "x-goog-api-key": options.geminiApiKey,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS),
       body: JSON.stringify({
         contents: [
           {
             parts: [
-              {
-                text: requestPageMarkers
-                  ? `Extract ALL text content from this document verbatim.
-Return output page-by-page in this exact format:
-[Page 1]
-<text from page 1>
-[Page 2]
-<text from page 2>
-
-Rules:
-- Keep page markers exactly as [Page N].
-- Include every page in order.
-- Do NOT summarize.
-- Do NOT add commentary.
-- Return ONLY extracted text content with these page markers.`
-                  : `Extract ALL text content from this document verbatim. Preserve the original structure including:
-- Headings and subheadings
-- Paragraphs
-- Bullet points and numbered lists
-- Table content (format as readable text)
-- Captions and labels
-- Any mathematical formulas (in plain text or LaTeX notation)
-
-Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.`,
-              },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data,
-                },
-              },
+              { text: buildExtractionPrompt({ pageMarkers: options.pageMarkers, range: options.range }) },
+              { inlineData: { mimeType: options.mimeType, data: options.base64Data } },
             ],
           },
         ],
@@ -280,16 +258,18 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
           maxOutputTokens: 65536,
         },
       }),
-    }
+    },
+    {
+      maxRetries: 3,
+      onRetry: ({ attempt, status, delayMs }) =>
+        console.warn(`Gemini Vision ${status ?? "network error"}; retry ${attempt} in ${delayMs}ms`),
+    },
   );
 
   if (!response.ok) {
     const errorText = await response.text();
-
     if (response.status === 429) {
-      throw new Error(
-        "Gemini API rate limit exceeded. Free tier allows 15 requests/min and 1500 requests/day. Please wait and retry."
-      );
+      throw new Error("Gemini API rate limit exceeded after retries. Please wait and retry.");
     }
     if (response.status === 413 || errorText.includes("payload size")) {
       throw new Error(
@@ -309,11 +289,8 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
     throw new Error("Gemini Vision returned no text content");
   }
 
-  if (!requestPageMarkers) {
-    return {
-      text,
-      segments: [{ text, pageNumber: null }],
-    };
+  if (!options.pageMarkers) {
+    return { text, segments: [{ text, pageNumber: null }] };
   }
 
   const parsedSegments = parseGeminiPageSegments(text);
@@ -324,10 +301,146 @@ Do NOT summarize. Do NOT add commentary. Return ONLY the extracted text content.
     };
   }
 
-  return {
-    text,
-    segments: [{ text, pageNumber: 1 }],
+  return { text, segments: [{ text, pageNumber: options.range?.start ?? 1 }] };
+}
+
+interface OpenAiExtractionOptions {
+  base64Data: string;
+  mimeType: string;
+  filename: string;
+  openAiApiKey: string;
+  pageMarkers: boolean;
+  range?: PageRange;
+}
+
+class ExtractionTimeoutError extends Error {
+  constructor(range?: PageRange) {
+    super(
+      range
+        ? `OCR call for pages ${range.start}-${range.end} exceeded ${EXTRACTION_CALL_TIMEOUT_MS / 1000}s`
+        : `OCR call exceeded ${EXTRACTION_CALL_TIMEOUT_MS / 1000}s`,
+    );
+    this.name = "ExtractionTimeoutError";
+  }
+}
+
+async function extractTextWithOpenAI(
+  options: OpenAiExtractionOptions,
+): Promise<{ text: string; segments: ExtractedSegment[] }> {
+  const timeoutSignal = AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS);
+  let text: string;
+  try {
+    text = await generateDocumentText({
+      apiKey: options.openAiApiKey,
+      model: OCR_MODEL,
+      prompt: buildExtractionPrompt({ pageMarkers: options.pageMarkers, range: options.range }),
+      file: { base64Data: options.base64Data, mimeType: options.mimeType, filename: options.filename },
+      maxOutputTokens: OCR_MAX_OUTPUT_TOKENS,
+      maxRetries: 3,
+      signal: timeoutSignal,
+    });
+  } catch (error) {
+    if (timeoutSignal.aborted) {
+      throw new ExtractionTimeoutError(options.range);
+    }
+    throw error;
+  }
+
+  if (!options.pageMarkers) {
+    return { text, segments: [{ text, pageNumber: null }] };
+  }
+
+  const parsedSegments = parseGeminiPageSegments(text);
+  if (parsedSegments.length > 0) {
+    return {
+      text: parsedSegments.map((segment) => segment.text).join("\n\n"),
+      segments: parsedSegments,
+    };
+  }
+
+  return { text, segments: [{ text, pageNumber: options.range?.start ?? 1 }] };
+}
+
+interface PdfExtractionStep {
+  done: boolean;
+  state: ExtractionState;
+  // True when this run's OCR call timed out: no pages were added and the
+  // range size was shrunk for the retry.
+  timedOut: boolean;
+}
+
+// Performs exactly one OCR call for a PDF: either the whole document when it
+// is short, or the next page range of a long one. Resumes from `state`.
+async function extractNextPdfRange(options: {
+  fileBytes: Uint8Array;
+  base64Data: string;
+  filename: string;
+  openAiApiKey: string;
+  state: ExtractionState | null;
+}): Promise<PdfExtractionStep> {
+  let state = options.state;
+
+  if (!state) {
+    const totalPages = await countPdfPages(options.fileBytes);
+    if (totalPages === null || totalPages <= EXTRACTION_SINGLE_CALL_MAX_PAGES) {
+      // Short document (or unknown length): one call for everything.
+      const extraction = await extractTextWithOpenAI({
+        base64Data: options.base64Data,
+        mimeType: "application/pdf",
+        filename: options.filename,
+        openAiApiKey: options.openAiApiKey,
+        pageMarkers: true,
+      });
+      const pages = totalPages ?? Math.max(1, ...extraction.segments.map((s) => s.pageNumber ?? 1));
+      return {
+        done: true,
+        timedOut: false,
+        state: { segments: extraction.segments, nextPage: pages + 1, totalPages: pages, pagesPerCall: pages },
+      };
+    }
+    state = {
+      segments: [],
+      nextPage: 1,
+      totalPages,
+      pagesPerCall: initialPagesPerCall({ fileBytes: options.fileBytes.length, totalPages }),
+    };
+  }
+
+  const range = nextExtractionRange({
+    nextPage: state.nextPage,
+    totalPages: state.totalPages,
+    pagesPerCall: state.pagesPerCall,
+  });
+  if (!range) {
+    return { done: true, timedOut: false, state };
+  }
+
+  console.log(`Extracting pages ${range.start}-${range.end} of ${state.totalPages} (${state.pagesPerCall}/call)`);
+  let extraction: { segments: ExtractedSegment[] };
+  try {
+    extraction = await extractTextWithOpenAI({
+      base64Data: options.base64Data,
+      mimeType: "application/pdf",
+      filename: options.filename,
+      openAiApiKey: options.openAiApiKey,
+      pageMarkers: true,
+      range,
+    });
+  } catch (error) {
+    if (error instanceof ExtractionTimeoutError && state.pagesPerCall > MIN_PAGES_PER_CALL) {
+      const pagesPerCall = shrinkPagesPerCall(state.pagesPerCall);
+      console.warn(`${error.message}; retrying with ${pagesPerCall} pages per call`);
+      return { done: false, timedOut: true, state: { ...state, pagesPerCall } };
+    }
+    throw error;
+  }
+
+  const nextState: ExtractionState = {
+    ...state,
+    segments: [...state.segments, ...normalizeRangeSegments(extraction.segments, range)],
+    nextPage: range.end + 1,
   };
+  return { done: nextState.nextPage > nextState.totalPages, timedOut: false, state: nextState };
 }
 
 function getMimeType(fileType: string, fileName: string): string {
@@ -481,6 +594,57 @@ async function generatePdfThumbnails(
 }
 
 // ---------------------------------------------------------------------------
+// Requeue + self-invoke (shared by the extraction and embedding stages)
+// ---------------------------------------------------------------------------
+
+async function requeueJobAndContinue(options: {
+  adminClient: SupabaseClient;
+  supabaseUrl: string;
+  supabaseKey: string;
+  jobId: string;
+  materialId: string;
+  // attempt_count as returned by the claim (already incremented for this run).
+  attemptCount: number;
+  payload: JobPayload;
+}): Promise<void> {
+  await options.adminClient
+    .from("material_processing_jobs")
+    .update({
+      status: "pending",
+      last_error: null,
+      locked_at: null,
+      locked_by: null,
+      // A continuation is not a failed attempt. The next claim increments
+      // again, so handing back this run's increment keeps the count flat
+      // across continuations and only genuine failures consume the budget
+      // of MAX_JOB_ATTEMPTS.
+      attempt_count: Math.max(0, options.attemptCount - 1),
+      payload: options.payload as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", options.jobId);
+
+  // Fire-and-forget: trigger next invocation
+  const continueWorker = fetch(`${options.supabaseUrl}/functions/v1/process-material-job`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.supabaseKey}`,
+      apikey: options.supabaseKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ materialId: options.materialId }),
+  }).catch((err) => {
+    console.error("Failed to trigger continuation:", err);
+  });
+
+  if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+    EdgeRuntime.waitUntil(continueWorker);
+  } else {
+    void continueWorker;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 
@@ -496,6 +660,13 @@ serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!openAiApiKey) {
+      return new Response(
+        JSON.stringify({ error: "OPENAI_API_KEY is not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!geminiApiKey) {
       return new Response(
@@ -534,6 +705,9 @@ serve(async (req: Request) => {
 
     jobIdForUpdate = job.id;
     materialIdForError = job.material_id;
+    const claimedJobId: string = job.id;
+    const claimedMaterialId: string = job.material_id;
+    const claimedAttemptCount: number = Number(job.attempt_count) || 0;
 
     // Max attempts guard (also enforced in SQL, but belt-and-suspenders)
     if (job.attempt_count > MAX_JOB_ATTEMPTS) {
@@ -579,6 +753,8 @@ serve(async (req: Request) => {
     // Check if this is a RESUMED invocation (chunks already extracted)
     // -----------------------------------------------------------------------
     const isResuming = Array.isArray(payload.chunks) && payload.chunks.length > 0;
+    // Carried across invocations via the payload; generated on the fresh path.
+    let thumbnailPaths: ThumbnailPaths | undefined = payload.thumbnailPaths;
     let chunks: ChunkData[];
     let totalChunks: number;
     let embeddedUpTo: number;
@@ -593,8 +769,17 @@ serve(async (req: Request) => {
         `Resuming job ${jobIdForUpdate}: embedding from chunk ${embeddedUpTo}/${totalChunks}`,
       );
     } else {
-      // Fresh job — extract text, chunk, then start embedding
+      // Fresh job, or a continuation of a partly extracted PDF — extract
+      // text, chunk, then start embedding
       embeddedUpTo = 0;
+      const resumedExtraction = payload.extraction;
+      const initialProgress = resumedExtraction
+        ? Math.round(
+            EXTRACTION_PROGRESS_START +
+              (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) *
+                ((resumedExtraction.nextPage - 1) / resumedExtraction.totalPages),
+          )
+        : EXTRACTION_PROGRESS_START;
 
       await adminClient
         .from("materials")
@@ -602,7 +787,7 @@ serve(async (req: Request) => {
           processing_status: "processing",
           processing_error: null,
           processing_stage: "extracting",
-          processing_progress: 25,
+          processing_progress: initialProgress,
         })
         .eq("id", materialIdForError);
 
@@ -623,12 +808,59 @@ serve(async (req: Request) => {
         );
       }
 
-      let extractedSegments: ExtractedSegment[] = [];
+      const base64Data = usesInlineGeminiExtraction(ext) ? encodeBytesToBase64(fileBytes) : "";
+      const updateExtractionProgress = async (progress: number) => {
+        await adminClient
+          .from("materials")
+          .update({ processing_status: "processing", processing_stage: "extracting", processing_progress: progress })
+          .eq("id", materialIdForError);
+      };
 
+      let extractedSegments: ExtractedSegment[] = [];
       switch (ext) {
         case "pdf": {
-          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
-          extractedSegments = extraction.segments;
+          const step = await extractNextPdfRange({
+            fileBytes,
+            base64Data,
+            filename: filePath.split("/").pop() || "document.pdf",
+            openAiApiKey,
+            state: payload.extraction ?? null,
+          });
+          if (!step.done) {
+            // Save this range (or the shrunk range size after a timeout) and
+            // hand the next range to a fresh invocation.
+            const pagesDone = step.state.nextPage - 1;
+            await updateExtractionProgress(
+              Math.round(
+                EXTRACTION_PROGRESS_START +
+                  (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) * (pagesDone / step.state.totalPages),
+              ),
+            );
+            await requeueJobAndContinue({
+              adminClient,
+              supabaseUrl,
+              supabaseKey,
+              jobId: claimedJobId,
+              materialId: claimedMaterialId,
+              // A timeout counts as an attempt; a normal continuation does not.
+              attemptCount: step.timedOut ? claimedAttemptCount + 1 : claimedAttemptCount,
+              payload: { filePath, fileType, bucketName, extraction: step.state },
+            });
+            return new Response(
+              JSON.stringify({
+                success: true,
+                jobId: claimedJobId,
+                materialId: claimedMaterialId,
+                pagesExtracted: pagesDone,
+                totalPages: step.state.totalPages,
+                pagesPerCall: step.state.pagesPerCall,
+                timedOut: step.timedOut,
+                continuing: true,
+              }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          extractedSegments = step.state.segments;
           break;
         }
         case "png":
@@ -636,7 +868,13 @@ serve(async (req: Request) => {
         case "jpeg":
         case "webp":
         case "gif": {
-          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, false);
+          const extraction = await extractTextWithOpenAI({
+            base64Data,
+            mimeType: getMimeType(ext, filePath),
+            filename: filePath.split("/").pop() || `image.${ext}`,
+            openAiApiKey,
+            pageMarkers: false,
+          });
           extractedSegments = extraction.segments;
           break;
         }
@@ -645,7 +883,12 @@ serve(async (req: Request) => {
           break;
         }
         case "doc": {
-          const extraction = await extractTextWithGemini(fileBytes, getMimeType(ext, filePath), geminiApiKey, true);
+          const extraction = await extractTextWithGemini({
+            base64Data,
+            mimeType: getMimeType(ext, filePath),
+            geminiApiKey,
+            pageMarkers: true,
+          });
           extractedSegments = extraction.segments;
           break;
         }
@@ -656,7 +899,6 @@ serve(async (req: Request) => {
         default:
           throw new Error(`Unsupported file type: ${ext}`);
       }
-
       if (extractedSegments.length === 0) {
         throw new Error("No text could be extracted from the document");
       }
@@ -664,7 +906,7 @@ serve(async (req: Request) => {
       // --- Generate thumbnails for PDFs (if not already done) ---
       if (ext === "pdf" && !payload.thumbnailPaths) {
         console.log(`Generating thumbnails for ${filePath}`);
-        const thumbnailPaths = await generatePdfThumbnails(
+        thumbnailPaths = await generatePdfThumbnails(
           fileBytes,
           extractedSegments,
           bucketName,
@@ -673,7 +915,7 @@ serve(async (req: Request) => {
         );
         
         // Update job payload with thumbnail paths for resuming
-        if (thumbnailPaths.length > 0) {
+        if (Object.keys(thumbnailPaths).length > 0) {
           await adminClient
             .from("material_processing_jobs")
             .update({
@@ -816,8 +1058,6 @@ serve(async (req: Request) => {
      if (newEmbeddedUpTo >= totalChunks) {
        // All chunks embedded — finalize
        
-       // Get thumbnail paths from payload
-       const thumbnailPaths = (isResuming && payload.thumbnailPaths) ? payload.thumbnailPaths : null;
        
        // Update materials table with thumbnail paths
        if (thumbnailPaths && Object.keys(thumbnailPaths).length > 0) {
@@ -880,36 +1120,15 @@ serve(async (req: Request) => {
        thumbnailPaths,
      };
 
-    await adminClient
-      .from("material_processing_jobs")
-      .update({
-        status: "pending",
-        last_error: null,
-        locked_at: null,
-        locked_by: null,
-        payload: updatedPayload as unknown as Record<string, unknown>,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", jobIdForUpdate);
-
-    // Fire-and-forget: trigger next invocation
-    const continueWorker = fetch(`${supabaseUrl}/functions/v1/process-material-job`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${supabaseKey}`,
-        apikey: supabaseKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ materialId: materialIdForError }),
-    }).catch((err) => {
-      console.error("Failed to trigger continuation:", err);
+    await requeueJobAndContinue({
+      adminClient,
+      supabaseUrl,
+      supabaseKey,
+      jobId: claimedJobId,
+      materialId: claimedMaterialId,
+      attemptCount: claimedAttemptCount,
+      payload: updatedPayload,
     });
-
-    if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-      EdgeRuntime.waitUntil(continueWorker);
-    } else {
-      void continueWorker;
-    }
 
     return new Response(
       JSON.stringify({

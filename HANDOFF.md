@@ -68,7 +68,7 @@ The items below are **resolved** and kept here only as history. The active backl
 
 - [PLAN.md](PLAN.md) — original product spec. Describes OTP-based auth and a personal-per-student RAG index; current `Auth.tsx` doesn't clearly show an OTP flow, though a `student_documents` table does exist (partially built). Worth a pass to confirm what's actually live vs. aspirational.
 - [plans/panopto.md](plans/panopto.md) — detailed plan for Panopto video-link import (OAuth, transcript import, embedded player). **Not implemented**: no `connect-panopto`/`import-panopto-session` functions, no `video_external` type, no `external_provider`/`embed_url` columns, no token storage table. The DB *does* have the generic pieces (`chunks.start_ms`/`end_ms`, `materials.duration_ms`, `material_transcript_segments`) that were likely built for the self-hosted `transcribe-video` upload flow instead. Decide: build Panopto import for real, or delete the stale plan doc so it stops looking like pending work.
-- [gemini-vision.md](gemini-vision.md) — accurate and well-maintained, but explicitly lists **unimplemented** recommendations: exponential backoff on 429s (currently: single retry after a flat 2s), request queuing for the 15 RPM free-tier Gemini limit, inter-document delays for bulk uploads. Also flags a real risk: 60s edge function timeout on PDFs >30 pages, and a hard 15MB file-size ceiling.
+- [gemini-vision.md](gemini-vision.md) — updated 2026-09-21 for page-range extraction + backoff; still lists **unimplemented** recommendations: exponential backoff for embedding calls (Vision calls now have it), and originally: exponential backoff on 429s (currently: single retry after a flat 2s), request queuing for the 15 RPM free-tier Gemini limit, inter-document delays for bulk uploads. Also flags a real risk: 60s edge function timeout on PDFs >30 pages, and a hard 15MB file-size ceiling.
 
 ## Migration history worth knowing before touching schema/RLS
 
@@ -91,7 +91,7 @@ The items below are **resolved** and kept here only as history. The active backl
 
 **Not swapped — still on Gemini, deliberately:**
 - **Embeddings** (`gemini-embedding-001`, used in `ingest-material`, `process-material-job`, `transcribe-video`, `rag-chat`'s `embedQuery`). Switching embedding models means re-embedding every existing chunk in pgvector — vectors from different models aren't comparable. Not attempted; would need its own migration.
-- **`process-material-job`'s `extractTextWithGemini`** — this isn't chat, it's document OCR: raw PDF/image bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.
+- **`process-material-job`'s `extractTextWithGemini`** — now used only for legacy `.doc` (PDF/image OCR moved to OpenAI `gpt-5.6-luna` via `_shared/llm.ts#generateDocumentText` on 2026-09-21). It's document OCR: raw file bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.
 
 ## Candidate: GLM-OCR as a cheaper document-OCR alternative
 

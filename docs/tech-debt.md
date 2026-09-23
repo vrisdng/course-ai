@@ -31,7 +31,7 @@ Chat was already consolidated to OpenAI (`HANDOFF.md` "Model consolidation"). Em
 4. **Rollout ordering** — deploy new code → run `re-embed-chunks` to 100% → flip secrets → deploy the Gemini-removing code. Zero-downtime variant: dual-write embeddings into a new column, flip `rag-chat` to read it, then drop Gemini.
 5. **Docs/secrets** — update `gemini-vision.md`, `supabase secrets` (Gemini then needed only for OCR), `GET_STARTED.md` model tables, `HANDOFF.md`.
 
-After this swap, Gemini is used only for document OCR (`extractTextWithGemini`). Combined with the planned AssemblyAI→OpenAI STT swap, Gemini becomes a single-purpose OCR dependency.
+After this swap, Gemini is used only for legacy `.doc` OCR (`extractTextWithGemini`; PDF/image OCR already moved to OpenAI on 2026-09-21). Combined with the planned AssemblyAI→OpenAI STT swap, Gemini could be dropped entirely by also dropping `.doc` support or converting `.doc` client-side.
 
 ---
 
@@ -53,8 +53,8 @@ After this swap, Gemini is used only for document OCR (`extractTextWithGemini`).
 ### 2.1 `reap-stale-jobs` has no scheduled runner [🟡]
 `reap-stale-jobs` resets jobs stuck "processing" >5 min and propagates failures after 5 attempts, but no `pg_cron` schedule is checked into migrations. Confirm whether it's wired via the Supabase dashboard cron scheduler before assuming stuck jobs self-heal in a given environment.
 
-### 2.2 OCR hardening in `process-material-job` [🟡]
-Per `gemini-vision.md`: PDFs >30 pages risk the 60s edge-function timeout; hard 15MB file-size ceiling (Gemini inline-vision constraint); single retry after a flat 2s with no exponential backoff on 429s and no request queuing for the 15 RPM free-tier limit. Candidate alternative: hosted GLM-OCR ($0.03/1M tokens uniform, 50MB/100-page cap) — see `HANDOFF.md` "GLM-OCR" note.
+### 2.2 OCR hardening in `process-material-job` [🟡 — partly done 2026-09-21]
+Done: PDF/image OCR moved to OpenAI `gpt-5.6-luna` through `_shared/llm.ts` (Gemini Vision kept only for legacy `.doc`); page-range resumable extraction (16 pages/call, progress persisted per range), 90 s per-call timeout, exponential backoff on 429/5xx, chunked base64 encoding, `claim_material_processing_job` scoped to the requested material (it previously re-ran the oldest stale job instead — see migration `20260921150000`). Remaining: apply the backoff helper to embedding calls; hard 15MB file-size ceiling (Gemini inline-vision constraint); Gemini key must stay on the paid tier (free tier measured at 5 RPM + constant 503s). Candidate alternative: hosted GLM-OCR ($0.03/1M tokens uniform, 50MB/100-page cap) — see `HANDOFF.md` "GLM-OCR" note.
 
 ### 2.3 AssemblyAI → OpenAI STT [🟡]
 Scoped but not implemented (`HANDOFF.md`). AssemblyAI's flow is async/two-step (`upload-video` proxies to an AssemblyAI-hosted URL, `transcribe-video` polls); OpenAI's `/v1/audio/transcriptions` is synchronous (POST audio bytes, one call) — so `upload-video`'s proxy-upload goes away and the client would need to upload to Supabase Storage first. OpenAI caps ~25MB/request; verify client-side audio extraction (`ffmpegAudioExtractor.ts`, currently **unused** anywhere) gets lecture videos under that cap before committing.
