@@ -5,6 +5,7 @@ vi.mock('./contexts/AuthContext', () => ({ AuthProvider: ({ children }: { childr
 vi.mock('./components/auth/ProtectedRoute', () => ({ ProtectedRoute: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('./pages/Landing', () => ({ default: () => <div>landing</div> }));
 vi.mock('./pages/Auth', () => ({ default: () => <div>auth</div> }));
+vi.mock('./pages/ResetPassword', () => ({ default: () => <div>reset password</div> }));
 vi.mock('./pages/StudentChat', () => ({ default: () => <div>chat</div> }));
 vi.mock('./pages/AdminDashboard', () => ({ default: () => <div>dashboard</div> }));
 vi.mock('./pages/CourseStudents', () => ({ default: () => <div>students</div> }));
@@ -15,7 +16,7 @@ vi.mock('./pages/NotFound', () => ({ default: () => <div>not found</div> }));
 describe('App routing', () => {
   beforeEach(() => { window.history.pushState({}, '', '/'); vi.resetModules(); });
   it.each([
-    ['/', 'landing'], ['/auth', 'auth'], ['/chat/conversation-1', 'chat'], ['/admin-dashboard', 'dashboard'],
+    ['/', 'landing'], ['/auth', 'auth'], ['/reset-password', 'reset password'], ['/chat/conversation-1', 'chat'], ['/admin-dashboard', 'dashboard'],
     ['/admin-dashboard/courses/c1/students', 'students'], ['/admin-analytics', 'analytics'], ['/settings', 'settings'], ['/missing', 'not found'],
   ])('routes %s to %s', async (path, expected) => {
     window.history.pushState({}, '', path); const { default: App } = await import('./App'); render(<App />); expect(screen.getByText(expected)).toBeInTheDocument();

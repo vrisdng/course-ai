@@ -30,8 +30,13 @@ const signUpSchema = z.object({
   path: ['confirmPassword'],
 });
 
+const forgotPasswordSchema = z.object({
+  email: z.string().email('Please enter a valid email address'),
+});
+
 type SignInFormData = z.infer<typeof signInSchema>;
 type SignUpFormData = z.infer<typeof signUpSchema>;
+type ForgotPasswordFormData = z.infer<typeof forgotPasswordSchema>;
 
 export default function Auth() {
   const [searchParams] = useSearchParams();
@@ -46,6 +51,7 @@ export default function Auth() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showOtpInput, setShowOtpInput] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(searchParams.get('mode') === 'forgot');
   const [otpEmail, setOtpEmail] = useState('');
   const [otp, setOtp] = useState('');
 
@@ -59,13 +65,19 @@ export default function Auth() {
     defaultValues: { email: '', password: '', confirmPassword: '', fullName: '' },
   });
 
+  const forgotPasswordForm = useForm<ForgotPasswordFormData>({
+    resolver: zodResolver(forgotPasswordSchema),
+    defaultValues: { email: '' },
+  });
+
   useEffect(() => {
     if (!inviteEmailParam) {
       return;
     }
     signInForm.setValue('email', inviteEmailParam);
     signUpForm.setValue('email', inviteEmailParam);
-  }, [inviteEmailParam, signInForm, signUpForm]);
+    forgotPasswordForm.setValue('email', inviteEmailParam);
+  }, [inviteEmailParam, signInForm, signUpForm, forgotPasswordForm]);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -156,6 +168,46 @@ export default function Auth() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleForgotPassword = async (data: ForgotPasswordFormData) => {
+    setIsLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    const email = data.email.trim().toLowerCase();
+
+    try {
+      // The recovery email template delivers a one-time code ({{ .Token }})
+      // rather than a link, so mail-security link scanners cannot consume it.
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+
+      if (error) {
+        setError(error.message);
+        return;
+      }
+
+      // Hand the email over via router state (not the URL) so the code-entry
+      // page can prefill it without confirming whether the account exists.
+      navigate('/reset-password', { state: { email } });
+    } catch (err) {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const openForgotPassword = () => {
+    setError(null);
+    setSuccessMessage(null);
+    forgotPasswordForm.setValue('email', signInForm.getValues('email'));
+    setShowForgotPassword(true);
+  };
+
+  const closeForgotPassword = () => {
+    setError(null);
+    setSuccessMessage(null);
+    setShowForgotPassword(false);
   };
 
   const handleVerifyOtp = async () => {
@@ -268,6 +320,63 @@ export default function Auth() {
               </Button>
             </CardFooter>
           </>
+        ) : showForgotPassword ? (
+          <form onSubmit={forgotPasswordForm.handleSubmit(handleForgotPassword)}>
+            <CardHeader>
+              <CardTitle>Reset your password</CardTitle>
+              <CardDescription>
+                Enter the email for your account and we'll send you a one-time code to choose a new password.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {error && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+
+              {successMessage && (
+                <Alert className="border-success/50 bg-success/10">
+                  <CheckCircle2 className="h-4 w-4 text-success" />
+                  <AlertDescription className="text-success">{successMessage}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="forgot-email">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="forgot-email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@university.edu"
+                    className="pl-10"
+                    {...forgotPasswordForm.register('email')}
+                  />
+                </div>
+                {forgotPasswordForm.formState.errors.email && (
+                  <p className="text-sm text-destructive">{forgotPasswordForm.formState.errors.email.message}</p>
+                )}
+              </div>
+            </CardContent>
+            <CardFooter className="flex flex-col gap-4">
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  'Send Reset Code'
+                )}
+              </Button>
+              <Button type="button" variant="ghost" className="w-full" onClick={closeForgotPassword}>
+                Back to Sign In
+              </Button>
+            </CardFooter>
+          </form>
         ) : (
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <CardHeader>
@@ -335,6 +444,15 @@ export default function Auth() {
                     {signInForm.formState.errors.password && (
                       <p className="text-sm text-destructive">{signInForm.formState.errors.password.message}</p>
                     )}
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={openForgotPassword}
+                        className="text-sm font-medium text-primary hover:underline"
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
                   </div>
 
                   <Button type="submit" className="w-full" disabled={isLoading}>

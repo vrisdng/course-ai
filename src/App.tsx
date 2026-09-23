@@ -14,6 +14,7 @@ import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 // Pages
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
+import ResetPassword from "./pages/ResetPassword";
 import StudentChat from "./pages/StudentChat";
 import AdminDashboard from "./pages/AdminDashboard";
 import CourseStudents from "./pages/CourseStudents";
@@ -42,6 +43,7 @@ const App = () => (
           {/* Public routes */}
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* Protected student routes */}
           <Route
