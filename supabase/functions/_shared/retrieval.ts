@@ -28,14 +28,17 @@ export function getRetrievalSettings(options: {
     };
   }
 
-  // Calibrated for text-embedding-3-large on this corpus (2026-10-01): chunks
-  // that answer a question scored 0.48–0.82, off-topic questions at most 0.24.
-  // Cutoffs sit in that gap. Re-calibrate when the embedding model changes.
+  // Calibrated for text-embedding-3-large on this corpus (2026-10-01). Short,
+  // casual questions ("when is the exam") score their answering chunk as low
+  // as 0.30–0.33, while short off-topic questions reach 0.29, so no cutoff
+  // separates them cleanly. The floor favours keeping answerable questions
+  // and leaves off-topic rejection to the model, as the Gemini setup did.
+  // Re-calibrate when the embedding model changes.
   if (options.isSummaryQuery) {
-    return { matchThreshold: 0.25, matchCount: 30, relevanceFloor: 0.30, finalCount: 10 };
+    return { matchThreshold: 0.15, matchCount: 30, relevanceFloor: 0.15, finalCount: 10 };
   }
 
-  return { matchThreshold: 0.30, matchCount: 18, relevanceFloor: 0.35, finalCount: 10 };
+  return { matchThreshold: 0.20, matchCount: 18, relevanceFloor: 0.20, finalCount: 10 };
 }
 
 const LEXICAL_STOP_WORDS = new Set([
