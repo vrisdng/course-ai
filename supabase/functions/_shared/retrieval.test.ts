@@ -53,9 +53,18 @@ describe("getRetrievalSettings", () => {
 
   it("keeps the stricter defaults when all course documents are available", () => {
     expect(getRetrievalSettings({ isSummaryQuery: false, hasSelectedDocumentFilter: false })).toEqual({
-      matchThreshold: 0.50,
+      matchThreshold: 0.30,
       matchCount: 18,
-      relevanceFloor: 0.55,
+      relevanceFloor: 0.35,
+      finalCount: 10,
+    });
+  });
+
+  it("relaxes thresholds for broad summary queries across all course documents", () => {
+    expect(getRetrievalSettings({ isSummaryQuery: true, hasSelectedDocumentFilter: false })).toEqual({
+      matchThreshold: 0.25,
+      matchCount: 30,
+      relevanceFloor: 0.30,
       finalCount: 10,
     });
   });

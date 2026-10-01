@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { HttpError, generateChatText, generateChatTextStream } from "../_shared/llm.ts";
+import { HttpError, createOpenAIEmbeddingService, generateChatText, generateChatTextStream } from "../_shared/llm.ts";
+import { MATCH_CHUNKS_FUNCTION } from "../_shared/embeddings.ts";
 import {
   buildCitationRewriteSourceContext,
   clipText,
@@ -37,7 +38,6 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
 
-const EMBEDDING_MODEL = "gemini-embedding-001";
 const CITATION_PIPELINE_VERSION = "2026-02-14-cite-token-rerank-v1";
 
 // Bucket that image-typed course materials live in. Stable image citations store
@@ -202,45 +202,6 @@ Standalone retrieval query:`;
   }
 }
 
-async function embedQuery(geminiApiKey: string, query: string, signal?: AbortSignal): Promise<number[]> {
-  const embeddingResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`, {
-    method: "POST",
-    signal,
-    headers: {
-      "x-goog-api-key": geminiApiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: `models/${EMBEDDING_MODEL}`,
-      content: {
-        parts: [{ text: query }],
-      },
-      taskType: "RETRIEVAL_QUERY",
-      outputDimensionality: 1536,
-    }),
-  });
-
-  if (!embeddingResponse.ok) {
-    const errorText = await embeddingResponse.text();
-    console.error("Gemini Embedding API error:", embeddingResponse.status, errorText);
-
-    if (embeddingResponse.status === 429) {
-      throw new HttpError(429, "Rate limit exceeded. Please try again later.");
-    }
-
-    throw new Error(`Embedding API error: ${embeddingResponse.status} - ${errorText}`);
-  }
-
-  const embeddingData = await embeddingResponse.json();
-  const queryEmbedding = embeddingData.embedding?.values;
-
-  if (!Array.isArray(queryEmbedding)) {
-    throw new Error("Embedding response did not include values");
-  }
-
-  return queryEmbedding as number[];
-}
-
 async function retrieveChunkCandidates(options: {
   supabaseClient: ReturnType<typeof createClient>;
   userId: string;
@@ -251,7 +212,7 @@ async function retrieveChunkCandidates(options: {
   selectedMaterialIds?: string[];
 }): Promise<RetrievedChunk[]> {
   const { data: chunks, error: searchError } = await options.supabaseClient.rpc(
-    "match_chunks",
+    MATCH_CHUNKS_FUNCTION,
     {
       query_embedding: options.embedding,
       match_threshold: options.threshold,
@@ -663,16 +624,7 @@ serve(async (req: Request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
     const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
-
-    if (!geminiApiKey) {
-      console.error("GEMINI_API_KEY is not configured");
-      return new Response(
-        JSON.stringify({ error: "Embedding service is not configured. Please add GEMINI_API_KEY secret." }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     if (!openAiApiKey) {
       console.error("OPENAI_API_KEY is not configured");
@@ -685,6 +637,7 @@ serve(async (req: Request) => {
     // Resolved after parsing the request body below; declared here for closure access in the stream.
     let chatModelConfig: ChatModelConfig = CHAT_MODEL_CONFIGS.fast;
     const chatApiKey: string = openAiApiKey;
+    const embeddingService = createOpenAIEmbeddingService(openAiApiKey);
 
     const supabaseClient = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: authHeader } },
@@ -802,7 +755,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
 
       throwIfAborted(requestAbortController.signal);
 
-      const originalEmbedding = await embedQuery(geminiApiKey, trimmedMessage, requestAbortController.signal);
+      const originalEmbedding = await embeddingService.embedQuery(trimmedMessage, requestAbortController.signal);
 
       console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
@@ -823,7 +776,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
       const retrievalQueries = [trimmedMessage];
       if (rewrittenQuery.trim() && rewrittenQuery.trim() !== trimmedMessage.trim()) {
         retrievalQueries.push(rewrittenQuery.trim());
-        embeddings.push(await embedQuery(geminiApiKey, rewrittenQuery, requestAbortController.signal));
+        embeddings.push(await embeddingService.embedQuery(rewrittenQuery, requestAbortController.signal));
       }
 
       throwIfAborted(requestAbortController.signal);
@@ -1032,7 +985,7 @@ ${ragContext}`;
                 conversationId: activeConversationId,
                 meta: {
                   chatModel: chatModelConfig.modelId,
-                  embeddingModel: EMBEDDING_MODEL,
+                  embeddingModel: embeddingService.model,
                   citationPipelineVersion: CITATION_PIPELINE_VERSION,
                 },
               });
@@ -1138,7 +1091,7 @@ ${ragContext}`;
               conversationId: activeConversationId,
               meta: {
                 chatModel: chatModelConfig.modelId,
-                embeddingModel: EMBEDDING_MODEL,
+                embeddingModel: embeddingService.model,
                 citationPipelineVersion: CITATION_PIPELINE_VERSION,
               },
             });

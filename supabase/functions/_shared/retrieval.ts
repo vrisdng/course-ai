@@ -28,11 +28,14 @@ export function getRetrievalSettings(options: {
     };
   }
 
+  // Calibrated for text-embedding-3-large on this corpus (2026-10-01): chunks
+  // that answer a question scored 0.48–0.82, off-topic questions at most 0.24.
+  // Cutoffs sit in that gap. Re-calibrate when the embedding model changes.
   if (options.isSummaryQuery) {
-    return { matchThreshold: 0.40, matchCount: 30, relevanceFloor: 0.40, finalCount: 10 };
+    return { matchThreshold: 0.25, matchCount: 30, relevanceFloor: 0.30, finalCount: 10 };
   }
 
-  return { matchThreshold: 0.50, matchCount: 18, relevanceFloor: 0.55, finalCount: 10 };
+  return { matchThreshold: 0.30, matchCount: 18, relevanceFloor: 0.35, finalCount: 10 };
 }
 
 const LEXICAL_STOP_WORDS = new Set([
