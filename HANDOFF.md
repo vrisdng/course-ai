@@ -90,8 +90,17 @@ The items below are **resolved** and kept here only as history. The active backl
 `rag-chat`'s `smart`/`pro` tiers and `generate-flashcards` previously called Gemini for plain text-in/text-out chat generation. Both now go through OpenAI only, via a new shared wrapper [supabase/functions/_shared/llm.ts](supabase/functions/_shared/llm.ts) built on the Vercel AI SDK (`ai` + `@ai-sdk/openai`, pulled in via `esm.sh` like every other npm dependency in these functions — no import map needed). `GEMINI_API_KEY` is no longer read for chat.
 
 **Not swapped — still on Gemini, deliberately:**
-- **Embeddings** (`gemini-embedding-001`, used in `ingest-material`, `process-material-job`, `transcribe-video`, `rag-chat`'s `embedQuery`). Switching embedding models means re-embedding every existing chunk in pgvector — vectors from different models aren't comparable. Not attempted; would need its own migration.
 - **`process-material-job`'s `extractTextWithGemini`** — now used only for legacy `.doc` (PDF/image OCR moved to OpenAI `gpt-5.6-luna` via `_shared/llm.ts#generateDocumentText` on 2026-09-21). It's document OCR: raw file bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.
+
+## Embeddings swapped to OpenAI (2026-10-01)
+
+Embeddings moved from `gemini-embedding-001` (1536 dims, `chunks.embedding`) to OpenAI `text-embedding-3-large` (3072 dims, `chunks.embedding_openai`, searched by `match_chunks_openai`). Every embedding call — ingestion (`ingest-material`, `process-material-job`, `transcribe-video`), query embedding in `rag-chat`, and backfills — goes through one service: [`_shared/embeddings.ts`](supabase/functions/_shared/embeddings.ts) (model, dimensions, batching, validation, and the column/function names) with the OpenAI binding in `_shared/llm.ts#createOpenAIEmbeddingService`.
+
+- **Changing the embedding model** means: update `DEFAULT_EMBEDDING_CONFIG`, add a column + match function for the new vectors, backfill with `backfill-embeddings`, switch `EMBEDDING_COLUMN`/`MATCH_CHUNKS_FUNCTION`, and **re-calibrate `getRetrievalSettings`** — score scales differ per model (Gemini put off-topic questions at up to 0.59; text-embedding-3-large keeps them under 0.25).
+- **`backfill-embeddings`** is an operator-only edge function (`auth: 'secret'` — rejects user JWTs and the publishable key). It embeds up to `limit` chunks missing `embedding_openai` per call and returns `remaining`; call until 0. Idempotent.
+- **No ANN index on `embedding_openai`:** pgvector only indexes `vector` up to 2000 dims (3072 needs a `halfvec` expression index), and the match function filters by course/term/access after scoring, which an approximate index would truncate. Exact scan is fine at ~1.6k chunks; revisit if the table grows by orders of magnitude.
+- **`match_chunks_openai` binds the caller to `auth.uid()`** and isn't executable by `anon`. The old `match_chunks` overloads trust a caller-supplied `user_id` and are executable by `anon` — drop them in the cleanup migration (with `chunks.embedding` and its ivfflat index).
+- **Migrations aren't tracked remotely:** `supabase_migrations.schema_migrations` is empty on the hosted project, so `supabase db push` would try to replay every migration. This one was applied via the Management API SQL endpoint.
 
 ## Candidate: GLM-OCR as a cheaper document-OCR alternative
 
