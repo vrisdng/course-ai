@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
+import { EMBEDDING_COLUMN } from "../_shared/embeddings.ts";
+import { createOpenAIEmbeddingService } from "../_shared/llm.ts";
 
 // ---------- Request types ----------
 
@@ -42,8 +44,6 @@ interface AssemblyAIWord {
 
 const ASSEMBLYAI_API_URL = "https://api.assemblyai.com/v2";
 const ASSEMBLYAI_POLL_INTERVAL_MS = 5000;
-const EMBEDDING_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
 const TARGET_CHUNK_CHARACTERS = 1200;
 const MIN_CHUNK_CHARACTERS = 200;
 const SEGMENT_OVERLAP = 1;
@@ -163,41 +163,22 @@ function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[]
 
 // ---------- Embedding ----------
 
-async function embedText(text: string, geminiApiKey: string): Promise<number[]> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await fetch(EMBEDDING_URL, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": geminiApiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "models/gemini-embedding-001",
-        content: { parts: [{ text }] },
-        taskType: "RETRIEVAL_DOCUMENT",
-        outputDimensionality: 1536,
-      }),
-    });
-
-    if (response.ok) {
-      const payload = await response.json();
-      const values = payload.embedding?.values;
-      if (!Array.isArray(values)) {
-        throw new Error("Embedding response did not include values");
-      }
-      return values as number[];
-    }
-
-    const errorText = await response.text();
-    if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      continue;
-    }
-
-    throw new Error(`Embedding API error: ${response.status} - ${errorText}`);
-  }
-
-  throw new Error("Embedding API error: retries exhausted");
+function buildTranscriptChunkRows(
+  materialId: string,
+  transcriptChunks: TranscriptChunk[],
+  vectors: number[][],
+) {
+  return transcriptChunks.map((chunk, i) => ({
+    material_id: materialId,
+    chunk_index: i,
+    chunk_text: chunk.text,
+    [EMBEDDING_COLUMN]: vectors[i],
+    start_position: 0,
+    end_position: chunk.text.length,
+    start_ms: chunk.startMs,
+    end_ms: chunk.endMs,
+    page_number: null,
+  }));
 }
 
 // ---------- AssemblyAI ----------
@@ -269,9 +250,9 @@ async function finalizeTranscription(opts: {
   durationMs: number | null;
   language: string | null;
   adminClient: ReturnType<typeof createClient>;
-  geminiApiKey: string;
+  openAiApiKey: string;
 }) {
-  const { materialId, allSegments, durationMs, language, adminClient, geminiApiKey } = opts;
+  const { materialId, allSegments, durationMs, language, adminClient, openAiApiKey } = opts;
 
   const transcriptChunks = buildTranscriptChunks(allSegments);
   if (transcriptChunks.length === 0) {
@@ -308,22 +289,10 @@ async function finalizeTranscription(opts: {
     .update({ processing_status: "processing", processing_stage: "embedding", processing_progress: 80 })
     .eq("id", materialId);
 
-  const chunkRows = [];
-  for (let i = 0; i < transcriptChunks.length; i++) {
-    const chunk = transcriptChunks[i];
-    const embedding = await embedText(chunk.text, geminiApiKey);
-    chunkRows.push({
-      material_id: materialId,
-      chunk_index: i,
-      chunk_text: chunk.text,
-      embedding,
-      start_position: 0,
-      end_position: chunk.text.length,
-      start_ms: chunk.startMs,
-      end_ms: chunk.endMs,
-      page_number: null,
-    });
-  }
+  const vectors = await createOpenAIEmbeddingService(openAiApiKey).embedDocuments(
+    transcriptChunks.map((chunk) => chunk.text),
+  );
+  const chunkRows = buildTranscriptChunkRows(materialId, transcriptChunks, vectors);
 
   for (let i = 0; i < chunkRows.length; i += 100) {
     const { error } = await adminClient.from("chunks").insert(chunkRows.slice(i, i + 100));
@@ -354,11 +323,11 @@ async function processTranscription(opts: {
   materialId: string;
   audioUrl: string;
   assemblyApiKey: string;
-  geminiApiKey: string;
+  openAiApiKey: string;
   supabaseUrl: string;
   serviceRoleKey: string;
 }) {
-  const { materialId, audioUrl, assemblyApiKey, geminiApiKey, supabaseUrl, serviceRoleKey } = opts;
+  const { materialId, audioUrl, assemblyApiKey, openAiApiKey, supabaseUrl, serviceRoleKey } = opts;
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
 
   try {
@@ -389,7 +358,7 @@ async function processTranscription(opts: {
       durationMs: result.audioDurationMs,
       language: result.language,
       adminClient,
-      geminiApiKey,
+      openAiApiKey,
     });
 
     console.log(`[transcribe] Done — ${finalResult.segmentsInserted} segments, ${finalResult.chunksInserted} chunks`);
@@ -407,11 +376,11 @@ async function processTranscription(opts: {
 
 async function refinalizeTranscription(opts: {
   materialId: string;
-  geminiApiKey: string;
+  openAiApiKey: string;
   supabaseUrl: string;
   serviceRoleKey: string;
 }) {
-  const { materialId, geminiApiKey, supabaseUrl, serviceRoleKey } = opts;
+  const { materialId, openAiApiKey, supabaseUrl, serviceRoleKey } = opts;
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
 
   try {
@@ -464,30 +433,18 @@ async function refinalizeTranscription(opts: {
       .update({ processing_stage: "embedding", processing_progress: 80 })
       .eq("id", materialId);
 
-    const chunkRows = [];
-    for (let i = 0; i < transcriptChunks.length; i++) {
-      const chunk = transcriptChunks[i];
-      const embedding = await embedText(chunk.text, geminiApiKey);
-      chunkRows.push({
-        material_id: materialId,
-        chunk_index: i,
-        chunk_text: chunk.text,
-        embedding,
-        start_position: 0,
-        end_position: chunk.text.length,
-        start_ms: chunk.startMs,
-        end_ms: chunk.endMs,
-        page_number: null,
-      });
-
-      // Update progress incrementally
-      if (i % 10 === 0) {
-        await adminClient
-          .from("materials")
-          .update({ processing_progress: 80 + Math.round((i / transcriptChunks.length) * 18) })
-          .eq("id", materialId);
-      }
-    }
+    const vectors = await createOpenAIEmbeddingService(openAiApiKey).embedDocuments(
+      transcriptChunks.map((chunk) => chunk.text),
+      {
+        onProgress: async (embeddedCount, totalCount) => {
+          await adminClient
+            .from("materials")
+            .update({ processing_progress: 80 + Math.round((embeddedCount / totalCount) * 18) })
+            .eq("id", materialId);
+        },
+      },
+    );
+    const chunkRows = buildTranscriptChunkRows(materialId, transcriptChunks, vectors);
 
     for (let i = 0; i < chunkRows.length; i += 100) {
       const { error } = await adminClient.from("chunks").insert(chunkRows.slice(i, i + 100));
@@ -538,12 +495,12 @@ serve(async (req: Request) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
     const assemblyApiKey = Deno.env.get("ASSEMBLY_API_KEY");
 
-    if (!geminiApiKey) {
+    if (!openAiApiKey) {
       return new Response(
-        JSON.stringify({ error: "GEMINI_API_KEY is not configured" }),
+        JSON.stringify({ error: "OPENAI_API_KEY is not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -598,7 +555,7 @@ serve(async (req: Request) => {
     if ("refinalize" in body && body.refinalize) {
       const backgroundPromise = refinalizeTranscription({
         materialId: body.materialId,
-        geminiApiKey,
+        openAiApiKey,
         supabaseUrl,
         serviceRoleKey,
       });
@@ -633,7 +590,7 @@ serve(async (req: Request) => {
       materialId: body.materialId,
       audioUrl: body.audioUrl,
       assemblyApiKey,
-      geminiApiKey,
+      openAiApiKey,
       supabaseUrl,
       serviceRoleKey,
     });
