@@ -17,7 +17,8 @@ import {
   type PageRange,
 } from "../_shared/extraction.ts";
 import { countPdfPages } from "../_shared/pdfPages.ts";
-import { generateDocumentText } from "../_shared/llm.ts";
+import { createOpenAIEmbeddingService, generateDocumentText } from "../_shared/llm.ts";
+import { EMBEDDING_COLUMN } from "../_shared/embeddings.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -75,9 +76,6 @@ const MAX_JOB_ATTEMPTS = 5;
 // How many chunks to embed per invocation before yielding.
 // Keeps each invocation well within Edge Runtime limits.
 const EMBEDDING_SLICE_SIZE = 50;
-
-// Gemini batchEmbedContents supports up to 100 texts per call.
-const EMBEDDING_BATCH_API_SIZE = 100;
 
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
@@ -458,79 +456,6 @@ function getMimeType(fileType: string, fileName: string): string {
   };
   return mimeMap[ext] || mimeMap[fileType] || "application/octet-stream";
 }
-
-// ---------------------------------------------------------------------------
-// Batch embedding — uses Gemini batchEmbedContents for up to 100 texts/call
-// ---------------------------------------------------------------------------
-
-interface EmbeddingResult {
-  chunkIndex: number;
-  embedding: number[];
-}
-
-async function batchEmbedWithRetry(
-  texts: string[],
-  startIndex: number,
-  geminiApiKey: string,
-): Promise<EmbeddingResult[]> {
-  let lastStatus: number | null = null;
-  let lastErrorText = "";
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const requests = texts.map((text) => ({
-      model: "models/gemini-embedding-001",
-      content: { parts: [{ text }] },
-      taskType: "RETRIEVAL_DOCUMENT",
-      outputDimensionality: 1536,
-    }));
-
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
-      {
-        method: "POST",
-        headers: {
-          "x-goog-api-key": geminiApiKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ requests }),
-      },
-    );
-
-    if (response.ok) {
-      const payload = await response.json();
-      const embeddings = payload.embeddings;
-      if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
-        throw new Error(
-          `batchEmbedContents returned ${embeddings?.length ?? 0} embeddings, expected ${texts.length}`,
-        );
-      }
-      return embeddings.map(
-        (emb: { values: number[] }, i: number): EmbeddingResult => ({
-          chunkIndex: startIndex + i,
-          embedding: emb.values,
-        }),
-      );
-    }
-
-    lastStatus = response.status;
-    lastErrorText = await response.text();
-    const isTransient = response.status === 429 || response.status >= 500;
-
-    if (!isTransient || attempt === 2) {
-      break;
-    }
-
-    const backoffMs = 2000 * (attempt + 1);
-    console.warn(
-      `batchEmbed retry ${attempt + 1} (chunks ${startIndex}-${startIndex + texts.length - 1}) after status ${response.status}; waiting ${backoffMs}ms`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, backoffMs));
-  }
-
-   throw new Error(
-     `Batch embedding failed (chunks ${startIndex}-${startIndex + texts.length - 1}): ${lastStatus ?? "unknown"} - ${lastErrorText || "No response body"}`,
-   );
- }
 
 // ---------------------------------------------------------------------------
 // Thumbnail generation
@@ -987,57 +912,39 @@ serve(async (req: Request) => {
         })
         .eq("id", materialIdForError);
 
-      // Embed in batches of EMBEDDING_BATCH_API_SIZE using batchEmbedContents
-      const rows: Array<{
-        material_id: string;
-        chunk_index: number;
-        chunk_text: string;
-        embedding: number[];
-        start_position: number;
-        end_position: number;
-        page_number: number | null;
-      }> = [];
+      const embeddingService = createOpenAIEmbeddingService(openAiApiKey);
+      const vectors = await embeddingService.embedDocuments(
+        sliceChunks.map((chunk) => chunk.text),
+        {
+          onProgress: async (embeddedInSlice) => {
+            const embeddedRatio = totalChunks === 0 ? 1 : (embeddedUpTo + embeddedInSlice) / totalChunks;
+            await adminClient
+              .from("materials")
+              .update({
+                processing_status: "processing",
+                processing_stage: "embedding",
+                processing_progress: Math.min(
+                  EMBEDDING_PROGRESS_END,
+                  Math.round(
+                    EMBEDDING_PROGRESS_START +
+                      (EMBEDDING_PROGRESS_END - EMBEDDING_PROGRESS_START) * embeddedRatio,
+                  ),
+                ),
+              })
+              .eq("id", materialIdForError);
+          },
+        },
+      );
 
-      for (let b = 0; b < sliceChunks.length; b += EMBEDDING_BATCH_API_SIZE) {
-        const batchChunks = sliceChunks.slice(b, b + EMBEDDING_BATCH_API_SIZE);
-        const batchTexts = batchChunks.map((c) => c.text);
-        const globalOffset = embeddedUpTo + b;
-
-        const embedResults = await batchEmbedWithRetry(batchTexts, globalOffset, geminiApiKey);
-
-        for (let i = 0; i < embedResults.length; i++) {
-          const chunk = batchChunks[i];
-          rows.push({
-            material_id: materialIdForError,
-            chunk_index: embedResults[i].chunkIndex,
-            chunk_text: chunk.text,
-            embedding: embedResults[i].embedding,
-            start_position: chunk.start,
-            end_position: chunk.end,
-            page_number: chunk.pageNumber,
-          });
-        }
-
-        // Sync progress after each batch API call
-        const batchDone = embeddedUpTo + b + batchChunks.length;
-        const batchRatio = totalChunks === 0 ? 1 : batchDone / totalChunks;
-        const batchProgress = Math.min(
-          EMBEDDING_PROGRESS_END,
-          Math.round(
-            EMBEDDING_PROGRESS_START +
-              (EMBEDDING_PROGRESS_END - EMBEDDING_PROGRESS_START) * batchRatio,
-          ),
-        );
-
-        await adminClient
-          .from("materials")
-          .update({
-            processing_status: "processing",
-            processing_stage: "embedding",
-            processing_progress: batchProgress,
-          })
-          .eq("id", materialIdForError);
-      }
+      const rows = sliceChunks.map((chunk, i) => ({
+        material_id: materialIdForError,
+        chunk_index: embeddedUpTo + i,
+        chunk_text: chunk.text,
+        [EMBEDDING_COLUMN]: vectors[i],
+        start_position: chunk.start,
+        end_position: chunk.end,
+        page_number: chunk.pageNumber,
+      }));
 
       // Insert embedded chunks into DB
       const DB_BATCH_SIZE = 100;

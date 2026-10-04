@@ -41,7 +41,7 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 | Smart | `gpt-5.6-terra` | OpenAI |
 | Pro | `gpt-5.6-sol` | OpenAI |
 
-**Retrieval**: query is embedded with `gemini-embedding-001`, matched against course material chunks with a high-recall first pass (top 18, similarity ≥ 0.50), then reranked down to a final 10 results (relevance floor 0.55, relaxed to 0.40 for broad "summary" queries). Retrieval is automatically scoped to:
+**Retrieval**: query is embedded with OpenAI `text-embedding-3-large` (3072 dims, via the shared embedding service in `_shared/embeddings.ts`), matched against course material chunks with a high-recall first pass (top 18, similarity ≥ 0.20), then reranked down to a final 10 results (relevance floor 0.20, relaxed to 0.15 for broad "summary" queries). Retrieval is automatically scoped to:
 - the course(s) the student is asking about,
 - ⏱ **the currently active academic term** — switching the active term instantly changes what the assistant can see, app-wide (see [Academic terms](#academic-terms--course-management)),
 - the student's chosen document scope (see below).
@@ -125,7 +125,7 @@ Students and admins can update their profile and set **custom instructions** (se
 
 - **Frontend**: React 18, Vite, TypeScript, React Router, TanStack Query, Tailwind CSS, shadcn/ui (Radix primitives).
 - **Backend**: Supabase — Postgres with pgvector, Row Level Security, Edge Functions (Deno).
-- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat; `gpt-5.6-luna` for flashcards), Gemini (`gemini-embedding-001` for embeddings; `gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-5.6-luna`, AssemblyAI (video transcription).
+- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat; `gpt-5.6-luna` for flashcards), OpenAI `text-embedding-3-large` for embeddings, Gemini (`gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-5.6-luna`, AssemblyAI (video transcription).
 
 ## Local development
 

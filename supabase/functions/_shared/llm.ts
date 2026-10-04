@@ -2,7 +2,14 @@
 // All edge functions call OpenAI through this module instead of raw fetch,
 // so provider/model changes happen in one place.
 import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
-import { generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import { embedMany, generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import {
+  DEFAULT_EMBEDDING_CONFIG,
+  createEmbeddingService,
+  type EmbedBatch,
+  type EmbeddingConfig,
+  type EmbeddingService,
+} from "./embeddings.ts";
 import {
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
@@ -55,14 +62,14 @@ function buildGenerationOptions(options: ChatTextOptions) {
   };
 }
 
-function wrapProviderError(error: unknown): never {
+function wrapProviderError(error: unknown, label = "Chat API error"): never {
   if (error instanceof HttpError) throw error;
   const status = (error as { statusCode?: number })?.statusCode;
   if (status === 429) {
     throw new HttpError(429, "Rate limit exceeded. Please try again later.");
   }
   const message = error instanceof Error ? error.message : String(error);
-  throw new Error(`Chat API error: ${message}`);
+  throw new Error(`${label}: ${message}`);
 }
 
 export async function generateChatText(options: ChatTextOptions): Promise<string> {
@@ -136,4 +143,22 @@ export async function generateDocumentText(options: DocumentTextOptions): Promis
   } catch (error) {
     wrapProviderError(error);
   }
+}
+
+// The OpenAI-backed embedding service (see embeddings.ts). 429s and 5xx are
+// retried with the SDK's exponential backoff before surfacing.
+export function createOpenAIEmbeddingService(
+  apiKey: string,
+  config: EmbeddingConfig = DEFAULT_EMBEDDING_CONFIG,
+): EmbeddingService {
+  const model = createOpenAI({ apiKey }).textEmbeddingModel(config.model, { dimensions: config.dimensions });
+  const embedBatch: EmbedBatch = async (texts, signal) => {
+    try {
+      const result = await embedMany({ model, values: texts, maxRetries: 3, abortSignal: signal });
+      return result.embeddings;
+    } catch (error) {
+      wrapProviderError(error, "Embedding API error");
+    }
+  };
+  return createEmbeddingService(embedBatch, config);
 }
