@@ -5,12 +5,15 @@ export interface TextChunk {
   end: number;
 }
 
-// Chunks are sent to Postgres as JSON, which rejects these even though JavaScript allows them:
-// C0 control characters (including \u0000, which `text` cannot store; \n and \r are kept) and
-// unpaired UTF-16 surrogates ("invalid input syntax for type json").
-const UNSTORABLE_CHARS =
-  // eslint-disable-next-line no-control-regex -- matching control characters is the point
-  /[\u0000-\u0009\u000B\u000C\u000E-\u001F]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+// Normalize C0 controls to spaces so extracted separators do not join words.
+// Keep \n and \r; \u0000 cannot be stored in Postgres text.
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL_SEPARATORS = /[\u0000-\u0009\u000B\u000C\u000E-\u001F]/g;
+
+// Postgres rejects unpaired UTF-16 surrogates in JSON. Remove them separately,
+// preserving valid pairs such as mathematical symbols and emoji.
+const LONE_SURROGATES =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
@@ -22,7 +25,10 @@ function alignToCodePoint(text: string, index: number): number {
 }
 
 export function chunkText(text: string, chunkSize: number, overlap: number): TextChunk[] {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\t/g, " ").replace(UNSTORABLE_CHARS, "");
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(CONTROL_SEPARATORS, " ")
+    .replace(LONE_SURROGATES, "");
   const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
   if (!cleaned) return [];
 
