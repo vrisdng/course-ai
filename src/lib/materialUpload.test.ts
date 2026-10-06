@@ -30,14 +30,16 @@ describe('material upload policy', () => {
     expect(getImmediateUploadValidationError(docxCandidate)).toBeNull();
   });
 
-  it('applies the 5GB immediate limit to supported video uploads', () => {
+  it('applies the decimal 3 GB immediate limit to supported video uploads', () => {
     const videoCandidate = {
       name: 'lecture.mp4',
       size: VIDEO_MAX_FILE_SIZE_BYTES + 1,
     };
 
     expect(isVideoUpload(videoCandidate)).toBe(true);
-    expect(getImmediateUploadValidationError(videoCandidate)).toContain('5GB');
+    expect(VIDEO_MAX_FILE_SIZE_BYTES).toBe(3_000_000_000);
+    expect(getImmediateUploadValidationError({ name: 'lecture.mp4', size: VIDEO_MAX_FILE_SIZE_BYTES })).toBeNull();
+    expect(getImmediateUploadValidationError(videoCandidate)).toContain('3 GB');
   });
 
   it('treats code and text uploads as text-like content', () => {

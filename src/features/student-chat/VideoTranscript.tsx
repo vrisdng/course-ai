@@ -1,5 +1,7 @@
-import { ExternalLink, FileText, Loader2 } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { FileText, Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+
+import { StoredVideoPlayer } from '@/features/video-playback/StoredVideoPlayer';
 
 import { groupSegmentsIntoParagraphs } from './groupTranscriptSegments';
 import { formatCitationLocator, formatTimestamp } from './time';
@@ -8,6 +10,7 @@ import type { ActiveVideoSource } from './VideoSourceDialog';
 
 export function VideoTranscript({ source }: { source: ActiveVideoSource }) {
   const highlightRef = useRef<HTMLDivElement | null>(null);
+  const [seekMs, setSeekMs] = useState<number | undefined>(undefined);
   const { segments, isLoading } = useTranscriptWindow(
     source.materialId,
     source.startMs,
@@ -34,17 +37,15 @@ export function VideoTranscript({ source }: { source: ActiveVideoSource }) {
         </div>
       </div>
 
-      {source.signedUrl ? (
-        <div className="flex justify-end">
-          <a
-            href={source.signedUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-          >
-            <ExternalLink className="h-3 w-3" />
-            Open video
-          </a>
+      {source.signedUrl || source.filePath ? (
+        <div className="space-y-2">
+          <StoredVideoPlayer
+            filePath={source.filePath}
+            initialUrl={source.signedUrl}
+            startMs={source.startMs}
+            seekMs={seekMs}
+            showOpenLink
+          />
         </div>
       ) : null}
 
@@ -72,9 +73,20 @@ export function VideoTranscript({ source }: { source: ActiveVideoSource }) {
                     : 'rounded-md border border-border bg-muted/20 px-4 py-3'
                 }
               >
-                <span className="mr-2 text-xs font-medium text-primary">
-                  {formatTimestamp(para.startMs)}&ndash;{formatTimestamp(para.endMs)}
-                </span>
+                {source.signedUrl || source.filePath ? (
+                  <button
+                    type="button"
+                    aria-label={`Jump to ${formatTimestamp(para.startMs)}`}
+                    className="mr-2 text-xs font-medium text-primary underline-offset-2 hover:underline"
+                    onClick={() => setSeekMs(para.startMs)}
+                  >
+                    {formatTimestamp(para.startMs)}&ndash;{formatTimestamp(para.endMs)}
+                  </button>
+                ) : (
+                  <span className="mr-2 text-xs font-medium text-primary">
+                    {formatTimestamp(para.startMs)}&ndash;{formatTimestamp(para.endMs)}
+                  </span>
+                )}
                 <span className="text-sm text-foreground">{para.text}</span>
               </div>
             );

@@ -1,83 +1,168 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const getSession = vi.fn();
-const invoke = vi.fn();
-const single = vi.fn();
-const select = vi.fn(() => ({ single }));
-const insert = vi.fn(() => ({ select }));
-const from = vi.fn(() => ({ insert }));
+const mocks = vi.hoisted(() => ({
+  getSession: vi.fn(), invoke: vi.fn(),
+  previousUploads: [] as Array<Record<string, unknown>>,
+  uploads: [] as Array<{ options: Record<string, unknown>; start: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn>; findPreviousUploads: ReturnType<typeof vi.fn>; resumeFromPreviousUpload: ReturnType<typeof vi.fn> }>,
+}));
 
 vi.mock('@/integrations/supabase/client', () => ({
-  supabase: { auth: { getSession }, functions: { invoke }, from },
+  supabase: { auth: { getSession: mocks.getSession }, functions: { invoke: mocks.invoke } },
 }));
+vi.mock('tus-js-client', () => ({
+  Upload: class {
+    constructor(_file: File, options: Record<string, unknown>) {
+      const upload = {
+        options, start: vi.fn(), abort: vi.fn().mockResolvedValue(undefined),
+        findPreviousUploads: vi.fn().mockImplementation(async () => mocks.previousUploads), resumeFromPreviousUpload: vi.fn(),
+      };
+      mocks.uploads.push(upload);
+      return upload;
+    }
+  },
+}));
+
+const makeFile = (size = 10) => {
+  const file = new File(['video'], 'lecture.mp4', { type: 'video/mp4', lastModified: 123 });
+  Object.defineProperty(file, 'size', { value: size });
+  return file;
+};
+
+async function run(overrides: Record<string, unknown> = {}) {
+  const { uploadVideoForTranscription } = await import('./videoUploadPipeline');
+  return uploadVideoForTranscription({
+    file: makeFile(), courseId: 'course-1', academicTermId: 'term-1',
+    accessScope: 'course', uploaderId: 'user-1', onProgress: vi.fn(), ...overrides,
+  });
+}
 
 describe('uploadVideoForTranscription', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 17));
-    vi.stubGlobal('cancelAnimationFrame', vi.fn());
-    getSession.mockResolvedValue({ data: { session: { access_token: 'access-token' } } });
-    single.mockResolvedValue({ data: { id: 'material-1' }, error: null });
-    invoke.mockResolvedValue({ data: { accepted: true }, error: null });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ uploadUrl: 'https://assembly.test/audio' }),
-    }));
+    mocks.uploads.length = 0;
+    mocks.previousUploads = [];
+    localStorage.clear();
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => '00000000-0000-4000-8000-000000000001') });
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'access-token' } } });
+    mocks.invoke.mockImplementation(async (_name, { body }) => body.action === 'create'
+      ? { data: { materialId: 'material-1', filePath: 'course-1/material-1-lecture.mp4', uploaded: false }, error: null }
+      : { data: { materialId: 'material-1', uploaded: true, transcriptionStatus: 'pending' }, error: null });
   });
 
-  async function run(overrides: Record<string, unknown> = {}) {
-    const { uploadVideoForTranscription } = await import('./videoUploadPipeline');
-    return uploadVideoForTranscription({
-      file: new File(['video'], 'lecture.mp4', { type: 'video/mp4' }),
-      courseId: 'course-1', academicTermId: 'term-1', accessScope: 'course', uploaderId: 'user-1',
-      onProgress: vi.fn(), ...overrides,
-    });
-  }
-
-  it('uploads, persists metadata, starts transcription, and reports progress', async () => {
+  it('creates a stable session, uploads with TUS and actual byte progress, then completes', async () => {
     const onProgress = vi.fn();
-    await expect(run({ accessScope: 'public', onProgress })).resolves.toEqual({ materialId: 'material-1' });
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/functions/v1/upload-video'), expect.objectContaining({
-      method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer access-token', 'Content-Type': 'video/mp4' }),
+    const promise = run({ onProgress });
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    const upload = mocks.uploads[0];
+    expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', expect.objectContaining({
+      body: expect.objectContaining({ action: 'create', courseId: 'course-1', fileSize: 10, uploadKey: '00000000-0000-4000-8000-000000000001' }),
     }));
-    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
-      course_id: 'course-1', academic_term_id: 'term-1', access_scope: 'public', is_public: true,
-      uploaded_by: 'user-1', file_name: 'lecture.mp4', file_type: 'video', processing_status: 'pending',
+    expect(upload.options).toEqual(expect.objectContaining({
+      endpoint: expect.stringContaining('/storage/v1/upload/resumable'),
+      chunkSize: 6 * 1024 * 1024, removeFingerprintOnSuccess: true,
+      metadata: expect.objectContaining({ bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' }),
     }));
-    expect(invoke).toHaveBeenCalledWith('transcribe-video', { body: { materialId: 'material-1', audioUrl: 'https://assembly.test/audio' } });
-    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: 'uploading', progress: 90 }));
-    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'parsing', progress: 95 }));
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(17);
+    expect(upload.options.headers).not.toHaveProperty('x-upsert');
+    (upload.options.onProgress as (sent: number, total: number) => void)(5, 10);
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: 'uploading', progress: 50, bytesUploaded: 5, bytesTotal: 10 }));
+    (upload.options.onSuccess as () => void)();
+    await expect(promise).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
+    expect(mocks.invoke).toHaveBeenLastCalledWith('video-upload-session', expect.objectContaining({ body: { action: 'complete', materialId: 'material-1' } }));
+    expect(localStorage.length).toBe(0);
   });
 
-  it('rejects unauthenticated and unsuccessful proxy uploads without creating records', async () => {
-    getSession.mockResolvedValueOnce({ data: { session: null } });
-    await expect(run()).rejects.toThrow('Not authenticated');
-    expect(from).not.toHaveBeenCalled();
-
-    vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 413, json: vi.fn().mockResolvedValue({ error: 'Video too large' }) } as unknown as Response);
-    await expect(run()).rejects.toThrow('Video too large');
-    expect(from).not.toHaveBeenCalled();
+  it('reuses the upload key on retry and resumes a prior TUS URL', async () => {
+    const first = run();
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    (mocks.uploads[0].options.onError as (error: Error) => void)(new Error('network down'));
+    await expect(first).rejects.toThrow('network down');
+    const previous = { uploadUrl: 'https://upload.test/old', urlStorageKey: 'old-key', creationTime: new Date().toISOString(), metadata: { bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' } };
+    mocks.previousUploads = [previous];
+    const second = run();
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(2));
+    const upload = mocks.uploads[1];
+    await vi.waitFor(() => expect(upload.resumeFromPreviousUpload).toHaveBeenCalledWith(previous));
+    (upload.options.onSuccess as () => void)();
+    await expect(second).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
+    const creates = mocks.invoke.mock.calls.filter(([, options]) => options.body.action === 'create');
+    expect(creates[0][1].body.uploadKey).toBe(creates[1][1].body.uploadKey);
   });
 
-  it('handles malformed success responses and material persistence failures', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: vi.fn().mockResolvedValue({}) } as unknown as Response);
-    await expect(run()).rejects.toThrow('No upload URL');
-
-    single.mockResolvedValueOnce({ data: null, error: { message: 'database unavailable' } });
-    await expect(run()).rejects.toThrow('Failed to create material record: database unavailable');
+  it('skips transfer when the server verifies the object already exists', async () => {
+    mocks.invoke.mockImplementation(async (_name, { body }) => body.action === 'create'
+      ? { data: { materialId: 'material-1', filePath: 'course-1/material-1-lecture.mp4', uploaded: true }, error: null }
+      : { data: { materialId: 'material-1', uploaded: true, transcriptionStatus: 'pending' }, error: null });
+    await expect(run()).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
+    expect(mocks.uploads).toHaveLength(0);
   });
 
-  it('surfaces edge-function transport and application errors', async () => {
-    invoke.mockResolvedValueOnce({ data: null, error: { message: 'timeout' } });
-    await expect(run()).rejects.toThrow('Transcription failed: timeout');
-    invoke.mockResolvedValueOnce({ data: { error: 'Unsupported media' }, error: null });
-    await expect(run()).rejects.toThrow('Unsupported media');
+  it('starts fresh when a stored TUS URL is near expiry', async () => {
+    mocks.previousUploads = [{
+      uploadUrl: 'https://upload.test/stale', urlStorageKey: 'old-key',
+      creationTime: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      metadata: { bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' },
+    }];
+    const promise = run();
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    const upload = mocks.uploads[0];
+    await vi.waitFor(() => expect(upload.start).toHaveBeenCalled());
+    expect(upload.resumeFromPreviousUpload).not.toHaveBeenCalled();
+    (upload.options.onSuccess as () => void)();
+    await promise;
   });
 
-  it('honors cancellation before network work begins', async () => {
-    const controller = new AbortController(); controller.abort();
-    await expect(run({ signal: controller.signal })).rejects.toThrow('Upload cancelled');
-    expect(getSession).not.toHaveBeenCalled();
+  it('restarts a resumed transfer if its server URL has expired', async () => {
+    mocks.previousUploads = [{
+      uploadUrl: 'https://upload.test/expired', urlStorageKey: 'old-key',
+      creationTime: new Date().toISOString(),
+      metadata: { bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' },
+    }];
+    const promise = run();
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    const upload = mocks.uploads[0];
+    await vi.waitFor(() => expect(upload.resumeFromPreviousUpload).toHaveBeenCalled());
+    (upload.options.onError as (error: Error) => void)(Object.assign(new Error('expired'), {
+      originalResponse: { getStatus: () => 410 },
+    }));
+    await vi.waitFor(() => expect(upload.start).toHaveBeenCalledTimes(2));
+    (upload.options.onSuccess as () => void)();
+    await promise;
+  });
+
+  it('uses a fresh session for each TUS request', async () => {
+    const promise = run();
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    const before = mocks.uploads[0].options.onBeforeRequest as (req: { setHeader: ReturnType<typeof vi.fn> }) => Promise<void>;
+    const req = { setHeader: vi.fn() };
+    await before(req);
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'refreshed-token' } } });
+    await before(req);
+    expect(req.setHeader).toHaveBeenCalledWith('authorization', 'Bearer refreshed-token');
+    (mocks.uploads[0].options.onSuccess as () => void)();
+    await promise;
+  });
+
+  it('reports a saved video with failed transcription without claiming it is processing', async () => {
+    mocks.invoke.mockImplementation(async (_name, { body }) => body.action === 'create'
+      ? { data: { materialId: 'material-1', filePath: 'course-1/material-1-lecture.mp4', uploaded: true }, error: null }
+      : { data: { materialId: 'material-1', uploaded: true, transcriptionStatus: 'failed' }, error: null });
+    const onProgress = vi.fn();
+    await expect(run({ onProgress })).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'failed' });
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'error', statusText: expect.stringContaining('Transcription failed') }));
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('enforces 3 GB before server work and aborts an in-flight transfer', async () => {
+    await expect(run({ file: makeFile(3_000_000_001) })).rejects.toThrow('3 GB');
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    const promise = run({ signal: controller.signal });
+    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    controller.abort();
+    await expect(promise).rejects.toThrow('Upload cancelled');
+    expect(mocks.uploads[0].abort).toHaveBeenCalled();
+    expect(mocks.invoke.mock.calls.some(([, options]) => options.body.action === 'complete')).toBe(false);
+    expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', { body: { action: 'cancel', materialId: 'material-1' } });
+    expect(localStorage.length).toBe(0);
   });
 });

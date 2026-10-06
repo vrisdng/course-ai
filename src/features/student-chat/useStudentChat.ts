@@ -1051,6 +1051,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setActiveVideoSource({
           title: resolved.fileName,
           signedUrl,
+          filePath: resolved.filePath,
           materialId: resolved.materialId,
           startMs: citation.startMs ?? 0,
           endMs: citation.endMs,

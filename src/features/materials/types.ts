@@ -25,6 +25,7 @@ export type Material = {
   file_path: string;
   file_type: string;
   file_size: number | null;
+  video_upload_state?: 'uploading' | 'uploaded' | 'cancelled' | 'deleting' | null;
   linked_url: string | null;
   topic: string | null;
   week_number: number | null;

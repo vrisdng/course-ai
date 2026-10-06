@@ -1,633 +1,113 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
-import { EMBEDDING_COLUMN } from "../_shared/embeddings.ts";
-import { createOpenAIEmbeddingService } from "../_shared/llm.ts";
+import { isStoredVideoPath } from "./pipeline.ts";
 
-// ---------- Request types ----------
-
-interface TranscribeRequest {
-  materialId: string;
-  audioUrl: string; // AssemblyAI upload URL returned by upload-video function
+interface TranscribeRequest { materialId: string; refinalize?: boolean; retry?: boolean }
+const MAX_VIDEO_BYTES = 3_000_000_000;
+const SOURCE_URL_TTL_SECONDS = 6 * 60 * 60;
+const VIDEO_BUCKET = "course-materials";
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 }
-
-interface RefinalizeRequest {
-  materialId: string;
-  refinalize: true; // Re-run chunking + embedding from existing transcript segments
-}
-
-// ---------- Internal types ----------
-
-interface TranscriptSegment {
-  startMs: number;
-  endMs: number;
-  text: string;
-  confidence?: number | null;
-  speakerLabel?: string | null;
-}
-
-interface TranscriptChunk {
-  text: string;
-  startMs: number;
-  endMs: number;
-}
-
-interface AssemblyAIWord {
-  text: string;
-  start: number; // ms
-  end: number;   // ms
-  confidence: number;
-  speaker?: string | null;
-}
-
-// ---------- Constants ----------
-
-const ASSEMBLYAI_API_URL = "https://api.assemblyai.com/v2";
-const ASSEMBLYAI_POLL_INTERVAL_MS = 5000;
-const TARGET_CHUNK_CHARACTERS = 1200;
-const MIN_CHUNK_CHARACTERS = 200;
-const SEGMENT_OVERLAP = 1;
-const PARAGRAPH_DURATION_MS = 60_000; // target ~1 minute per paragraph
-const SENTENCE_ENDERS = new Set([".", "?", "!"]);
-
-// ---------- Word → segment grouping ----------
-//
-// Groups words into paragraph-sized segments of ~1 minute each.
-// When the 1-minute window is reached, the cut is deferred to the next
-// sentence boundary (word ending in ".", "?" or "!") so paragraphs always
-// end cleanly. If no sentence boundary is found within a 30-second grace
-// period, the paragraph is cut at the nearest word anyway.
-
-function groupWordsIntoSegments(words: AssemblyAIWord[]): TranscriptSegment[] {
-  if (words.length === 0) return [];
-
-  const GRACE_MS = 30_000; // max extra time to wait for a sentence boundary
-
-  const segments: TranscriptSegment[] = [];
-  let currentWords: AssemblyAIWord[] = [];
-  let currentStart = words[0].start;
-  let hardCutAt: number | null = null; // timestamp after which we force a cut
-
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    currentWords.push(word);
-
-    const duration = word.end - currentStart;
-    const isLast = i === words.length - 1;
-    const isSentenceEnd = SENTENCE_ENDERS.has(word.text.slice(-1));
-
-    // Once we hit 1 minute, arm the hard-cut deadline (1 min + 30 s grace)
-    if (hardCutAt === null && duration >= PARAGRAPH_DURATION_MS) {
-      hardCutAt = currentStart + PARAGRAPH_DURATION_MS + GRACE_MS;
-    }
-
-    const shouldCut =
-      isLast ||
-      (hardCutAt !== null && isSentenceEnd) ||      // sentence boundary inside the window
-      (hardCutAt !== null && word.end >= hardCutAt); // grace period exhausted — cut now
-
-    if (shouldCut) {
-      const text = currentWords.map((w) => w.text).join(" ").trim();
-      if (text) {
-        const avgConfidence =
-          currentWords.reduce((sum, w) => sum + w.confidence, 0) / currentWords.length;
-        segments.push({
-          startMs: currentStart,
-          endMs: word.end,
-          text,
-          confidence: avgConfidence,
-          speakerLabel: currentWords[0].speaker ?? null,
-        });
-      }
-      const nextWord = words[i + 1];
-      if (nextWord) {
-        currentWords = [];
-        currentStart = nextWord.start;
-        hardCutAt = null;
-      }
-    }
-  }
-
-  return segments;
-}
-
-// ---------- Transcript chunking ----------
-
-function buildTranscriptChunks(segments: TranscriptSegment[]): TranscriptChunk[] {
-  if (segments.length === 0) return [];
-
-  const chunks: TranscriptChunk[] = [];
-  let index = 0;
-
-  while (index < segments.length) {
-    const windowSegments: TranscriptSegment[] = [];
-    let textLength = 0;
-    let cursor = index;
-
-    while (cursor < segments.length) {
-      const segment = segments[cursor];
-      const nextLength = textLength + (textLength > 0 ? 1 : 0) + segment.text.length;
-
-      if (
-        windowSegments.length > 0 &&
-        nextLength > TARGET_CHUNK_CHARACTERS &&
-        textLength >= MIN_CHUNK_CHARACTERS
-      ) {
-        break;
-      }
-
-      windowSegments.push(segment);
-      textLength = nextLength;
-      cursor += 1;
-
-      if (textLength >= TARGET_CHUNK_CHARACTERS) break;
-    }
-
-    if (windowSegments.length === 0) break;
-
-    const text = windowSegments.map((s) => s.text).join(" ").trim();
-    if (text) {
-      chunks.push({
-        text,
-        startMs: windowSegments[0].startMs,
-        endMs: windowSegments[windowSegments.length - 1].endMs,
-      });
-    }
-
-    if (cursor >= segments.length) break;
-    index = Math.max(index + 1, cursor - SEGMENT_OVERLAP);
-  }
-
-  return chunks;
-}
-
-// ---------- Embedding ----------
-
-function buildTranscriptChunkRows(
-  materialId: string,
-  transcriptChunks: TranscriptChunk[],
-  vectors: number[][],
-) {
-  return transcriptChunks.map((chunk, i) => ({
-    material_id: materialId,
-    chunk_index: i,
-    chunk_text: chunk.text,
-    [EMBEDDING_COLUMN]: vectors[i],
-    start_position: 0,
-    end_position: chunk.text.length,
-    start_ms: chunk.startMs,
-    end_ms: chunk.endMs,
-    page_number: null,
-  }));
-}
-
-// ---------- AssemblyAI ----------
-
-async function submitToAssemblyAI(audioUrl: string, apiKey: string): Promise<string> {
-  const response = await fetch(`${ASSEMBLYAI_API_URL}/transcript`, {
-    method: "POST",
-    headers: {
-      Authorization: apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      audio_url: audioUrl,
-      speech_models: ["universal-2"],
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`AssemblyAI submit error: ${response.status} - ${errorText}`);
-  }
-
-  const payload = await response.json();
-  if (!payload.id) throw new Error("AssemblyAI did not return a transcript ID");
-  return payload.id as string;
-}
-
-async function pollAssemblyAI(
-  transcriptId: string,
-  apiKey: string
-): Promise<{ words: AssemblyAIWord[]; audioDurationMs: number | null; language: string | null }> {
-  while (true) {
-    const response = await fetch(`${ASSEMBLYAI_API_URL}/transcript/${transcriptId}`, {
-      headers: { Authorization: apiKey },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AssemblyAI poll error: ${response.status} - ${errorText}`);
-    }
-
-    const payload = await response.json();
-
-    if (payload.status === "completed") {
-      return {
-        words: Array.isArray(payload.words) ? payload.words : [],
-        audioDurationMs:
-          typeof payload.audio_duration === "number"
-            ? Math.round(payload.audio_duration * 1000)
-            : null,
-        language:
-          typeof payload.language_code === "string" ? payload.language_code : null,
-      };
-    }
-
-    if (payload.status === "error") {
-      throw new Error(`AssemblyAI transcription failed: ${payload.error || "Unknown error"}`);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, ASSEMBLYAI_POLL_INTERVAL_MS));
-  }
-}
-
-// ---------- Finalize (chunk + embed + store) ----------
-
-async function finalizeTranscription(opts: {
-  materialId: string;
-  allSegments: TranscriptSegment[];
-  durationMs: number | null;
-  language: string | null;
-  adminClient: ReturnType<typeof createClient>;
-  openAiApiKey: string;
-}) {
-  const { materialId, allSegments, durationMs, language, adminClient, openAiApiKey } = opts;
-
-  const transcriptChunks = buildTranscriptChunks(allSegments);
-  if (transcriptChunks.length === 0) {
-    throw new Error("The transcript did not contain enough text to index");
-  }
-
-  await adminClient
-    .from("materials")
-    .update({ processing_status: "processing", processing_stage: "chunking", processing_progress: 72 })
-    .eq("id", materialId);
-
-  await adminClient.from("material_transcript_segments").delete().eq("material_id", materialId);
-  await adminClient.from("chunks").delete().eq("material_id", materialId);
-
-  const transcriptRows = allSegments.map((segment, index) => ({
-    material_id: materialId,
-    segment_index: index,
-    start_ms: segment.startMs,
-    end_ms: segment.endMs,
-    text: segment.text,
-    confidence: segment.confidence ?? null,
-    speaker_label: segment.speakerLabel ?? null,
-  }));
-
-  for (let i = 0; i < transcriptRows.length; i += 250) {
-    const { error } = await adminClient
-      .from("material_transcript_segments")
-      .insert(transcriptRows.slice(i, i + 250));
-    if (error) throw new Error(`Failed to insert transcript segments: ${error.message}`);
-  }
-
-  await adminClient
-    .from("materials")
-    .update({ processing_status: "processing", processing_stage: "embedding", processing_progress: 80 })
-    .eq("id", materialId);
-
-  const vectors = await createOpenAIEmbeddingService(openAiApiKey).embedDocuments(
-    transcriptChunks.map((chunk) => chunk.text),
-  );
-  const chunkRows = buildTranscriptChunkRows(materialId, transcriptChunks, vectors);
-
-  for (let i = 0; i < chunkRows.length; i += 100) {
-    const { error } = await adminClient.from("chunks").insert(chunkRows.slice(i, i + 100));
-    if (error) throw new Error(`Failed to insert transcript chunks: ${error.message}`);
-  }
-
-  await adminClient
-    .from("materials")
-    .update({
-      processing_status: "completed",
-      processing_error: null,
-      processing_stage: "completed",
-      processing_progress: 100,
-      duration_ms: durationMs,
-      transcription_provider: "assemblyai",
-      transcription_language: language,
-      thumbnail_path: null,
-      file_path: "",
-    })
-    .eq("id", materialId);
-
-  return { segmentsInserted: transcriptRows.length, chunksInserted: chunkRows.length };
-}
-
-// ---------- Background worker ----------
-
-async function processTranscription(opts: {
-  materialId: string;
-  audioUrl: string;
-  assemblyApiKey: string;
-  openAiApiKey: string;
-  supabaseUrl: string;
-  serviceRoleKey: string;
-}) {
-  const { materialId, audioUrl, assemblyApiKey, openAiApiKey, supabaseUrl, serviceRoleKey } = opts;
-  const adminClient = createClient(supabaseUrl, serviceRoleKey);
-
-  try {
-    await adminClient
-      .from("materials")
-      .update({ processing_status: "processing", processing_stage: "transcribing", processing_progress: 30 })
-      .eq("id", materialId);
-
-    const transcriptId = await submitToAssemblyAI(audioUrl, assemblyApiKey);
-    console.log(`[transcribe] AssemblyAI job submitted: ${transcriptId}`);
-
-    await adminClient
-      .from("materials")
-      .update({ external_transcript_id: transcriptId, processing_progress: 35 })
-      .eq("id", materialId);
-
-    const result = await pollAssemblyAI(transcriptId, assemblyApiKey);
-    console.log(`[transcribe] AssemblyAI completed — ${result.words.length} words`);
-
-    const segments = groupWordsIntoSegments(result.words);
-    if (segments.length === 0) {
-      throw new Error("AssemblyAI returned no usable words for transcription");
-    }
-
-    const finalResult = await finalizeTranscription({
-      materialId,
-      allSegments: segments,
-      durationMs: result.audioDurationMs,
-      language: result.language,
-      adminClient,
-      openAiApiKey,
-    });
-
-    console.log(`[transcribe] Done — ${finalResult.segmentsInserted} segments, ${finalResult.chunksInserted} chunks`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "An unexpected error occurred";
-    console.error("[transcribe] Background processing failed:", error);
-    await adminClient
-      .from("materials")
-      .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
-      .eq("id", materialId);
-  }
-}
-
-// ---------- Re-finalize: re-chunk + re-embed from existing transcript segments ----------
-
-async function refinalizeTranscription(opts: {
-  materialId: string;
-  openAiApiKey: string;
-  supabaseUrl: string;
-  serviceRoleKey: string;
-}) {
-  const { materialId, openAiApiKey, supabaseUrl, serviceRoleKey } = opts;
-  const adminClient = createClient(supabaseUrl, serviceRoleKey);
-
-  try {
-    await adminClient
-      .from("materials")
-      .update({ processing_status: "processing", processing_error: null, processing_stage: "chunking", processing_progress: 70 })
-      .eq("id", materialId);
-
-    // Load all existing transcript segments
-    const { data: segmentRows, error: segError } = await adminClient
-      .from("material_transcript_segments")
-      .select("start_ms, end_ms, text, confidence, speaker_label")
-      .eq("material_id", materialId)
-      .order("start_ms", { ascending: true });
-
-    if (segError) throw new Error(`Failed to fetch segments: ${segError.message}`);
-    if (!segmentRows || segmentRows.length === 0) {
-      throw new Error("No transcript segments found — cannot re-finalize");
-    }
-
-    console.log(`[refinalize] Loaded ${segmentRows.length} transcript segments`);
-
-    const allSegments: TranscriptSegment[] = segmentRows.map((row) => ({
-      startMs: row.start_ms,
-      endMs: row.end_ms,
-      text: row.text,
-      confidence: row.confidence,
-      speakerLabel: row.speaker_label,
-    }));
-
-    // Fetch material for duration + language
-    const { data: material } = await adminClient
-      .from("materials")
-      .select("duration_ms, transcription_language")
-      .eq("id", materialId)
-      .single();
-
-    // Delete only chunks (keep transcript segments intact)
-    await adminClient.from("chunks").delete().eq("material_id", materialId);
-
-    const transcriptChunks = buildTranscriptChunks(allSegments);
-    if (transcriptChunks.length === 0) {
-      throw new Error("Transcript did not produce any chunks");
-    }
-
-    console.log(`[refinalize] Building ${transcriptChunks.length} chunks and embedding...`);
-
-    await adminClient
-      .from("materials")
-      .update({ processing_stage: "embedding", processing_progress: 80 })
-      .eq("id", materialId);
-
-    const vectors = await createOpenAIEmbeddingService(openAiApiKey).embedDocuments(
-      transcriptChunks.map((chunk) => chunk.text),
-      {
-        onProgress: async (embeddedCount, totalCount) => {
-          await adminClient
-            .from("materials")
-            .update({ processing_progress: 80 + Math.round((embeddedCount / totalCount) * 18) })
-            .eq("id", materialId);
-        },
-      },
-    );
-    const chunkRows = buildTranscriptChunkRows(materialId, transcriptChunks, vectors);
-
-    for (let i = 0; i < chunkRows.length; i += 100) {
-      const { error } = await adminClient.from("chunks").insert(chunkRows.slice(i, i + 100));
-      if (error) throw new Error(`Failed to insert chunks: ${error.message}`);
-    }
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "completed",
-        processing_error: null,
-        processing_stage: "completed",
-        processing_progress: 100,
-        duration_ms: material?.duration_ms ?? null,
-        transcription_provider: "assemblyai",
-        transcription_language: material?.transcription_language ?? null,
-      })
-      .eq("id", materialId);
-
-    console.log(`[refinalize] Done — ${chunkRows.length} chunks embedded`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    console.error("[refinalize] Failed:", error);
-    await adminClient
-      .from("materials")
-      .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
-      .eq("id", materialId);
-  }
-}
-
-// ---------- Main handler ----------
 
 serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-
-  let materialIdForError: string | null = null;
-
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Missing authorization header" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const assemblyApiKey = Deno.env.get("ASSEMBLY_API_KEY") ?? "";
+    if (!supabaseUrl || !serviceRoleKey || !assemblyApiKey) return json({ error: "Video transcription is not configured" }, 500);
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+    const internal = req.headers.get("apikey") === serviceRoleKey ||
+      req.headers.get("Authorization") === `Bearer ${serviceRoleKey}`;
+    if (!internal) {
+      const authHeader = req.headers.get("Authorization") ?? "";
+      if (!authHeader.startsWith("Bearer ")) return json({ error: "Unauthorized" }, 401);
+      const userClient = createClient(supabaseUrl, serviceRoleKey, { global: { headers: { Authorization: authHeader } } });
+      const { data: authData, error: authError } = await userClient.auth.getUser(authHeader.slice(7));
+      if (authError || !authData.user) return json({ error: "Unauthorized" }, 401);
+      const { data: profile, error: profileError } = await userClient.from("profiles").select("role").eq("user_id", authData.user.id).single();
+      if (profileError || profile?.role !== "admin") return json({ error: "Forbidden" }, 403);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
-    const assemblyApiKey = Deno.env.get("ASSEMBLY_API_KEY");
+    const body = await req.json() as TranscribeRequest;
+    if (!body?.materialId || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(body.materialId)) return json({ error: "Valid materialId is required" }, 400);
+    const { data: material, error: materialError } = await admin.from("materials")
+      .select("id,file_type,file_path,file_size,video_upload_state,processing_status,duration_ms,transcription_language")
+      .eq("id", body.materialId).maybeSingle();
+    if (materialError) throw new Error(materialError.message);
+    if (!material || material.file_type !== "video") return json({ error: "Video material not found" }, 404);
 
-    if (!openAiApiKey) {
-      return new Response(
-        JSON.stringify({ error: "OPENAI_API_KEY is not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (body.refinalize === true) {
+      if (!Deno.env.get("OPENAI_API_KEY")) return json({ error: "Embedding service is not configured" }, 500);
+      const { data: existingJob } = await admin.from("video_transcription_jobs").select("status").eq("material_id", body.materialId).maybeSingle();
+      if (existingJob?.status === "staging" || existingJob?.status === "indexing") return json({ success: true, queued: true, mode: "refinalize", materialId: body.materialId });
+      if (existingJob?.status === "waiting" || existingJob?.status === "submitting") return json({ error: "Transcription is still running" }, 409);
+      const { data: firstSegment, error: segmentError } = await admin.from("material_transcript_segments")
+        .select("segment_index").eq("material_id", body.materialId).limit(1);
+      if (segmentError) throw new Error(segmentError.message);
+      if (!firstSegment?.length) return json({ error: "No transcript to reindex" }, 409);
+      const { error: jobError } = await admin.from("video_transcription_jobs").upsert({
+        material_id: body.materialId, status: "staging", attempt_count: 0,
+        stage_source: "existing", stage_segment_cursor: 0, stage_chunk_cursor: 0,
+        next_check_at: new Date().toISOString(), locked_until: null, last_error: null,
+      }, { onConflict: "material_id" });
+      if (jobError) throw new Error(jobError.message);
+      return json({ success: true, queued: true, mode: "refinalize", materialId: body.materialId });
     }
 
-    if (!assemblyApiKey) {
-      return new Response(
-        JSON.stringify({ error: "ASSEMBLY_API_KEY is not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (material.video_upload_state !== "uploaded" || !isStoredVideoPath(material.file_path)) return json({ error: "Stored video is not ready" }, 409);
+    const pathParts = material.file_path.split("/");
+    const filename = pathParts.pop()!;
+    const { data: files, error: listError } = await admin.storage.from(VIDEO_BUCKET).list(pathParts.join("/"), { search: filename, limit: 100 });
+    if (listError) throw new Error(listError.message);
+    const storedFile = files?.find((file) => file.name === filename);
+    const storedSize = Number(storedFile?.metadata?.size);
+    if (!storedFile || !Number.isFinite(storedSize) || storedSize <= 0 || storedSize > MAX_VIDEO_BYTES || storedSize !== Number(material.file_size)) {
+      return json({ error: "Stored video is missing, incomplete, or exceeds the 3 GB limit" }, 409);
     }
-
-    const supabaseClient = createClient(supabaseUrl, serviceRoleKey, {
-      global: { headers: { Authorization: authHeader } },
+    if (body.retry === true) {
+      const { data: reset, error: resetError } = await admin.rpc("retry_failed_video_transcription", { p_material_id: body.materialId });
+      if (resetError) throw new Error(resetError.message);
+      if (!reset) return json({ error: "Only a known failed transcription can be retried" }, 409);
+    }
+    const { data: signed, error: signError } = await admin.storage.from(VIDEO_BUCKET).createSignedUrl(material.file_path, SOURCE_URL_TTL_SECONDS);
+    if (signError || !signed?.signedUrl) throw new Error(signError?.message ?? "Unable to sign stored video");
+    const { data: claimed, error: claimError } = await admin.rpc("claim_video_transcription_submission", { p_material_id: body.materialId });
+    if (claimError) throw new Error(claimError.message);
+    const claim = claimed?.[0];
+    if (!claim?.claimed) {
+      if (claim?.current_status === "failed") return json({ error: "Transcription failed; retry explicitly", status: "failed", materialId: body.materialId }, 409);
+      if (claim?.current_status === "submission_unknown") return json({ error: "Provider submission outcome requires manual review", status: "submission_unknown", materialId: body.materialId }, 409);
+      return json({ success: true, queued: claim?.current_status !== "completed", status: claim?.current_status, materialId: body.materialId });
+    }
+    const webhookSecret = Deno.env.get("ASSEMBLYAI_WEBHOOK_SECRET");
+    const webhookUrl = Deno.env.get("ASSEMBLYAI_VIDEO_WEBHOOK_URL");
+    const response = await fetch("https://api.assemblyai.com/v2/transcript", {
+      method: "POST", headers: { Authorization: assemblyApiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audio_url: signed.signedUrl, speech_models: ["universal-2"],
+        ...(webhookSecret && webhookUrl ? {
+          webhook_url: webhookUrl, webhook_auth_header_name: "x-assemblyai-webhook-secret",
+          webhook_auth_header_value: webhookSecret,
+        } : {}),
+      }),
     });
-    const adminClient = createClient(supabaseUrl, serviceRoleKey);
-
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(
-      authHeader.replace("Bearer ", "")
-    );
-
-    if (userError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!response.ok) {
+      const message = `AssemblyAI submission failed (${response.status})`;
+      await admin.from("video_transcription_jobs").update({ status: "failed", last_error: message, updated_at: new Date().toISOString() }).eq("material_id", body.materialId);
+      await admin.from("materials").update({ processing_status: "failed", processing_stage: "failed", processing_progress: null, processing_error: message }).eq("id", body.materialId);
+      return json({ error: message }, 502);
     }
-
-    const { data: profile, error: profileError } = await supabaseClient
-      .from("profiles")
-      .select("role")
-      .eq("user_id", user.id)
-      .single();
-
-    if (profileError || !profile || profile.role !== "admin") {
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const body = (await req.json()) as TranscribeRequest | RefinalizeRequest;
-    materialIdForError = body.materialId;
-
-    if (!body.materialId) {
-      return new Response(
-        JSON.stringify({ error: "materialId is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Re-finalize mode: re-chunk + re-embed from existing transcript segments
-    if ("refinalize" in body && body.refinalize) {
-      const backgroundPromise = refinalizeTranscription({
-        materialId: body.materialId,
-        openAiApiKey,
-        supabaseUrl,
-        serviceRoleKey,
-      });
-
-      // @ts-expect-error — Deno EdgeRuntime global
-      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-        // @ts-expect-error — EdgeRuntime is a Deno runtime-only global
-        EdgeRuntime.waitUntil(backgroundPromise);
-      } else {
-        await backgroundPromise;
-      }
-
-      return new Response(
-        JSON.stringify({ success: true, queued: true, mode: "refinalize", materialId: body.materialId }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (!("audioUrl" in body) || !body.audioUrl) {
-      return new Response(
-        JSON.stringify({ error: "audioUrl is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    await adminClient
-      .from("materials")
-      .update({ processing_status: "processing", processing_error: null, processing_stage: "transcribing", processing_progress: 25 })
-      .eq("id", body.materialId);
-
-    const backgroundPromise = processTranscription({
-      materialId: body.materialId,
-      audioUrl: body.audioUrl,
-      assemblyApiKey,
-      openAiApiKey,
-      supabaseUrl,
-      serviceRoleKey,
-    });
-
-    // @ts-expect-error — Deno EdgeRuntime global
-    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-      // @ts-expect-error — EdgeRuntime is a Deno runtime-only global
-      EdgeRuntime.waitUntil(backgroundPromise);
-    } else {
-      await backgroundPromise;
-    }
-
-    return new Response(
-      JSON.stringify({ success: true, queued: true, materialId: body.materialId }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    const payload = await response.json() as { id?: string };
+    if (!payload.id) throw new Error("AssemblyAI returned no transcript ID");
+    const { error: recordError } = await admin.rpc("record_video_transcription_submission", { p_material_id: body.materialId, p_transcript_id: payload.id });
+    if (recordError) throw new Error(recordError.message);
+    return json({ success: true, queued: true, status: "waiting", materialId: body.materialId });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "An unexpected error occurred";
-    console.error("Transcribe video error:", error);
-
-    if (materialIdForError) {
-      try {
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        const adminClient = createClient(supabaseUrl, serviceRoleKey);
-        await adminClient
-          .from("materials")
-          .update({ processing_status: "failed", processing_error: message, processing_stage: "failed", processing_progress: null })
-          .eq("id", materialIdForError);
-      } catch (readdError) {
-        console.error("Failed to update material status on transcribe error:", readdError);
-      }
-    }
-
-    return new Response(JSON.stringify({ error: message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error("Video transcription request failed", error);
+    return json({ error: error instanceof Error ? error.message : "Unexpected error" }, 500);
   }
 });

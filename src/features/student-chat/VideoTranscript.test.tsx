@@ -60,6 +60,19 @@ describe('VideoTranscript', () => {
       render(<VideoTranscript source={{ ...transcriptSource, signedUrl: 'https://storage.test/video.mp4' }} />);
     });
     expect(screen.getByRole('link', { name: 'Open video' })).toHaveAttribute('href', 'https://storage.test/video.mp4');
+    expect(screen.getByLabelText('Video playback')).toHaveAttribute('src', 'https://storage.test/video.mp4');
+  });
+
+  it('jumps to a transcript timestamp in the stored player', async () => {
+    mocks.from.mockReturnValue(query({ data: segments, error: null }));
+    await act(async () => {
+      render(<VideoTranscript source={{ ...transcriptSource, signedUrl: 'https://storage.test/video.mp4' }} />);
+    });
+    const player = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    fireEvent.loadedMetadata(player);
+    await screen.findByText('Relevant explanation. More context.');
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to 0:35' }));
+    expect(player.currentTime).toBe(35);
   });
 
   it('omits the Open video link when the file is not stored', async () => {

@@ -63,7 +63,7 @@ supabase login            # uses SUPABASE_ACCESS_TOKEN or interactive login
 supabase link --project-ref ksthojmoifnunsatmday
 ```
 
-**Migrations** — 30 files in `supabase/migrations/`, applied in filename (timestamp) order:
+**Migrations** — files in `supabase/migrations/` are applied in filename (timestamp) order:
 
 ```sh
 supabase db push          # applies pending migrations to the linked remote project
@@ -71,7 +71,7 @@ supabase db push          # applies pending migrations to the linked remote proj
 
 Read the migration list in [HANDOFF.md](HANDOFF.md) before writing a new one — several tables/columns were added then reverted (conversation limits, `lecturer` role, `organizations`), so grep the existing migrations for a concept before assuming it doesn't exist.
 
-**Edge functions** — 13 functions in `supabase/functions/` (`rag-chat`, `ingest-material`, `parse-document`, `transcribe-video`, `upload-video`, `process-material-job`, `reap-stale-jobs`, `generate-flashcards`, `analytics-chat`, `manage-course-invites`, `check-course-invite`, `redeem-course-invite`, `generate-course-code`). Every one of them has `verify_jwt = false` in `supabase/config.toml`, meaning they do their own auth checks — see [HANDOFF.md](HANDOFF.md) §3 before assuming that's handled consistently.
+**Edge functions** are in `supabase/functions/`. Each has `verify_jwt = false` in `supabase/config.toml` and must check authorization in its handler. See [HANDOFF.md](HANDOFF.md) §3 for the existing auth conventions.
 
 Deploy a function:
 
@@ -94,6 +94,21 @@ supabase functions serve rag-chat --env-file .env
 ```
 
 **Reminder**: `reap-stale-jobs` is meant to run on a schedule (stale-job cleanup, 5-minute staleness threshold, 5-attempt retry cap — see [GET_STARTED.md](GET_STARTED.md)'s dynamic-behavior table). No `pg_cron` schedule was found checked into migrations — confirm whether this is wired up via the Supabase dashboard's cron scheduler before assuming stuck jobs self-heal in whatever environment you're working in.
+
+### Stored video rollout (3 GB maximum)
+
+Deploy the two new video migrations in timestamp order, regenerate `src/integrations/supabase/types.ts` from that migrated schema, then deploy `video-upload-session`, `transcribe-video`, `assemblyai-video-webhook`, and `reconcile-video-transcriptions`. Configure the project-wide Storage upload limit to at least **3,000,000,000 bytes**; the migration sets the `course-materials` bucket limit to that exact value. Confirm the project's plan supports this size before enabling uploads. Keep the bucket private.
+
+Set `ASSEMBLYAI_WEBHOOK_SECRET` and `ASSEMBLYAI_VIDEO_WEBHOOK_URL` as Edge Function secrets. The webhook URL is the deployed `/functions/v1/assemblyai-video-webhook` endpoint. The existing `ASSEMBLY_API_KEY`, `OPENAI_API_KEY`, Supabase URL, and service-role key are also needed by the video workers. Never expose provider or service-role keys through a `VITE_*` variable.
+
+Two recurring calls are required; no schedule is checked into this repository:
+
+| Interval | POST endpoint | Body | Auth |
+|---|---|---|---|
+| Every minute | `/functions/v1/reconcile-video-transcriptions` | `{}` | `apikey: <service-role key>` |
+| Every 15 minutes | `/functions/v1/video-upload-session` | `{"action":"reap"}` | `apikey: <service-role key>` and `Authorization: Bearer <service-role key>` |
+
+Store the scheduler key securely. The transcription reconciler discovers completed uploads whose submission request was interrupted, polls provider jobs, and indexes timed transcript chunks. The upload reaper cleans abandoned uploads and retries object deletion. Confirm both schedules are active and inspect failed-job logs before relying on recovery. Run one end-to-end upload, playback, timestamp seek, and cited RAG query in a staging project before production rollout.
 
 ## 6. Deploying the frontend (Vercel)
 

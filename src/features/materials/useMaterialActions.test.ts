@@ -102,6 +102,15 @@ describe('useMaterialActions', () => {
     expect(mocks.toastError).toHaveBeenCalledWith('No transcript');
   });
 
+  it('retries a failed stored-video transcription', async () => {
+    const video = { ...material, id: 'video-1', file_type: 'video', video_upload_state: 'uploaded', processing_status: 'failed' } as Material;
+    const result = setup();
+    await act(async () => result.current.handleRetryTranscription(video));
+    expect(mocks.invoke).toHaveBeenCalledWith('transcribe-video', { body: { materialId: 'video-1', retry: true } });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Transcription retry queued for "Lecture.pdf".');
+    expect(onMaterialsChanged).toHaveBeenCalled();
+  });
+
   it('does nothing when deletion is cancelled and stops when chunk deletion fails', async () => {
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     const result = setup();
@@ -122,5 +131,27 @@ describe('useMaterialActions', () => {
     expect(mocks.remove).toHaveBeenCalledWith(['course/lecture.pdf']);
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Document deleted');
     expect(onMaterialsChanged).toHaveBeenCalled();
+  });
+
+  it('deletes stored videos through the durable video endpoint', async () => {
+    const video = { ...material, id: 'video-1', file_name: 'Lecture.mp4', file_path: 'videos/video-1.mp4', file_type: 'video', video_upload_state: 'uploaded' } as Material;
+    const result = setup();
+    await act(async () => result.current.handleDeleteMaterial(video));
+    expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', {
+      body: { action: 'delete', materialId: 'video-1' },
+    });
+    expect(mocks.from).not.toHaveBeenCalled();
+    expect(mocks.storageFrom).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Video deleted');
+    expect(onMaterialsChanged).toHaveBeenCalled();
+  });
+
+  it('keeps a stored video visible when durable deletion fails', async () => {
+    const video = { ...material, id: 'video-1', file_type: 'video', video_upload_state: 'uploaded' } as Material;
+    mocks.invoke.mockResolvedValueOnce({ data: { error: 'Storage temporarily unavailable' }, error: null });
+    const result = setup();
+    await act(async () => result.current.handleDeleteMaterial(video));
+    expect(mocks.toastError).toHaveBeenCalledWith('Storage temporarily unavailable');
+    expect(onMaterialsChanged).not.toHaveBeenCalled();
   });
 });

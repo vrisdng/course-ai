@@ -75,10 +75,11 @@ Admins upload course materials in two pipelines, both async and job-tracked.
 ### Video
 
 - Supported: `.mp4`, `.webm` only.
-- ⏱ **5 GB** size limit (AssemblyAI's own limit); ⏱ files over **200 MB** trigger a "this may take a while" confirmation before upload.
-- Uploaded video streams directly from the browser through an edge function straight to AssemblyAI — never buffered or stored in Supabase Storage.
-- Transcription is polled ⏱ every 5 seconds until AssemblyAI reports done/failed (no client-side timeout on the poll loop — it waits as long as AssemblyAI takes).
-- Upload progress shown to the user is **cosmetic**: an eased animation from 0%→85% over a fixed ⏱ 60 seconds, not driven by real network progress.
+- **3,000,000,000-byte** maximum per video, enforced by the browser, upload-session function, and private Storage bucket. The project-wide Storage setting must also allow at least this size.
+- Browser uploads directly to Supabase Storage using resumable TUS chunks. The server first creates an idempotent material record; progress reports actual uploaded bytes. An interrupted upload can resume when the same file is selected again. Explicit cancellation requests cleanup.
+- The video remains in Storage for later playback. The admin Materials list and student transcript panel play it through short-lived signed URLs; transcript timestamps seek within the video.
+- Once Storage verifies size and content type, the server submits a signed video URL to AssemblyAI. A webhook and scheduled reconciler track transcription, stage timed segments and RAG chunks, embed them, then publish them together. Provider or indexing failures leave the video playable and expose a transcription retry action.
+- AssemblyAI's URL transcription also has a **10-hour duration limit**. A video over that limit may upload and play but transcription will fail with a visible error. The upload flow currently checks bytes, not duration.
 - Note: a client-side FFmpeg-based audio extractor/chunker (`src/lib/ffmpegAudioExtractor.ts`) exists in the codebase but is not called from anywhere — leftover from an earlier design, not part of the live pipeline.
 
 ### Processing jobs — retry & recovery
@@ -150,12 +151,13 @@ Requires a `.env` with Supabase project credentials and provider API keys (`GEMI
 | Conversation count per user | Unlimited (cap removed) | N/A |
 | Citation source preview link | Signed URL valid 120 seconds | Fixed TTL |
 | Document upload size | 15 MB max | Fixed limit |
-| Video upload size | 5 GB max; 200 MB triggers a confirmation prompt | Fixed limit |
+| Video upload size | 3,000,000,000 bytes max; project Storage setting must also allow it | Fixed limit |
 | Document text/chunk limits | 500,000 chars max, 250 chunks max per document | Fixed limit |
 | Embedding call retries | Up to 3 attempts | Fixed retry count |
 | Material processing job — stale detection | Reset to pending after 5 minutes stuck "processing" | Fixed timeout |
 | Material processing job — max retries | Marked permanently failed after 5 attempts | Fixed retry count |
-| Video transcription polling | Polled every 5 seconds until AssemblyAI resolves (no max wait) | Fixed interval, unbounded wait |
-| Video upload progress bar | Cosmetic animation 0%→85% over a fixed 60 seconds | Simulated, not real progress |
+| Video transcription recovery | Webhook plus scheduled reconciliation every minute | Required external schedule |
+| Abandoned video cleanup | Uploads older than 24 hours; cleanup sweep every 15 minutes | Required external schedule |
+| Video upload progress bar | Actual bytes accepted by resumable Storage upload | Network driven |
 | Admin analytics default range | Last 30 days from "now"; "reset" re-anchors to current time | Rolling window |
 | Flashcard count generated | 3–10 cards, scaled by available source context | Dynamic, content-driven |

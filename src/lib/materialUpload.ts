@@ -1,5 +1,5 @@
 export const INLINE_GEMINI_MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
-export const VIDEO_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5GB — AssemblyAI limit
+export const VIDEO_MAX_FILE_SIZE_BYTES = 3_000_000_000; // Decimal 3 GB product limit
 export const AUDIO_CHUNK_MAX_BYTES = 20 * 1024 * 1024;
 export const LARGE_VIDEO_CONFIRMATION_THRESHOLD_BYTES = 200 * 1024 * 1024;
 export const TEXT_INGEST_MAX_CHARACTERS = 500_000;
@@ -63,7 +63,7 @@ export function getImmediateUploadValidationError(candidate: Pick<File, 'name' |
   }
 
   if (isVideoUpload(candidate) && candidate.size > VIDEO_MAX_FILE_SIZE_BYTES) {
-    return `File too large (${formatFileSizeMb(candidate.size)}). Video files must be 5GB or smaller.`;
+    return `File too large (${formatFileSizeMb(candidate.size)}). Video files must be 3 GB or smaller.`;
   }
 
   return null;

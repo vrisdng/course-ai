@@ -20,6 +20,9 @@ vi.mock('@/features/materials/useMaterialActions', () => ({ useMaterialActions: 
 vi.mock('./LinkedUrlDialog', () => ({ LinkedUrlDialog: () => null }));
 vi.mock('./TranscriptDialog', () => ({ TranscriptDialog: () => null }));
 vi.mock('./EditFileNameDialog', () => ({ EditFileNameDialog: () => null }));
+vi.mock('@/features/video-playback/StoredVideoPlayer', () => ({
+  StoredVideoPlayer: ({ filePath }: { filePath: string }) => <div data-testid="stored-video-player">{filePath}</div>,
+}));
 vi.mock('@/components/ui/select', () => ({
   Select: ({ value, onValueChange, children, disabled }: { value: string; onValueChange: (value: string) => void; children: React.ReactNode; disabled?: boolean }) => <select aria-label="selection" value={value} disabled={disabled} onChange={(event) => onValueChange(event.target.value)}>{children}</select>,
   SelectTrigger: () => null,
@@ -30,7 +33,7 @@ vi.mock('@/components/ui/select', () => ({
 import { MaterialsTab } from './MaterialsTab';
 
 const fn = () => vi.fn();
-const video = { id: 'm1', file_name: 'lecture.mp4', file_type: 'video', file_size: 2048, duration_ms: 65000, course_id: 'c1', academic_term_id: 't1', access_scope: 'course', processing_status: 'processing', processing_progress: 42, processing_stage: 'transcribing', processing_error: null, linked_url: null };
+const video = { id: 'm1', file_name: 'lecture.mp4', file_path: 'c1/lecture.mp4', video_upload_state: 'uploaded', file_type: 'video', file_size: 2048, duration_ms: 65000, course_id: 'c1', academic_term_id: 't1', access_scope: 'course', processing_status: 'processing', processing_progress: 42, processing_stage: 'transcribing', processing_error: null, linked_url: null };
 const failed = { ...video, id: 'm2', file_name: 'notes.pdf', file_type: 'pdf', access_scope: 'private', processing_status: 'failed', processing_error: 'Could not parse', academic_term_id: null };
 
 describe('MaterialsTab', () => {
@@ -51,6 +54,11 @@ describe('MaterialsTab', () => {
     fireEvent.change(screen.getByPlaceholderText('Search uploaded materials'), { target: { value: 'lecture' } });
     fireEvent.click(screen.getByRole('button', { name: /Filters/ })); fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(mocks.list.setSearchQuery).toHaveBeenCalledWith('lecture'); expect(mocks.list.setShowFilters).toHaveBeenCalled(); expect(mocks.list.setMaterialsPage).toHaveBeenCalled();
+  });
+  it('allows playback as soon as a video is stored, while transcription continues', async () => {
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Play lecture.mp4' }));
+    expect(screen.getByTestId('stored-video-player')).toHaveTextContent('c1/lecture.mp4');
   });
   it('validates upload setup before opening the picker', () => {
     renderTab();

@@ -10,6 +10,7 @@ import {
   Lock,
   ListChecks,
   Pencil,
+  PlayCircle,
   RefreshCw,
   Search,
   Trash2,
@@ -32,6 +33,7 @@ import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatTimestamp as formatClock } from '@/features/student-chat/time';
+import { StoredVideoPlayer } from '@/features/video-playback/StoredVideoPlayer';
 import { INLINE_GEMINI_MAX_FILE_SIZE_BYTES } from '@/lib/materialUpload';
 import { cn, formatBytes } from '@/lib/utils';
 
@@ -106,6 +108,9 @@ function getProcessingStageLabel(material: Material) {
 }
 
 function renderStatusBadge(material: Material) {
+  if (material.video_upload_state === 'deleting') {
+    return <Badge variant="secondary" className="gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" />Deleting</Badge>;
+  }
   const stageLabel = getProcessingStageLabel(material);
   const icon =
     material.processing_status === 'completed' ? (
@@ -146,6 +151,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
   const [uploadCourseId, setUploadCourseId] = useState<string>('');
   const [uploadAcademicTermId, setUploadAcademicTermId] = useState<string>('');
   const [uploadAccessScope, setUploadAccessScope] = useState<AccessScope | ''>('');
+  const [playingMaterial, setPlayingMaterial] = useState<Material | null>(null);
 
   const list = useMaterialsList();
   const upload = useMaterialUpload({ uploaderId, onUploaded: list.fetchMaterials });
@@ -234,6 +240,18 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
         onClose={actions.closeEditFileNameDialog}
         onSave={() => void actions.handleUpdateFileName()}
       />
+
+      <Dialog open={Boolean(playingMaterial)} onOpenChange={(open) => { if (!open) setPlayingMaterial(null); }}>
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>{playingMaterial?.file_name}</DialogTitle>
+            <DialogDescription>Stored course video</DialogDescription>
+          </DialogHeader>
+          {playingMaterial?.file_path ? (
+            <StoredVideoPlayer filePath={playingMaterial.file_path} startMs={0} />
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={bulkTermUpdate.isDialogOpen} onOpenChange={(open) => (open ? undefined : bulkTermUpdate.closeDialog())}>
         <DialogContent>
@@ -573,7 +591,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
               <li>PDF, DOC, DOCX, PPTX, PNG, JPG, JPEG, WEBP, and GIF files.</li>
               <li>PDF, DOC, and image files must be {documentLimitMb}MB or smaller.</li>
-              <li>MP4 and WebM video files are supported (audio is extracted and transcribed with timestamps).</li>
+              <li>MP4 and WebM videos up to 3 GB are stored for playback and transcribed with timestamps.</li>
               <li>DOCX and PPTX files are extracted after upload.</li>
             </ul>
           </div>
@@ -767,6 +785,17 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                               <p className="text-xs text-muted-foreground">{formatDuration(material.duration_ms)}</p>
                             ) : null}
                           </div>
+                          {material.file_type === 'video' && material.file_path && material.video_upload_state !== 'uploading' && material.video_upload_state !== 'cancelled' && material.video_upload_state !== 'deleting' ? (
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              aria-label={`Play ${material.file_name}`}
+                              onClick={() => setPlayingMaterial(material)}
+                            >
+                              <PlayCircle className="h-4 w-4" />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell data-label="Term" className={stackedTable.cell}>{material.academic_term_id ? termLabelById[material.academic_term_id] || 'Unknown term' : '-'}</TableCell>
@@ -791,7 +820,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon" aria-label={`Open actions for ${material.file_name}`} className="relative">
                                 <Ellipsis className="h-4 w-4" />
-                                {material.file_type === 'video' && !material.linked_url && (
+                                {material.file_type === 'video' && !material.file_path && !material.linked_url && (
                                   <span className="absolute right-1 top-1 flex h-2 w-2">
                                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
                                     <span className="relative inline-flex h-2 w-2 rounded-full bg-destructive" />
@@ -803,7 +832,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                               {material.file_type === 'video' ? (
                                 <>
                                   <DropdownMenuItem
-                                    disabled={material.processing_status !== 'completed'}
+                                    disabled={material.video_upload_state === 'deleting' || material.processing_status !== 'completed'}
                                     onClick={() => actions.handleAttachLink(material)}
                                     className="relative"
                                   >
@@ -817,27 +846,38 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                                     )}
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
-                                    disabled={material.processing_status !== 'completed'}
+                                    disabled={material.video_upload_state === 'deleting' || material.processing_status !== 'completed'}
                                     onClick={() => actions.handleOpenTranscript(material)}
                                   >
                                     <FileText className="mr-2 h-4 w-4" />
                                     View transcript
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
-                                    disabled={material.processing_status === 'processing' || actions.reindexingIds.has(material.id)}
-                                    onClick={() => actions.handleReindexMaterial(material)}
+                                    disabled={material.video_upload_state === 'deleting' || material.processing_status === 'processing' || actions.reindexingIds.has(material.id)}
+                                    onClick={() => {
+                                      if (material.video_upload_state === 'uploaded' && material.processing_status === 'failed') {
+                                        void actions.handleRetryTranscription(material);
+                                      } else {
+                                        void actions.handleReindexMaterial(material);
+                                      }
+                                    }}
                                   >
                                     <RefreshCw className={`mr-2 h-4 w-4 ${actions.reindexingIds.has(material.id) ? 'animate-spin' : ''}`} />
-                                    {actions.reindexingIds.has(material.id) ? 'Re-indexing...' : 'Re-index transcript'}
+                                    {actions.reindexingIds.has(material.id)
+                                      ? 'Working...'
+                                      : material.video_upload_state === 'uploaded' && material.processing_status === 'failed'
+                                        ? 'Retry transcription'
+                                        : 'Re-index transcript'}
                                   </DropdownMenuItem>
                                 </>
                               ) : null}
-                              <DropdownMenuItem onClick={() => actions.openEditFileNameDialog(material)}>
+                              <DropdownMenuItem disabled={material.video_upload_state === 'deleting'} onClick={() => actions.openEditFileNameDialog(material)}>
                                 <Pencil className="mr-2 h-4 w-4" />
                                 Edit filename
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 className="text-destructive focus:text-destructive"
+                                disabled={material.video_upload_state === 'deleting'}
                                 onClick={() => actions.handleDeleteMaterial(material)}
                               >
                                 <Trash2 className="mr-2 h-4 w-4" />

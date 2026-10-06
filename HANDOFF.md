@@ -110,7 +110,15 @@ Self-hosting GLM-OCR (Apache/MIT licensed, 0.9B params, runs via vLLM/SGLang/Oll
 
 The **hosted** GLM-OCR API doesn't have that problem, but it's still a third vendor alongside OpenAI (chat/STT) and Gemini (embeddings/OCR) rather than a consolidation. Not adopted yet — pricing/quality claims are from vendor docs, unverified against this codebase's actual PDFs/slides. If document-OCR cost or the 15MB ceiling becomes a real pain point, this is the first thing to prototype against `process-material-job`'s `extractTextWithGemini`.
 
-## Candidate: AssemblyAI → OpenAI STT swap (planned, not implemented, 2026-07-13)
+## Stored video rollout (implemented in code, deployment pending, 2026-10-06)
+
+The new flow writes up to 3,000,000,000 video bytes to private Supabase Storage through resumable TUS, saves an idempotent material row, submits a signed Storage URL to AssemblyAI, and uses a webhook plus scheduled reconciler to stage timed transcript segments and embedded RAG chunks. Playback uses renewed signed URLs, and transcript timestamps seek in the player. The browser reports actual upload bytes. `video-upload-session` also has durable deletion and abandoned-upload cleanup.
+
+**Deployment is not implied by merge.** Apply the two new migrations, configure project-wide Storage size and video secrets, deploy the four affected/new functions, and install the two required schedules in [README.md](README.md). The hosted migration history may be empty even when schema objects already exist; inspect it before running `supabase db push` so old migrations are not replayed against production. The old `upload-video` proxy function remains in the tree but is no longer called by the browser upload path.
+
+The 3 GB byte limit does not enforce AssemblyAI's 10-hour duration limit. A longer accepted video can still play, but transcription fails visibly. No near-3 GB staging upload, deployed Edge integration, or live webhook/cron test has been completed in this branch.
+
+## Historical candidate: AssemblyAI → OpenAI STT swap (planned, not implemented, 2026-07-13)
 
 `ASSEMBLY_API_KEY` (AssemblyAI) currently powers video transcription via `transcribe-video` + `upload-video`. Sunsetting it for OpenAI's transcription API (`whisper-1` / `gpt-4o-transcribe`) was scoped but **not implemented** — it's a pipeline restructure, not a config swap:
 

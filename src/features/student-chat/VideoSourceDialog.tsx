@@ -17,6 +17,7 @@ import { formatCitationLocator, formatTimestamp } from './time';
 export interface ActiveVideoSource {
   title: string;
   signedUrl: string | null;
+  filePath?: string | null;
   materialId: string | null;
   startMs: number;
   endMs?: number;

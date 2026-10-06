@@ -243,7 +243,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
     accessScope: AccessScope,
     academicTermId: string,
     uploadController: AbortController
-  ): Promise<UploadOutcome> => {
+  ): Promise<UploadOutcome | 'saved-with-error'> => {
     const extension = targetFile.name.split('.').pop()?.toLowerCase() || '';
     const isSupported = targetFile.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
     if (!isSupported) {
@@ -255,13 +255,13 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       throw new Error(uploadValidationError);
     }
 
-    // Video files use client-side audio extraction — handle separately
+    // Videos use a durable material record and resumable direct-to-Storage upload.
     if (isVideoUpload(targetFile)) {
       if (cancelUploadRef.current || uploadController.signal.aborted) {
         throw new Error('Upload cancelled');
       }
 
-      await uploadVideoForTranscription({
+      const videoResult = await uploadVideoForTranscription({
         file: targetFile,
         courseId,
         academicTermId,
@@ -273,7 +273,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
         },
         signal: uploadController.signal,
       });
-      return 'processing';
+      return videoResult.transcriptionStatus === 'failed' ? 'saved-with-error' : 'processing';
     }
 
     setCurrentUploadStatusText(`Uploading ${targetFile.name}... 0%`);
@@ -405,6 +405,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
     const failedFiles: File[] = [];
     let indexedCount = 0;
     let processingCount = 0;
+    let savedWithErrorCount = 0;
     let index = 0;
 
     setIsUploading(true);
@@ -435,6 +436,8 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
           );
           if (outcome === 'processing') {
             processingCount += 1;
+          } else if (outcome === 'saved-with-error') {
+            savedWithErrorCount += 1;
           } else {
             indexedCount += 1;
           }
@@ -462,7 +465,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
       setPendingFiles(failedFiles);
 
-      if (indexedCount > 0 || processingCount > 0) {
+      if (indexedCount > 0 || processingCount > 0 || savedWithErrorCount > 0) {
         await onUploaded();
       }
 
@@ -477,6 +480,13 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
       if (processingCount > 0) {
         toast.info(`${processingCount} material${processingCount === 1 ? '' : 's'} ${processingCount === 1 ? 'is' : 'are'} still processing in the background. This list refreshes automatically.`);
+      }
+
+      if (savedWithErrorCount > 0) {
+        const message = savedWithErrorCount === 1
+          ? 'Video saved; transcription failed. Retry from Materials.'
+          : `${savedWithErrorCount} videos saved; transcription failed. Retry from Materials.`;
+        toast.error(message);
       }
 
       if (failedFiles.length > 0) {
