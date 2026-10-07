@@ -96,6 +96,33 @@ describe('SourcesPanel', () => {
     expect(screen.getByTestId('page-viewer')).toHaveTextContent('Lecture Notes');
   });
 
+  it('shows the rendered page image with the cited box instead of loading the PDF', () => {
+    const value = props({
+      showSidePanel: true,
+      activeViewerSource: source({
+        pageNumber: 2,
+        pageImage: { url: 'https://img.test/p2.webp', width: 1400, height: 788 },
+        highlightBox: [0.1, 0.2, 0.6, 0.3],
+      }),
+    });
+    render(<SourcesPanel {...value} />);
+
+    expect(screen.queryByTestId('pdf-thumb')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Lecture Notes, page 2' })).toHaveAttribute('src', 'https://img.test/p2.webp');
+    expect(screen.getByTestId('citation-highlight')).toBeInTheDocument();
+  });
+
+  it('opens the single-page viewer when the page image is tapped', () => {
+    const value = props({
+      showSidePanel: true,
+      activeViewerSource: source({ pageImage: { url: 'https://img.test/p1.webp', width: 1400, height: 788 } }),
+    });
+    render(<SourcesPanel {...value} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open page 1 larger' }));
+    expect(screen.getByTestId('page-viewer')).toBeInTheDocument();
+  });
+
   it('shows the destination path for an active source', () => {
     const value = props({ showSidePanel: true, activeViewerSource: source() });
     render(<SourcesPanel {...value} />);

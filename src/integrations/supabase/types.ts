@@ -65,6 +65,7 @@ export type Database = {
           embedding_openai: string | null
           end_ms: number | null
           end_position: number | null
+          highlight_box: Json | null
           id: string
           material_id: string | null
           metadata: Json | null
@@ -81,6 +82,7 @@ export type Database = {
           embedding_openai?: string | null
           end_ms?: number | null
           end_position?: number | null
+          highlight_box?: Json | null
           id?: string
           material_id?: string | null
           metadata?: Json | null
@@ -97,6 +99,7 @@ export type Database = {
           embedding_openai?: string | null
           end_ms?: number | null
           end_position?: number | null
+          highlight_box?: Json | null
           id?: string
           material_id?: string | null
           metadata?: Json | null
@@ -319,6 +322,41 @@ export type Database = {
             columns: ["course_id"]
             isOneToOne: false
             referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      material_pages: {
+        Row: {
+          created_at: string
+          height: number
+          lines: Json
+          material_id: string
+          page_number: number
+          width: number
+        }
+        Insert: {
+          created_at?: string
+          height: number
+          lines?: Json
+          material_id: string
+          page_number: number
+          width: number
+        }
+        Update: {
+          created_at?: string
+          height?: number
+          lines?: Json
+          material_id?: string
+          page_number?: number
+          width?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "material_pages_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "materials"
             referencedColumns: ["id"]
           },
         ]

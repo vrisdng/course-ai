@@ -32,7 +32,7 @@ All keys above should also be set on the Supabase project (separate from local `
 The ~20 pure functions that determine answer quality (citation parsing/remapping, chunk rerank/dedup, history windowing, document-scope handling) are now extracted into [supabase/functions/_shared/citations.ts](supabase/functions/_shared/citations.ts), [retrieval.ts](supabase/functions/_shared/retrieval.ts), [history.ts](supabase/functions/_shared/history.ts), [query.ts](supabase/functions/_shared/query.ts), each with a `.test.ts` (59 tests total, vitest). `index.ts` is down to ~1200 lines — the remaining size is request handling, Supabase queries, and the streaming response loop, which weren't extracted since they're not pure/reusable logic.
 
 ### 3. Every edge function has `verify_jwt = false`
-[supabase/config.toml](supabase/config.toml) disables Supabase's platform JWT verification for all 13 functions — each function must independently check the Authorization header. This is a common source of authz bugs (one function forgets the check, or checks role but not resource ownership). **Audit each function's auth logic individually**, don't assume it's consistent across them just because one is correct.
+[supabase/config.toml](supabase/config.toml) disables Supabase's platform JWT verification for all 13 functions — each function must independently check the Authorization header. The Vercel renderer (`api/render-pdf-pages.ts`) is outside this list and uses a shared secret instead — see "Page images + citation highlights". This is a common source of authz bugs (one function forgets the check, or checks role but not resource ownership). **Audit each function's auth logic individually**, don't assume it's consistent across them just because one is correct.
 
 ### 4. Test coverage — real progress, still gaps (updated 2026-09-13)
 Was "zero test coverage on anything that matters." Now:
@@ -84,6 +84,27 @@ The items below are **resolved** and kept here only as history. The active backl
 `.env` declares: `GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_PROJECT_ID`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`. `.env.example` (names only) now exists — see it.
 
 `ASSEMBLY_API_KEY` (AssemblyAI) and `RESEND_API_KEY` (Resend email) usage wasn't traced to specific functions during this pass — likely `transcribe-video` and the course-invite functions respectively, but confirm before assuming either is dead.
+
+## Page images + citation highlights (2026-10-07)
+
+Clicking a PDF citation shows the cited page as a pre-rendered image with the cited chunk boxed, instead of downloading the whole PDF. It replaces the earlier thumbnail pipeline (`_shared/pdfThumbnail.ts`, `pdf-page-thumbnail`), which never produced an image: Deno has no canvas, and the frontend fetched a relative URL that hit Vercel's SPA fallback.
+
+**Flow:**
+- After a PDF's chunks are embedded, `process-material-job` marks the material `completed` (searchable) and continues the **same job** in a page-image stage (`payload.pageRender`), one batch of 20 pages per invocation via the usual requeue.
+- Each batch: sign a download URL for the PDF and an upload URL per page, then POST them to `api/render-pdf-pages.ts` (Vercel, Node). That renders with pdf.js + `@napi-rs/canvas`, uploads `course-materials/page-images/<material_id>/page-<n>.webp` to the signed URLs, and returns each page's text lines with boxes. Back in the job, rows go into `material_pages`, and the batch's chunks are matched to the lines (`_shared/highlights.ts`) to set `chunks.highlight_box`.
+- On click, `useStudentChat` → `pageImage.ts#loadPageImage` reads `material_pages` and signs the image URL. `SourcesPanel`/`PageViewer` draw it with `HighlightedPageImage`. If there's no row, they fall back to react-pdf as before.
+
+**Trust boundary:** the Vercel function holds **no Supabase credentials**. It checks `RENDER_SERVICE_SECRET` (constant-time) and only fetches from or uploads to URLs on the Supabase origin. Everything it touches comes in as short-lived signed URLs (PDF: 10 min; uploads: Supabase's 2 h). A leaked secret allows rendering into URLs the caller already signed, not reading or writing storage.
+
+**Failure handling:** errors in the page-image stage never fail the material. The job completes with `last_error` set to `Page images skipped: …` or `Page images: N page(s) failed…`, and those pages use the PDF fallback. Unset `RENDER_SERVICE_*` secrets skip the stage entirely.
+
+**Known limits:**
+- **Scanned PDFs get images but no highlights:** no text layer means no lines to match. The follow-up is to ask the OCR call for line boxes (a one-image test with `gpt-5.6-luna` put every box centre inside the true box, at about 4–5 s per page call).
+- Highlights come from word overlap, not exact text, because chunk text is OCR output. Lines with fewer than 3 words never start a highlight (stops page numbers matching), so a one-word heading just above a cited paragraph is left out.
+- **Existing materials have no page images** until reprocessed. There's no backfill trigger yet.
+- The first batch asks for 20 pages before the page count is known. Pages past the end come back as "past the end" and are ignored.
+- Images are ~1400px WebP q80, roughly 150–250 KB per text-heavy page.
+- The deleted `pdf-page-thumbnail` function is still **deployed** until `supabase functions delete pdf-page-thumbnail`. `materials.thumbnail_path` is unused but kept, because `transcribe-video` still writes `null` to it.
 
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 

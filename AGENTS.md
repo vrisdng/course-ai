@@ -17,6 +17,8 @@ RAG-based course companion: students chat over course materials with cited answe
 - `src/lib/` — cross-feature helpers (upload pipeline, utils).
 - `src/integrations/supabase/types.ts` — **generated** DB types; regenerate, don't hand-edit.
 
+**Vercel Functions** (`api/`) — Node, not Deno. One function, `render-pdf-pages.ts`: renders PDF pages to WebP + text-line boxes for `process-material-job`, authenticated by a shared secret. Helpers in `api/_lib/` (the `_` prefix keeps them from becoming routes). Relative imports need `.js` extensions (ESM on Vercel's Node runtime).
+
 **Backend** (`supabase/`) — 13 Deno Edge Functions in `supabase/functions/`, 30 SQL migrations in `supabase/migrations/` (applied in filename/timestamp order; several reverse earlier ones — grep before assuming a table/column doesn't exist).
 - `supabase/functions/_shared/` — the real backend library: `llm.ts` (OpenAI wrapper — **all** LLM calls route through here), `retrieval.ts`, `citations.ts`, `chunking.ts`, `query.ts`, `history.ts`, `cors.ts`, `sse.ts`, `email.ts`. Reuse these; don't reimplement retrieval/citation/CORS logic per function.
 - Core RAG path: `src/features/student-chat/useStudentChat.ts` → `supabase/functions/rag-chat/index.ts` (embeds query with Gemini, retrieves from `pgvector`, reranks, streams a cited answer over SSE via OpenAI).

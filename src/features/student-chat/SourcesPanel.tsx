@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 
+import { HighlightedPageImage } from './HighlightedPageImage';
 import { PdfReader } from './PdfReader';
 import { PdfThumbnail } from './PdfThumbnail';
 import { PageViewer } from './PageViewer';
@@ -145,6 +146,19 @@ export function SourcesPanel({
                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                        <span className="mt-2 text-sm font-medium text-muted-foreground">Loading source</span>
                      </div>
+                   ) : activeViewerSource.pageImage ? (
+                     <button
+                       type="button"
+                       onClick={() => setSingleOpen(true)}
+                       aria-label={`Open page ${page} larger`}
+                       className="mt-3 block w-full overflow-hidden rounded-md border border-border shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60"
+                     >
+                       <HighlightedPageImage
+                         image={activeViewerSource.pageImage}
+                         alt={`${activeViewerSource.documentName}, page ${page}`}
+                         highlightBox={activeViewerSource.highlightBox}
+                       />
+                     </button>
                    ) : activeViewerSource.signedUrl ? (
                      <div className="mt-3 flex justify-center">
                        <PdfThumbnail

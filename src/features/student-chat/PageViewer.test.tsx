@@ -45,6 +45,27 @@ describe('PageViewer', () => {
     expect(screen.queryByLabelText('Next page')).not.toBeInTheDocument();
   });
 
+  it('shows the rendered page image with its highlight instead of loading the PDF', () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    render(
+      <PageViewer
+        source={source({
+          pageImage: { url: 'https://img.test/p3.webp', width: 1400, height: 1980 },
+          highlightBox: [0.1, 0.6, 0.8, 0.7],
+        })}
+      />,
+    );
+
+    expect(screen.queryByTestId('pdf-doc')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Lecture Notes.pdf, page 3' })).toHaveAttribute('src', 'https://img.test/p3.webp');
+    expect(screen.getByTestId('citation-highlight')).toBeInTheDocument();
+    // Tall pages scroll the cited passage into view instead of opening at the top.
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+    expect(screen.queryByText('Loading page…')).not.toBeInTheDocument();
+    expect(screen.getByTestId('page-viewer-path')).toHaveTextContent('Lecture Notes.pdf · Page 3');
+  });
+
   it('shows only the image for an image source', () => {
     const imageSource = source({
       kind: 'image',

@@ -2,7 +2,6 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { chunkText } from "../_shared/chunking.ts";
-import { renderPdfPageToPng } from "../_shared/pdfThumbnail.ts";
 import {
   buildExtractionPrompt,
   encodeBytesToBase64,
@@ -19,6 +18,11 @@ import {
 import { countPdfPages } from "../_shared/pdfPages.ts";
 import { createOpenAIEmbeddingService, generateDocumentText } from "../_shared/llm.ts";
 import { EMBEDDING_COLUMN } from "../_shared/embeddings.ts";
+import {
+  createRendererClient,
+  runPageRenderBatch,
+  type PageRenderState,
+} from "../_shared/pageImages.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -51,22 +55,10 @@ interface JobPayload {
   // Resumable state — set after extraction+chunking is done
   chunks?: ChunkData[];
   embeddedUpTo?: number; // index of first un-embedded chunk
-   totalChunks?: number;
-   // Thumbnail paths for each page (page number -> storage path)
-   thumbnailPaths?: { [pageNumber: string]: string };
- }
-
-// Storage client interface for upload
-interface StorageUploadClient {
-  from(bucket: string): {
-    upload: (path: string, data: Uint8Array, options?: StorageUploadOptions) => Promise<{ error: Error | null }>;
-  };
-}
-
-interface StorageUploadOptions {
-  contentType?: string;
-  cacheControl?: string;
-  upsert?: boolean;
+  totalChunks?: number;
+  // Resumable state — set once a PDF's chunks are embedded and its page
+  // images are being rendered (see _shared/pageImages.ts)
+  pageRender?: PageRenderState;
 }
 
 const INLINE_GEMINI_MAX_FILE_SIZE = 15 * 1024 * 1024;
@@ -458,67 +450,6 @@ function getMimeType(fileType: string, fileName: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnail generation
-// ---------------------------------------------------------------------------
-
-interface ThumbnailPaths {
-  [pageNumber: string]: string;
-}
-
-async function generatePdfThumbnails(
-  pdfBytes: Uint8Array,
-  segments: ExtractedSegment[],
-  bucketName: string,
-  storageClient: StorageUploadClient,
-  materialId: string,
-): Promise<ThumbnailPaths> {
-  // Get unique page numbers from segments
-  const uniquePages = new Set<number>();
-  for (const segment of segments) {
-    if (segment.pageNumber !== null && segment.pageNumber >= 1) {
-      uniquePages.add(segment.pageNumber);
-    }
-  }
-
-  if (uniquePages.size === 0) {
-    console.log("No page numbers found in PDF segments, skipping thumbnail generation");
-    return {};
-  }
-
-  const thumbnailPaths: ThumbnailPaths = {};
-  const pages = Array.from(uniquePages).sort((a, b) => a - b);
-
-  // Render thumbnails for each page (limit to first 10 pages for performance)
-  const maxPages = 10;
-  const pagesToRender = pages.slice(0, maxPages);
-
-  console.log(`Rendering ${pagesToRender.length} PDF thumbnails (out of ${pages.length} total pages)`);
-
-  for (const pageNumber of pagesToRender) {
-    try {
-      const pngBytes = await renderPdfPageToPng(pdfBytes, pageNumber, 280);
-      
-      const path = `thumbnails/${materialId}/page-${pageNumber}.png`;
-      
-      await storageClient
-        .from(bucketName)
-        .upload(path, pngBytes, {
-          contentType: "image/png",
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-      thumbnailPaths[pageNumber.toString()] = path;
-      console.log(`Generated thumbnail for page ${pageNumber}: ${path}`);
-    } catch (error) {
-      console.error(`Failed to render thumbnail for page ${pageNumber}:`, error);
-    }
-  }
-
-  return thumbnailPaths;
-}
-
-// ---------------------------------------------------------------------------
 // Requeue + self-invoke (shared by the extraction and embedding stages)
 // ---------------------------------------------------------------------------
 
@@ -566,6 +497,162 @@ async function requeueJobAndContinue(options: {
     EdgeRuntime.waitUntil(continueWorker);
   } else {
     void continueWorker;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page images (after embedding; never fails the material)
+// ---------------------------------------------------------------------------
+
+const PDF_SIGNED_URL_TTL_SECONDS = 600;
+
+interface PageRendererConfig {
+  url: string;
+  secret: string;
+}
+
+// Unset in an environment without the Vercel renderer: ingestion then skips
+// page images and the citation viewer falls back to rendering the PDF itself.
+function pageRendererConfig(): PageRendererConfig | null {
+  const url = Deno.env.get("RENDER_SERVICE_URL");
+  const secret = Deno.env.get("RENDER_SERVICE_SECRET");
+  return url && secret ? { url, secret } : null;
+}
+
+function rendersPageImages(filePath: string, bucketName: string): boolean {
+  return bucketName === "course-materials" && filePath.toLowerCase().endsWith(".pdf");
+}
+
+function jsonResponse(body: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(body), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+async function completeJob(
+  adminClient: SupabaseClient,
+  jobId: string,
+  payload: JobPayload,
+  note: string | null,
+): Promise<void> {
+  await adminClient
+    .from("material_processing_jobs")
+    .update({
+      status: "completed",
+      last_error: note,
+      locked_at: null,
+      locked_by: null,
+      payload: payload as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+}
+
+// One batch of page rendering per invocation. The material is already
+// completed and searchable, so any error here ends the stage (noted on the
+// job) instead of marking the material failed.
+async function runPageImageStage(options: {
+  adminClient: SupabaseClient;
+  supabaseUrl: string;
+  supabaseKey: string;
+  jobId: string;
+  materialId: string;
+  attemptCount: number;
+  payload: JobPayload;
+  state: PageRenderState;
+  renderer: PageRendererConfig;
+}): Promise<Response> {
+  const { adminClient, jobId, materialId, payload, state, renderer } = options;
+  const { filePath, fileType, bucketName, totalChunks } = payload;
+  const basePayload: JobPayload = { filePath, fileType, bucketName, totalChunks };
+
+  try {
+    const result = await runPageRenderBatch(materialId, state, {
+      createPdfDownloadUrl: async () => {
+        const { data, error } = await adminClient.storage
+          .from(bucketName)
+          .createSignedUrl(filePath, PDF_SIGNED_URL_TTL_SECONDS);
+        if (error || !data?.signedUrl) {
+          throw new Error(`Could not sign the PDF for rendering: ${error?.message ?? "no URL"}`);
+        }
+        return data.signedUrl;
+      },
+      createUploadUrl: async (path) => {
+        const { data, error } = await adminClient.storage
+          .from(bucketName)
+          .createSignedUploadUrl(path, { upsert: true });
+        if (error || !data?.signedUrl) {
+          throw new Error(`Could not sign an upload for ${path}: ${error?.message ?? "no URL"}`);
+        }
+        return data.signedUrl;
+      },
+      callRenderer: createRendererClient(renderer.url, renderer.secret),
+      savePages: async (rows) => {
+        const { error } = await adminClient.from("material_pages").upsert(rows);
+        if (error) throw new Error(`Failed to save page images: ${error.message}`);
+      },
+      loadChunks: async (pageNumbers) => {
+        const { data, error } = await adminClient
+          .from("chunks")
+          .select("id, chunk_text, page_number")
+          .eq("material_id", materialId)
+          .in("page_number", pageNumbers);
+        if (error) throw new Error(`Failed to load chunks for highlighting: ${error.message}`);
+        return data ?? [];
+      },
+      saveHighlight: async (chunkId, box) => {
+        const { error } = await adminClient.from("chunks").update({ highlight_box: box }).eq("id", chunkId);
+        if (error) throw new Error(`Failed to save a chunk highlight: ${error.message}`);
+      },
+    });
+
+    if (result.failed.length > 0) {
+      console.warn(`Page images: ${result.failed.length} page(s) failed for ${materialId}`, result.failed);
+    }
+
+    if (!result.done) {
+      await requeueJobAndContinue({
+        adminClient,
+        supabaseUrl: options.supabaseUrl,
+        supabaseKey: options.supabaseKey,
+        jobId,
+        materialId,
+        attemptCount: options.attemptCount,
+        payload: { ...basePayload, pageRender: result.state },
+      });
+      return jsonResponse({
+        success: true,
+        jobId,
+        materialId,
+        stage: "page_images",
+        pagesRendered: result.rendered,
+        chunksHighlighted: result.highlighted,
+        nextPage: result.state.nextPage,
+        totalPages: result.state.totalPages,
+        continuing: true,
+      });
+    }
+
+    await completeJob(
+      adminClient,
+      jobId,
+      basePayload,
+      result.failed.length > 0 ? `Page images: ${result.failed.length} page(s) failed in the last batch` : null,
+    );
+    return jsonResponse({
+      success: true,
+      jobId,
+      materialId,
+      stage: "page_images",
+      pagesRendered: result.rendered,
+      chunksHighlighted: result.highlighted,
+      totalPages: result.state.totalPages,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Page images skipped for ${materialId}:`, message);
+    await completeJob(adminClient, jobId, basePayload, `Page images skipped: ${message}`);
+    return jsonResponse({ success: true, jobId, materialId, stage: "page_images", skipped: message });
   }
 }
 
@@ -675,11 +762,32 @@ serve(async (req: Request) => {
     }
 
     // -----------------------------------------------------------------------
+    // Page-image stage (chunks are already embedded)
+    // -----------------------------------------------------------------------
+    if (payload.pageRender) {
+      const renderer = pageRendererConfig();
+      if (!renderer) {
+        const { pageRender: _done, ...rest } = payload;
+        await completeJob(adminClient, claimedJobId, rest, "Page images skipped: renderer not configured");
+        return jsonResponse({ success: true, jobId: claimedJobId, stage: "page_images", skipped: "not configured" });
+      }
+      return await runPageImageStage({
+        adminClient,
+        supabaseUrl,
+        supabaseKey,
+        jobId: claimedJobId,
+        materialId: claimedMaterialId,
+        attemptCount: claimedAttemptCount,
+        payload,
+        state: payload.pageRender,
+        renderer,
+      });
+    }
+
+    // -----------------------------------------------------------------------
     // Check if this is a RESUMED invocation (chunks already extracted)
     // -----------------------------------------------------------------------
     const isResuming = Array.isArray(payload.chunks) && payload.chunks.length > 0;
-    // Carried across invocations via the payload; generated on the fresh path.
-    let thumbnailPaths: ThumbnailPaths | undefined = payload.thumbnailPaths;
     let chunks: ChunkData[];
     let totalChunks: number;
     let embeddedUpTo: number;
@@ -828,31 +936,6 @@ serve(async (req: Request) => {
         throw new Error("No text could be extracted from the document");
       }
 
-      // --- Generate thumbnails for PDFs (if not already done) ---
-      if (ext === "pdf" && !payload.thumbnailPaths) {
-        console.log(`Generating thumbnails for ${filePath}`);
-        thumbnailPaths = await generatePdfThumbnails(
-          fileBytes,
-          extractedSegments,
-          bucketName,
-          adminClient.storage,
-          materialIdForError,
-        );
-        
-        // Update job payload with thumbnail paths for resuming
-        if (Object.keys(thumbnailPaths).length > 0) {
-          await adminClient
-            .from("material_processing_jobs")
-            .update({
-              payload: {
-                ...payload,
-                thumbnailPaths,
-              },
-            })
-            .eq("id", jobIdForUpdate);
-        }
-      }
-
       // --- Chunking ---
       await adminClient
         .from("materials")
@@ -963,19 +1046,7 @@ serve(async (req: Request) => {
      // Check: are we done, or do we need to continue in next invocation?
      // -----------------------------------------------------------------------
      if (newEmbeddedUpTo >= totalChunks) {
-       // All chunks embedded — finalize
-       
-       
-       // Update materials table with thumbnail paths
-       if (thumbnailPaths && Object.keys(thumbnailPaths).length > 0) {
-         await adminClient
-           .from("materials")
-           .update({
-             thumbnail_path: JSON.stringify(thumbnailPaths),
-           })
-           .eq("id", materialIdForError);
-       }
-       
+       // All chunks embedded — the material is searchable from here on.
        await adminClient
          .from("materials")
          .update({
@@ -986,6 +1057,29 @@ serve(async (req: Request) => {
          })
          .eq("id", materialIdForError);
 
+       // PDFs continue into the page-image stage on the same job.
+       if (pageRendererConfig() && rendersPageImages(filePath, bucketName)) {
+         await adminClient.from("material_pages").delete().eq("material_id", claimedMaterialId);
+         await requeueJobAndContinue({
+           adminClient,
+           supabaseUrl,
+           supabaseKey,
+           jobId: claimedJobId,
+           materialId: claimedMaterialId,
+           attemptCount: claimedAttemptCount,
+           payload: { filePath, fileType, bucketName, totalChunks, pageRender: { nextPage: 1, totalPages: null } },
+         });
+         return jsonResponse({
+           success: true,
+           jobId: claimedJobId,
+           materialId: claimedMaterialId,
+           chunksInserted: totalChunks,
+           resumed: isResuming,
+           nextStage: "page_images",
+           continuing: true,
+         });
+       }
+
        await adminClient
          .from("material_processing_jobs")
          .update({
@@ -993,12 +1087,11 @@ serve(async (req: Request) => {
            last_error: null,
            locked_at: null,
            locked_by: null,
-           payload: { 
-             filePath, 
-             fileType, 
-             bucketName, 
+           payload: {
+             filePath,
+             fileType,
+             bucketName,
              totalChunks,
-             thumbnailPaths,
            },
            updated_at: new Date().toISOString(),
          })
@@ -1024,7 +1117,6 @@ serve(async (req: Request) => {
        chunks,
        embeddedUpTo: newEmbeddedUpTo,
        totalChunks,
-       thumbnailPaths,
      };
 
     await requeueJobAndContinue({

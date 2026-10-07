@@ -21,7 +21,9 @@ const authGetSession = vi.fn(async () => ({
   error: null,
 }));
 const rpc = vi.fn(async () => emptyResult);
-const from = vi.fn(() => createQueryChain(emptyResult));
+const from = vi.fn((_table: string) => createQueryChain(emptyResult));
+const createSignedUrl = vi.fn();
+const storageFrom = vi.fn((_bucket: string) => ({ createSignedUrl }));
 
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
@@ -31,7 +33,7 @@ vi.mock('@/integrations/supabase/client', () => ({
     },
     rpc: (...args: unknown[]) => rpc(...args),
     from: (...args: unknown[]) => from(...args),
-    storage: { from: vi.fn() },
+    storage: { from: (bucket: string) => storageFrom(bucket) },
   },
 }));
 
@@ -268,5 +270,77 @@ describe('useStudentChat', () => {
       result.current.setShowSidePanel(true);
     });
     expect(result.current.showSidePanel).toBe(true);
+  });
+
+  describe('opening a PDF citation', () => {
+    const citation = {
+      id: 'c1',
+      chunkId: 'chunk-1',
+      excerpt: 'Optimal substructure',
+      documentName: 'Lecture 7',
+      documentType: 'pdf',
+      pageNumber: 4,
+      relevanceScore: 0.9,
+    };
+
+    function mockTables(pageRow: { width: number; height: number } | null) {
+      from.mockImplementation((table: string) => {
+        if (table === 'chunks') {
+          return createQueryChain({
+            data: { material_id: 'mat-1', student_document_id: null, highlight_box: [0.1, 0.2, 0.6, 0.3] },
+            error: null,
+          });
+        }
+        if (table === 'materials') {
+          return createQueryChain({
+            data: { file_path: 'course/lecture7.pdf', file_type: 'pdf', file_name: 'Lecture 7.pdf', linked_url: null },
+            error: null,
+          });
+        }
+        if (table === 'material_pages') {
+          return createQueryChain({ data: pageRow, error: null });
+        }
+        return createQueryChain(emptyResult);
+      });
+      createSignedUrl.mockImplementation(async (path: string) => ({
+        data: { signedUrl: `https://signed.test/${path}` },
+        error: null,
+      }));
+    }
+
+    it('opens the rendered page image with the cited box', async () => {
+      mockTables({ width: 1400, height: 788 });
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource(citation, 'key-1');
+      });
+
+      expect(result.current.showSidePanel).toBe(true);
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        pageNumber: 4,
+        signedUrl: 'https://signed.test/course/lecture7.pdf',
+        pageImage: { url: 'https://signed.test/page-images/mat-1/page-4.webp', width: 1400, height: 788 },
+        highlightBox: [0.1, 0.2, 0.6, 0.3],
+      });
+    });
+
+    it('falls back to the PDF without a highlight when the page was not rendered', async () => {
+      mockTables(null);
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource(citation, 'key-1');
+      });
+
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        signedUrl: 'https://signed.test/course/lecture7.pdf',
+        pageImage: null,
+        highlightBox: null,
+      });
+      expect(toast.error).not.toHaveBeenCalled();
+    });
   });
 });
