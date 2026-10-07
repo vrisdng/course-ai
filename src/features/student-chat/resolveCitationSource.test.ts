@@ -47,6 +47,26 @@ describe('resolveCitationSource', () => {
       materialId: 'mat-1',
       linkedUrl: null,
       highlightBox: null,
+      previewAsPdf: false,
+    });
+  });
+
+  it('previews a converted Word or PowerPoint material through its PDF', async () => {
+    mocks.from
+      .mockReturnValueOnce(query({ data: { material_id: 'mat-9', student_document_id: null, highlight_box: [0.1, 0.2, 0.6, 0.3] }, error: null }))
+      .mockReturnValueOnce(query({
+        data: { file_path: 'course/abc-deck.pptx', file_type: 'slides', file_name: 'Deck.pptx', linked_url: null, converted_pdf_path: 'converted/mat-9.pdf' },
+        error: null,
+      }));
+
+    const resolved = await resolveCitationSource(citation({ chunkId: 'chunk-1', documentType: 'slides' }));
+
+    expect(resolved).toMatchObject({
+      bucket: 'course-materials',
+      filePath: 'converted/mat-9.pdf',
+      fileName: 'Deck.pptx',
+      previewAsPdf: true,
+      highlightBox: [0.1, 0.2, 0.6, 0.3],
     });
   });
 

@@ -1,0 +1,17 @@
+# Office → PDF converter (see README.md). Deployed as its own Vercel project
+# with this directory as the root; Node 24 runs the TypeScript directly.
+FROM node:24-bookworm-slim
+
+# Writer and Impress import the documents; Math draws Office equations (without
+# it every equation silently disappears). Carlito/Caladea are metric-compatible
+# stand-ins for Calibri/Cambria so page breaks match the original.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libreoffice-writer-nogui libreoffice-impress-nogui libreoffice-math-nogui \
+      fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV HOME=/tmp
+WORKDIR /app
+COPY src ./src
+CMD ["node", "src/server.ts"]

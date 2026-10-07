@@ -358,6 +358,48 @@ describe('useStudentChat', () => {
       });
     });
 
+    it('opens a converted PowerPoint citation as its PDF page image', async () => {
+      mockTables({ width: 1400, height: 788 });
+      from.mockImplementation((table: string) => {
+        if (table === 'chunks') {
+          return createQueryChain({
+            data: { material_id: 'mat-2', student_document_id: null, highlight_box: [0.1, 0.2, 0.6, 0.3] },
+            error: null,
+          });
+        }
+        if (table === 'materials') {
+          return createQueryChain({
+            data: {
+              file_path: 'course/deck.pptx',
+              file_type: 'slides',
+              file_name: 'Deck.pptx',
+              linked_url: null,
+              converted_pdf_path: 'converted/mat-2.pdf',
+            },
+            error: null,
+          });
+        }
+        if (table === 'material_pages') {
+          return createQueryChain({ data: { width: 1400, height: 788 }, error: null });
+        }
+        return createQueryChain(emptyResult);
+      });
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource({ ...citation, documentType: 'slides', documentName: 'Deck.pptx' }, 'key-2');
+      });
+
+      expect(result.current.clearViewSource).toBeNull();
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        documentName: 'Deck.pptx',
+        signedUrl: 'https://signed.test/converted/mat-2.pdf',
+        pageImage: { url: 'https://signed.test/page-images/mat-2/page-4.webp' },
+        highlightBoxes: [[0.1, 0.2, 0.6, 0.3]],
+      });
+    });
+
     it('falls back to the PDF without a highlight when the page was not rendered', async () => {
       mockTables(null);
       const { result } = renderHook(() => useStudentChat(null));

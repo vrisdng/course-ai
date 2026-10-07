@@ -465,6 +465,7 @@ export type Database = {
         Row: {
           academic_term_id: string
           access_scope: Database["public"]["Enums"]["material_access_scope"]
+          converted_pdf_path: string | null
           course_id: string
           created_at: string
           duration_ms: number | null
@@ -491,6 +492,7 @@ export type Database = {
         Insert: {
           academic_term_id: string
           access_scope?: Database["public"]["Enums"]["material_access_scope"]
+          converted_pdf_path?: string | null
           course_id: string
           created_at?: string
           duration_ms?: number | null
@@ -517,6 +519,7 @@ export type Database = {
         Update: {
           academic_term_id?: string
           access_scope?: Database["public"]["Enums"]["material_access_scope"]
+          converted_pdf_path?: string | null
           course_id?: string
           created_at?: string
           duration_ms?: number | null

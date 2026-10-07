@@ -56,6 +56,9 @@ interface ResolvedCitationSource {
   linkedUrl: string | null;
   // The cited chunk's box on its page, when ingestion matched one.
   highlightBox: HighlightBox | null;
+  // A Word/PowerPoint material converted to PDF at ingestion: filePath is the
+  // PDF, so it opens in the PDF viewer like any other PDF.
+  previewAsPdf: boolean;
 }
 
 // Resolves a citation's underlying file and its signed preview URL through the
@@ -79,7 +82,7 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
   if (chunkRow.material_id) {
     const { data: materialRow, error: materialError } = await supabase
       .from('materials')
-      .select('file_path, file_type, file_name, linked_url')
+      .select('file_path, file_type, file_name, linked_url, converted_pdf_path')
       .eq('id', chunkRow.material_id)
       .maybeSingle();
 
@@ -94,12 +97,13 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
 
     return {
       bucket: 'course-materials',
-      filePath: materialRow.file_path ?? '',
+      filePath: materialRow.converted_pdf_path ?? materialRow.file_path ?? '',
       fileType: materialRow.file_type,
       fileName: materialRow.file_name,
       materialId: chunkRow.material_id,
       linkedUrl: materialRow.linked_url ?? null,
       highlightBox,
+      previewAsPdf: Boolean(materialRow.converted_pdf_path),
     };
   }
 
@@ -122,6 +126,7 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
       materialId: null,
       linkedUrl: null,
       highlightBox,
+      previewAsPdf: false,
     };
   }
 
@@ -1059,7 +1064,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       // PDFs/images render in-app; raw/binary files fall back to a new tab (the
       // "no new tab" rule was scoped to PDFs).
-      const kind = classifyCitation(citation);
+      const kind = resolved.previewAsPdf ? 'pdf' : classifyCitation(citation);
 
       // Cited blocks decide the page and the outlines; without them the
       // chunk's own page and box are used.

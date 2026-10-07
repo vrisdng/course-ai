@@ -31,6 +31,11 @@ import {
   type BlockExtractionState,
 } from "../_shared/blockExtraction.ts";
 import type { Box, PageLine } from "../_shared/highlights.ts";
+import {
+  convertOfficeDocument,
+  createConverterClient,
+  isConvertibleOffice,
+} from "../_shared/officeConversion.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -780,6 +785,71 @@ async function runBlockStage(context: StageContext, state: BlockExtractionState,
 }
 
 // ---------------------------------------------------------------------------
+// Office → PDF conversion (before extraction; falls back to XML extraction)
+// ---------------------------------------------------------------------------
+
+const CONVERTING_PROGRESS = 15;
+const SOURCE_SIGNED_URL_TTL_SECONDS = 600;
+
+interface OfficeConverterConfig {
+  url: string;
+  secret: string;
+}
+
+// Unset in an environment without the converter: DOCX/PPTX then keep the
+// XML text extraction below and are never shown as pages.
+function officeConverterConfig(): OfficeConverterConfig | null {
+  const url = Deno.env.get("OFFICE_CONVERTER_URL");
+  const secret = Deno.env.get("OFFICE_CONVERTER_SECRET");
+  return url && secret ? { url, secret } : null;
+}
+
+// Converts the original to converted/<material_id>.pdf and records it on the
+// material. Returns the PDF path, or null when conversion failed (logged) so
+// the caller can fall back to extracting the original's XML text.
+async function tryConvertOfficeDocument(options: {
+  adminClient: SupabaseClient;
+  converter: OfficeConverterConfig;
+  materialId: string;
+  bucketName: string;
+  filePath: string;
+  format: "docx" | "pptx";
+}): Promise<string | null> {
+  const { adminClient, converter, materialId, bucketName, filePath, format } = options;
+  await adminClient
+    .from("materials")
+    .update({ processing_status: "processing", processing_stage: "converting", processing_progress: CONVERTING_PROGRESS })
+    .eq("id", materialId);
+
+  try {
+    const pdfPath = await convertOfficeDocument(materialId, filePath, format, {
+      createDownloadUrl: async (path) => {
+        const { data, error } = await adminClient.storage
+          .from(bucketName)
+          .createSignedUrl(path, SOURCE_SIGNED_URL_TTL_SECONDS);
+        if (error || !data?.signedUrl) throw new Error(`Could not sign the original: ${error?.message ?? "no URL"}`);
+        return data.signedUrl;
+      },
+      createUploadUrl: async (path) => {
+        const { data, error } = await adminClient.storage
+          .from(bucketName)
+          .createSignedUploadUrl(path, { upsert: true });
+        if (error || !data?.signedUrl) throw new Error(`Could not sign the PDF upload: ${error?.message ?? "no URL"}`);
+        return data.signedUrl;
+      },
+      callConverter: createConverterClient(converter.url, converter.secret),
+    });
+
+    const { error } = await adminClient.from("materials").update({ converted_pdf_path: pdfPath }).eq("id", materialId);
+    if (error) throw new Error(`Failed to record the converted PDF: ${error.message}`);
+    return pdfPath;
+  } catch (error) {
+    console.warn(`Office conversion failed for ${materialId}; falling back to text extraction:`, error);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 
@@ -913,6 +983,49 @@ serve(async (req: Request) => {
       await adminClient.from("page_blocks").delete().eq("material_id", claimedMaterialId);
       await updateMaterialProgress(adminClient, claimedMaterialId, "rendering", RENDERING_PROGRESS_START);
       return await runPageImageStage(stageContext, { nextPage: 1, totalPages: null }, renderer);
+    }
+
+    // -----------------------------------------------------------------------
+    // DOCX/PPTX: convert to PDF, then continue as a PDF job
+    // -----------------------------------------------------------------------
+    const sourceExtension = filePath.split(".").pop()?.toLowerCase() || fileType;
+    const converter = officeConverterConfig();
+    if (
+      converter &&
+      bucketName === "course-materials" &&
+      isConvertibleOffice(sourceExtension) &&
+      !payload.chunks &&
+      !payload.extraction
+    ) {
+      const pdfPath = await tryConvertOfficeDocument({
+        adminClient,
+        converter,
+        materialId: claimedMaterialId,
+        bucketName,
+        filePath,
+        format: sourceExtension,
+      });
+      if (pdfPath) {
+        await requeueJobAndContinue({
+          adminClient,
+          supabaseUrl,
+          supabaseKey,
+          jobId: claimedJobId,
+          materialId: claimedMaterialId,
+          attemptCount: claimedAttemptCount,
+          // From here the job is an ordinary PDF job; the original stays at
+          // materials.file_path and the PDF at materials.converted_pdf_path.
+          payload: { filePath: pdfPath, fileType: "pdf", bucketName },
+        });
+        return jsonResponse({
+          success: true,
+          jobId: claimedJobId,
+          materialId: claimedMaterialId,
+          stage: "converted",
+          pdfPath,
+          continuing: true,
+        });
+      }
     }
 
     // -----------------------------------------------------------------------
