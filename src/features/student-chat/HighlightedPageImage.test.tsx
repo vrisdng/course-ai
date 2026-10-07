@@ -20,6 +20,9 @@ describe('HighlightedPageImage', () => {
     const highlight = screen.getByTestId('citation-highlight');
     expect(highlight).toHaveStyle({ left: '9.2%', top: '19.4%', width: '51.6%', height: '11.2%' });
     expect(screen.getByText('Cited passage highlighted')).toBeInTheDocument();
+    // Outline only: the cited text stays at full contrast.
+    expect(highlight.className).toContain('border-yellow-400');
+    expect(highlight.className).not.toMatch(/\bbg-|\bring-/);
   });
 
   it('keeps a box at the page edge inside the image', () => {

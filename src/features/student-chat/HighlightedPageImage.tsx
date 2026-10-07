@@ -47,7 +47,7 @@ export const HighlightedPageImage = forwardRef<HTMLDivElement, HighlightedPageIm
               ref={highlightRef}
               data-testid="citation-highlight"
               aria-hidden="true"
-              className="pointer-events-none absolute rounded-sm border-2 border-yellow-400 bg-yellow-300/25 ring-2 ring-yellow-300/40"
+              className="pointer-events-none absolute rounded-sm border-2 border-yellow-400"
               style={{
                 left: percent(padded[0]),
                 top: percent(padded[1]),
