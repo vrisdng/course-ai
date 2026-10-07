@@ -55,6 +55,7 @@ export function DocumentScopeSelector({
     materialFilter === 'all'
       || (materialFilter === 'video' ? document.type === 'video' : document.type !== 'video')
   ));
+  const selectedVisibleCount = filteredDocuments.filter((document) => draftSelectedDocumentIds.includes(document.id)).length;
 
   useEffect(() => {
     if (!open) {
@@ -71,11 +72,16 @@ export function DocumentScopeSelector({
   };
 
   const handleSelectAll = () => {
-    setDraftSelectedDocumentIds(documents.map((document) => document.id));
+    setDraftSelectedDocumentIds((current) => {
+      const selectedIds = new Set(current);
+      filteredDocuments.forEach((document) => selectedIds.add(document.id));
+      return [...selectedIds];
+    });
   };
 
   const handleDeselectAll = () => {
-    setDraftSelectedDocumentIds([]);
+    const visibleIds = new Set(filteredDocuments.map((document) => document.id));
+    setDraftSelectedDocumentIds((current) => current.filter((id) => !visibleIds.has(id)));
   };
 
   const handleCancel = () => {
@@ -132,7 +138,7 @@ export function DocumentScopeSelector({
               variant="outline"
               size="sm"
               onClick={handleSelectAll}
-              disabled={documents.length === 0}
+              disabled={filteredDocuments.length === 0}
             >
               Select All
             </Button>
@@ -141,7 +147,7 @@ export function DocumentScopeSelector({
               variant="outline"
               size="sm"
               onClick={handleDeselectAll}
-              disabled={draftSelectedDocumentIds.length === 0}
+              disabled={selectedVisibleCount === 0}
             >
               Deselect All
             </Button>
