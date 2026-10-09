@@ -310,7 +310,7 @@ export function PdfReader({ source }: PdfReaderProps) {
                   stepMatch(event.shiftKey ? -1 : 1);
                 }
               }}
-              className="h-full w-40 bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+              className="h-full w-40 bg-transparent px-2 text-sm outline-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
             />
             {searchStatus ? (
               <span aria-live="polite" className="whitespace-nowrap pr-1 text-xs tabular-nums text-muted-foreground">
@@ -349,7 +349,7 @@ export function PdfReader({ source }: PdfReaderProps) {
               onKeyDown={(event) => {
                 if (event.key === 'Enter') commitPageDraft();
               }}
-              className="h-6 w-9 rounded-sm bg-transparent text-center text-sm tabular-nums outline-none focus:bg-muted [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              className="h-6 w-9 rounded-sm bg-transparent text-center text-sm tabular-nums outline-none focus-visible:ring-0 focus-visible:ring-offset-0 focus:bg-muted [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
             <span className="pr-1 text-sm tabular-nums text-muted-foreground">{numPages !== null ? `/ ${numPages}` : ''}</span>
             <Button
