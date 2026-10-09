@@ -150,6 +150,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
   const [activeVideoSource, setActiveVideoSource] = useState<ActiveVideoSource | null>(null);
   const [activeViewerSource, setActiveViewerSource] = useState<ActiveViewerSource | null>(null);
+  const sourceOpenRequestIdRef = useRef(0);
   const [clearViewSource, setClearViewSource] = useState<ActiveViewerSource | null>(null);
 
   // The gallery lives in the side panel; the clear-view dialog is a separate
@@ -574,6 +575,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   useEffect(() => {
     conversationLoadRequestIdRef.current += 1;
+    sourceOpenRequestIdRef.current += 1;
     if (conversationRetryTimeoutRef.current !== null) {
       window.clearTimeout(conversationRetryTimeoutRef.current);
       conversationRetryTimeoutRef.current = null;
@@ -1004,7 +1006,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     // With the inline-chip navigation surface, opening the panel focuses the
     // first citation so the viewer + cited chunk surface together.
     focusCitation(message, 1);
-  }, [focusCitation]);
+  }, [focusCitation, setShowSidePanel]);
 
   const closeActiveVideoSource = useCallback(() => {
     setActiveVideoSource(null);
@@ -1015,17 +1017,21 @@ export function useStudentChat(routeConversationId: string | null = null) {
   }, []);
 
   const openCitationSource = useCallback(async (citation: Citation, citationKey: string) => {
+    const requestId = ++sourceOpenRequestIdRef.current;
     setOpeningCitationKey(citationKey);
 
     try {
       const resolved = await resolveCitationSource(citation);
+      if (requestId !== sourceOpenRequestIdRef.current) return;
 
-      // Videos without a stored file open in the sources panel as a transcript view
-      if (resolved.fileType === 'video' && !resolved.filePath) {
+      // The player resolves either Supabase Storage or R2 through signed-media.
+      if (resolved.fileType === 'video') {
         setShowSidePanel(true);
+        setActiveViewerSource(null);
         setActiveVideoSource({
           title: resolved.fileName,
           signedUrl: null,
+          filePath: resolved.filePath,
           materialId: resolved.materialId,
           startMs: citation.startMs ?? 0,
           endMs: citation.endMs,
@@ -1042,23 +1048,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
       if (signedUrlError || !signedUrlData?.signedUrl) {
         throw new Error(signedUrlError?.message || 'Unable to generate source preview URL');
       }
+      if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const { signedUrl } = signedUrlData;
-
-      // Videos open in the sources panel with their transcript
-      if (resolved.fileType === 'video') {
-        setShowSidePanel(true);
-        setActiveVideoSource({
-          title: resolved.fileName,
-          signedUrl,
-          filePath: resolved.filePath,
-          materialId: resolved.materialId,
-          startMs: citation.startMs ?? 0,
-          endMs: citation.endMs,
-          excerpt: citation.excerpt,
-        });
-        return;
-      }
 
       // PDFs/images render in-app; raw/binary files fall back to a new tab (the
       // "no new tab" rule was scoped to PDFs).
@@ -1091,6 +1083,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           }
         }
       }
+      if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const viewerSource: ActiveViewerSource = {
         kind,
@@ -1104,6 +1097,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       // PDFs render in the side-panel gallery, scrolled to the cited page.
       if (kind === 'pdf') {
+        setActiveVideoSource(null);
         setActiveViewerSource(viewerSource);
         setShowSidePanel(true);
         return;
@@ -1112,10 +1106,11 @@ export function useStudentChat(routeConversationId: string | null = null) {
       // Images and raw/binary files open directly in the clear-view dialog.
       setClearViewSource(viewerSource);
     } catch (error) {
+      if (requestId !== sourceOpenRequestIdRef.current) return;
       const message = error instanceof Error ? error.message : 'Failed to open source context';
       toast.error(message);
     } finally {
-      setOpeningCitationKey(null);
+      if (requestId === sourceOpenRequestIdRef.current) setOpeningCitationKey(null);
     }
   }, [setShowSidePanel]);
 

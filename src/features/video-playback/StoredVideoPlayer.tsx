@@ -13,10 +13,11 @@ interface StoredVideoPlayerProps {
   initialUrl?: string | null;
   startMs: number;
   seekMs?: number;
+  seekRequest?: { ms: number; id: number };
   showOpenLink?: boolean;
 }
 
-export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, seekMs, showOpenLink = false }: StoredVideoPlayerProps) {
+export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, seekMs, seekRequest, showOpenLink = false }: StoredVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const renewalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
@@ -87,6 +88,22 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
     }
   }, [seekMs]);
 
+  useEffect(() => {
+    if (!seekRequest) return;
+    const target = Math.max(0, seekRequest.ms / 1000);
+    const video = videoRef.current;
+    if (!video || video.readyState < 1) {
+      pendingSeekRef.current = target;
+      resumePlayingRef.current = true;
+    }
+    if (video) {
+      video.currentTime = target;
+      void video.play().catch(() => {
+        setError('Playback was blocked. Press play on the video.');
+      });
+    }
+  }, [seekRequest]);
+
   const onLoadedMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -100,7 +117,9 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
     errorRetryRef.current = 0;
     if (resumePlayingRef.current) {
       resumePlayingRef.current = false;
-      void video.play().catch(() => {});
+      void video.play().catch(() => {
+        setError('Playback was blocked. Press play on the video.');
+      });
     }
   };
 

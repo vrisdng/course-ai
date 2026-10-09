@@ -22,6 +22,8 @@ const authGetSession = vi.fn(async () => ({
 }));
 const rpc = vi.fn(async () => emptyResult);
 const from = vi.fn(() => createQueryChain(emptyResult));
+const createSignedUrl = vi.fn(async () => ({ data: { signedUrl: 'https://storage.test/notes.pdf' }, error: null }));
+const storageFrom = vi.fn(() => ({ createSignedUrl }));
 
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
@@ -31,7 +33,7 @@ vi.mock('@/integrations/supabase/client', () => ({
     },
     rpc: (...args: unknown[]) => rpc(...args),
     from: (...args: unknown[]) => from(...args),
-    storage: { from: vi.fn() },
+    storage: { from: (...args: unknown[]) => storageFrom(...args) },
   },
 }));
 
@@ -67,6 +69,8 @@ describe('useStudentChat', () => {
     authGetSession.mockClear();
     rpc.mockClear();
     from.mockClear();
+    storageFrom.mockClear();
+    createSignedUrl.mockClear();
     vi.mocked(toast.error).mockClear();
     vi.mocked(toast.success).mockClear();
     vi.stubGlobal('fetch', vi.fn());
@@ -268,5 +272,33 @@ describe('useStudentChat', () => {
       result.current.setShowSidePanel(true);
     });
     expect(result.current.showSidePanel).toBe(true);
+  });
+
+  it('opens a stored video after a PDF without signing its R2 path through Supabase Storage', async () => {
+    const result = await setupWithCourse();
+    let type = 'pdf';
+    from.mockImplementation((table: string) => {
+      if (table === 'chunks') return createQueryChain({ data: { material_id: 'mat-1', student_document_id: null }, error: null });
+      if (table === 'materials') return createQueryChain({ data: {
+        file_path: type === 'video' ? 'course/lecture.mp4' : 'course/notes.pdf',
+        file_type: type, file_name: type === 'video' ? 'Lecture' : 'Notes',
+        linked_url: null, thumbnail_path: null,
+      }, error: null });
+      return createQueryChain(emptyResult);
+    });
+    const citation = { id: 'c1', chunkId: 'chunk-1', excerpt: 'Relevant passage',
+      documentName: 'Notes', documentType: 'pdf', relevanceScore: 0.9, startMs: 40_000, endMs: 45_000 };
+
+    await act(async () => { await result.current.openCitationSource(citation, 'm1-1'); });
+    expect(result.current.activeViewerSource?.documentName).toBe('Notes');
+    expect(storageFrom).toHaveBeenCalledTimes(1);
+
+    type = 'video';
+    await act(async () => { await result.current.openCitationSource({ ...citation, documentType: 'video' }, 'm1-2'); });
+    expect(result.current.activeViewerSource).toBeNull();
+    expect(result.current.activeVideoSource).toMatchObject({
+      title: 'Lecture', materialId: 'mat-1', filePath: 'course/lecture.mp4', startMs: 40_000,
+    });
+    expect(storageFrom).toHaveBeenCalledTimes(1);
   });
 });

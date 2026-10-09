@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { supabase } from '@/integrations/supabase/client';
 
@@ -14,18 +14,16 @@ export function useTranscriptWindow(
 ): { segments: RawSegment[]; isLoading: boolean } {
   const [segments, setSegments] = useState<RawSegment[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const cancelledRef = useRef(false);
-
   useEffect(() => {
     if (!materialId) {
-      cancelledRef.current = false;
       setSegments([]);
       setIsLoading(false);
       return;
     }
 
-    cancelledRef.current = false;
+    let cancelled = false;
     setIsLoading(true);
+    setSegments([]);
 
     const windowStart = Math.max(0, startMs - windowMs);
     const windowEnd = (endMs ?? startMs) + windowMs;
@@ -34,18 +32,18 @@ export function useTranscriptWindow(
       .from('material_transcript_segments')
       .select('start_ms, end_ms, text')
       .eq('material_id', materialId)
-      .gte('start_ms', windowStart)
+      .gte('end_ms', windowStart)
       .lte('start_ms', windowEnd)
       .order('segment_index', { ascending: true })
       .then(({ data, error }) => {
-        if (cancelledRef.current) return;
+        if (cancelled) return;
         if (error) console.error('Failed to load transcript segments:', error);
         setSegments(data ?? []);
         setIsLoading(false);
       });
 
     return () => {
-      cancelledRef.current = true;
+      cancelled = true;
     };
   }, [materialId, startMs, endMs, windowMs]);
 

@@ -48,6 +48,20 @@ describe('StoredVideoPlayer', () => {
     expect(player.currentTime).toBe(75);
   });
 
+  it('seeks and plays on each transcript timestamp click, including repeated clicks', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    const { rerender } = render(<StoredVideoPlayer materialId="material-1" startMs={0} />);
+    const player = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    await waitFor(() => expect(player).toHaveAttribute('src', 'https://r2.test/video?token=new'));
+    fireEvent.loadedMetadata(player);
+    rerender(<StoredVideoPlayer materialId="material-1" startMs={0} seekRequest={{ ms: 35_000, id: 1 }} />);
+    expect(player.currentTime).toBe(35);
+    expect(play).toHaveBeenCalledTimes(1);
+    rerender(<StoredVideoPlayer materialId="material-1" startMs={0} seekRequest={{ ms: 35_000, id: 2 }} />);
+    expect(play).toHaveBeenCalledTimes(2);
+    play.mockRestore();
+  });
+
   it('renews an expired URL and restores playback position', async () => {
     mocks.createSignedUrl
       .mockResolvedValueOnce({ data: { signedUrl: 'https://storage.test/old' }, error: null })
