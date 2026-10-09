@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 
 import { ensureStartingPage, type ActiveViewerSource } from './documentViewer';
 import { findMatches, highlightMatches } from './pdfSearch';
+import { usePdfFile } from './usePdfFile';
 
 const workerUrl = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -89,10 +90,8 @@ export function PdfReader({ source }: PdfReaderProps) {
   const [pageTexts, setPageTexts] = useState<string[][] | null>(null);
   const [activeMatch, setActiveMatch] = useState(0);
 
-  const file = useMemo(
-    () => (source.signedUrl ? { url: source.signedUrl } : false),
-    [source.signedUrl],
-  );
+  const pdf = usePdfFile(source);
+  const file = useMemo(() => (pdf.file ? { url: pdf.file } : false), [pdf.file]);
 
   // Reset whenever the source (or its page) changes so stale pages don't linger.
   useEffect(() => {
@@ -103,7 +102,7 @@ export function PdfReader({ source }: PdfReaderProps) {
     pdfRef.current = null;
     setPageTexts(null);
     setQuery('');
-  }, [source.signedUrl, source.pageNumber]);
+  }, [pdf.file, source.pageNumber]);
 
   useEffect(() => {
     setPageDraft(String(currentPage));
@@ -246,10 +245,14 @@ export function PdfReader({ source }: PdfReaderProps) {
   );
 
   if (!file) {
+    const message =
+      pdf.status === 'loading'
+        ? 'Loading document…'
+        : pdf.status === 'error'
+          ? "Couldn't load this document. Close it and try again."
+          : 'No document available to preview.';
     return (
-      <div className="flex h-full items-center justify-center bg-muted/20 text-sm text-muted-foreground">
-        No document available to preview.
-      </div>
+      <div className="flex h-full items-center justify-center bg-muted/20 text-sm text-muted-foreground">{message}</div>
     );
   }
 

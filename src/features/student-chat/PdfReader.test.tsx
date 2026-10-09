@@ -14,8 +14,10 @@ vi.mock('react-pdf', () => ({
   Document: ({
     children,
     onLoadSuccess,
+    file,
   }: {
     children?: React.ReactNode;
+    file?: { url: string };
     onLoadSuccess?: (pdf: { numPages: number; getPage: (n: number) => Promise<unknown> }) => void;
   }) => {
     // Like react-pdf, render the pages only once the document has loaded.
@@ -31,7 +33,7 @@ vi.mock('react-pdf', () => ({
         setLoaded(true);
       });
     }, []);
-    return <div data-testid="pdf-doc">{loaded ? children : 'Loading document…'}</div>;
+    return <div data-testid="pdf-doc" data-file={file?.url}>{loaded ? children : 'Loading document…'}</div>;
   },
   Page: ({
     pageNumber,
@@ -82,6 +84,9 @@ class MockResizeObserver {
   unobserve() {}
   disconnect() {}
 }
+
+const cache = vi.hoisted(() => ({ getCachedPdf: vi.fn() }));
+vi.mock('./pdfCache', () => ({ getCachedPdf: (...args: unknown[]) => cache.getCachedPdf(...args) }));
 
 const scrolledTo: number[] = [];
 const mainPages = () => screen.getAllByTestId('pdf-page').filter((p) => p.dataset.width !== String(THUMB));
@@ -200,6 +205,25 @@ describe('PdfReader', () => {
     render(<PdfReader source={source()} />);
     await screen.findByText('/ 3');
     await waitFor(() => expect(mainPages().map((p) => p.dataset.width)).toEqual(['300', '300', '300']));
+  });
+
+  it('reads the cached download, not the citation link, when the storage location is known', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:cached/1');
+    URL.revokeObjectURL = vi.fn();
+    cache.getCachedPdf.mockResolvedValue(new Blob(['%PDF']));
+    const storage = { bucket: 'course-materials' as const, path: 'c/notes.pdf' };
+
+    render(<PdfReader source={source({ storage, signedUrl: 'https://expired.test/notes.pdf' })} />);
+
+    await screen.findByText('/ 3');
+    expect(screen.getByTestId('pdf-doc')).toHaveAttribute('data-file', 'blob:cached/1');
+    expect(cache.getCachedPdf).toHaveBeenCalledWith(storage);
+  });
+
+  it('says so when the document cannot be downloaded', async () => {
+    cache.getCachedPdf.mockRejectedValue(new Error('PDF download failed (404)'));
+    render(<PdfReader source={source({ storage: { bucket: 'course-materials', path: 'c/gone.pdf' } })} />);
+    expect(await screen.findByText(/couldn't load this document/i)).toBeInTheDocument();
   });
 
   it('shows a placeholder when there is no signed URL', async () => {
