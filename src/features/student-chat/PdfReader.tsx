@@ -36,17 +36,17 @@ interface SearchablePdf {
   getPage(pageNumber: number): Promise<{ getTextContent(): Promise<{ items: unknown[] }> }>;
 }
 
-async function readPageTexts(pdf: SearchablePdf): Promise<string[]> {
-  const texts: string[] = [];
+// Each page's text-layer items, in the same order react-pdf renders them, so
+// a match's item index lines up with customTextRenderer's itemIndex.
+async function readPageItems(pdf: SearchablePdf): Promise<string[][]> {
+  const pages: string[][] = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const content = await (await pdf.getPage(pageNumber)).getTextContent();
-    texts.push(
-      content.items
-        .map((item) => (typeof item === 'object' && item !== null && 'str' in item ? String(item.str) : ''))
-        .join(' '),
+    pages.push(
+      content.items.map((item) => (typeof item === 'object' && item !== null && 'str' in item ? String(item.str) : '')),
     );
   }
-  return texts;
+  return pages;
 }
 
 const MIN_SEARCH_LENGTH = 2;
@@ -86,7 +86,7 @@ export function PdfReader({ source }: PdfReaderProps) {
 
   const pdfRef = useRef<SearchablePdf | null>(null);
   const [query, setQuery] = useState('');
-  const [pageTexts, setPageTexts] = useState<string[] | null>(null);
+  const [pageTexts, setPageTexts] = useState<string[][] | null>(null);
   const [activeMatch, setActiveMatch] = useState(0);
 
   const file = useMemo(
@@ -191,7 +191,7 @@ export function PdfReader({ source }: PdfReaderProps) {
       return;
     }
     let cancelled = false;
-    void readPageTexts(pdf)
+    void readPageItems(pdf)
       .then((texts) => {
         if (!cancelled) setPageTexts(texts);
       })
@@ -221,7 +221,17 @@ export function PdfReader({ source }: PdfReaderProps) {
     [matches.length],
   );
 
-  const renderHighlightedText = useCallback(({ str }: { str: string }) => highlightMatches(str, query), [query]);
+  // The current match is filled; every other match is outlined.
+  const currentMatch = matches[activeMatch];
+  const renderHighlightedText = useCallback(
+    ({ str, pageNumber, itemIndex }: { str: string; pageNumber: number; itemIndex: number }) =>
+      highlightMatches(
+        str,
+        query,
+        currentMatch && currentMatch.page === pageNumber && currentMatch.item === itemIndex ? currentMatch.occurrence : null,
+      ),
+    [query, currentMatch],
+  );
 
   let searchStatus = '';
   if (searchActive) {

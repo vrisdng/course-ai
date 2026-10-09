@@ -364,10 +364,17 @@
   }
 }
 
-/* Document reader search: matches in the PDF text layer (text itself stays
-   transparent; the page image underneath shows through the highlight). */
+/* Document reader search: matches in the PDF text layer (its text stays
+   transparent; the page image underneath shows through). Every match is
+   outlined; the current one is filled. */
 .react-pdf__Page__textContent mark.pdf-search-hit {
-  background-color: rgb(250 204 21 / 0.45);
+  background-color: transparent;
   color: transparent;
   border-radius: 2px;
+  box-shadow: inset 0 0 0 1.5px rgb(234 179 8);
+}
+
+.react-pdf__Page__textContent mark.pdf-search-hit--active {
+  background-color: rgb(250 204 21 / 0.5);
+  box-shadow: none;
 }

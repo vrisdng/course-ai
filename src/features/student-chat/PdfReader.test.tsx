@@ -44,7 +44,7 @@ vi.mock('react-pdf', () => ({
     width: number;
     onLoadSuccess?: (page: { originalWidth: number; originalHeight: number }) => void;
     renderTextLayer?: boolean;
-    customTextRenderer?: (item: { str: string }) => string;
+    customTextRenderer?: (item: { str: string; pageNumber: number; itemIndex: number }) => string;
   }) => {
     queueMicrotask(() => onLoadSuccess?.({ originalWidth: 600, originalHeight: 800 }));
     return (
@@ -53,7 +53,7 @@ vi.mock('react-pdf', () => ({
         {renderTextLayer && customTextRenderer ? (
           <span
             data-testid="text-layer"
-            dangerouslySetInnerHTML={{ __html: customTextRenderer({ str: state.pageTexts[pageNumber - 1] ?? '' }) }}
+            dangerouslySetInnerHTML={{ __html: customTextRenderer({ str: state.pageTexts[pageNumber - 1] ?? '', pageNumber, itemIndex: 0 }) }}
           />
         ) : null}
       </div>
@@ -247,6 +247,25 @@ describe('PdfReader', () => {
 
       const marks = screen.getAllByTestId('text-layer').flatMap((layer) => [...layer.querySelectorAll('mark')]);
       expect(marks.map((mark) => mark.textContent)).toEqual(['probing', 'probing', 'probing']);
+    });
+
+    it('fills only the current match; the others are outlined', async () => {
+      render(<PdfReader source={source({ pageNumber: 1 })} />);
+      await screen.findByText('/ 3');
+      fireEvent.change(searchBox(), { target: { value: 'probing' } });
+      await screen.findByText('1 of 3');
+
+      const activeMarks = () =>
+        [...document.querySelectorAll<HTMLElement>('mark.pdf-search-hit--active')].map(
+          (mark) => mark.closest<HTMLElement>('[data-page]')?.dataset.page,
+        );
+      expect(activeMarks()).toEqual(['2']);
+
+      fireEvent.keyDown(searchBox(), { key: 'Enter' });
+      fireEvent.keyDown(searchBox(), { key: 'Enter' });
+      expect(screen.getByText('3 of 3')).toBeInTheDocument();
+      expect(activeMarks()).toEqual(['3']);
+      expect(document.querySelectorAll('mark.pdf-search-hit')).toHaveLength(3);
     });
 
     it('says when nothing matches and clears when the box is emptied', async () => {
