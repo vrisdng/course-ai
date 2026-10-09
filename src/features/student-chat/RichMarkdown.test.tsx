@@ -98,6 +98,25 @@ describe('RichMarkdown tables and images', () => {
     expect(container.querySelector('td')).toHaveTextContent('1');
   });
 
+  it('keeps table rows intact when cells contain square roots', () => {
+    const content = [
+      '| Quantity | Relationship |',
+      '|---|---:|',
+      '| Natural circular frequency | $\\omega_i=\\sqrt{\\lambda_i}$ |',
+      '| Natural frequency | $f_i=\\dfrac{\\sqrt{\\lambda_i}}{2\\pi}$ |',
+      '| Eigenvector | $\\boldsymbol{\\phi}_i$ |',
+    ].join('\n');
+    const { container } = render(<RichMarkdown content={content} />);
+
+    const rows = [...container.querySelectorAll('tbody tr')];
+    expect(rows.map((row) => row.querySelector('td')?.textContent)).toEqual([
+      'Natural circular frequency',
+      'Natural frequency',
+      'Eigenvector',
+    ]);
+    expect(rows[0].querySelectorAll('td')[1].querySelector('.katex svg')).not.toBeNull();
+  });
+
   it('resolves and displays a cited image, opening the lightbox on click', async () => {
     const message = '![diagram](course-materials/diagram.png) here';
     render(<RichMarkdown content={message} citations={[imageCitation('mat-1', 'course-materials/diagram.png')]} />);

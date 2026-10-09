@@ -9,9 +9,14 @@ import katex from 'katex';
 const MATH_PATTERN =
   /(```[\s\S]*?```)|(`[^`\n]+`)|(\$\$[\s\S]*?\$\$)|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|(\$[^$\n\s][^$\n]*?\$)/g;
 
+// The rendered HTML is spliced into the markdown before it is parsed, so it
+// must stay on one line: KaTeX draws some symbols (e.g. \sqrt) as SVG paths
+// whose data spans several lines, and a line break inside a table cell splits
+// the row, spilling the path data into the table as stray numbers. Whitespace
+// is interchangeable inside SVG path data and HTML, so spaces are safe.
 function renderSegment(tex: string, displayMode: boolean): string | null {
   try {
-    return katex.renderToString(tex, { displayMode, throwOnError: false });
+    return katex.renderToString(tex, { displayMode, throwOnError: false }).replace(/\r?\n/g, ' ');
   } catch {
     return null;
   }

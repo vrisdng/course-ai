@@ -39,6 +39,14 @@ describe('processMath', () => {
     expect(out).toContain('here.');
   });
 
+  it('keeps rendered math on one line, even for square roots drawn as multi-line SVG', () => {
+    // KaTeX draws \sqrt with an SVG path whose data spans several lines. A line
+    // break inside a markdown table cell would split the row.
+    const html = processMath('| $\\omega_i=\\sqrt{\\lambda_i}$ | $f=\\dfrac{\\sqrt{\\lambda}}{2\\pi}$ |');
+    expect(html).toContain('<svg');
+    expect(html).not.toContain('\n');
+  });
+
   it('leaves fenced code blocks untouched', () => {
     const src = '```python\nx = "$not_math"\n```';
     expect(processMath(src)).toBe(src);
