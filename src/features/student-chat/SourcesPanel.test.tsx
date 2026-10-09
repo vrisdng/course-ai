@@ -86,14 +86,14 @@ describe('SourcesPanel', () => {
     expect(screen.getByTestId('pdf-thumb')).toHaveAttribute('data-page', '2');
   });
 
-  it('opens the single-page viewer when the preview thumbnail is tapped', () => {
+  it('opens the document reader when the preview is tapped', () => {
     const value = props({ showSidePanel: true, activeViewerSource: source({ pageNumber: 2 }) });
     render(<SourcesPanel {...value} />);
-    expect(screen.queryByTestId('page-viewer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pdf-reader')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('pdf-thumb'));
-    expect(screen.getByTestId('page-viewer')).toBeInTheDocument();
-    expect(screen.getByTestId('page-viewer')).toHaveTextContent('Lecture Notes');
+    expect(screen.getByTestId('pdf-reader')).toHaveTextContent('Lecture Notes');
+    expect(screen.queryByTestId('page-viewer')).not.toBeInTheDocument();
   });
 
   it('shows the destination path for an active source', () => {
