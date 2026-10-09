@@ -11,6 +11,7 @@ export interface DisplaySegment {
 }
 
 export interface RawSegment {
+  id?: string;
   start_ms: number;
   end_ms: number;
   text: string;

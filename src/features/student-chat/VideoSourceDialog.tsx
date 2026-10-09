@@ -8,6 +8,7 @@ import { supabase } from '@/integrations/supabase/client';
 
 import type { RawSegment } from './groupTranscriptSegments';
 import { formatCitationLocator, formatTimestamp } from './time';
+import type { VideoEvidenceSegment } from './types';
 
 export interface ActiveVideoSource {
   title: string;
@@ -18,6 +19,7 @@ export interface ActiveVideoSource {
   endMs?: number;
   excerpt?: string;
   linkedUrl?: string | null;
+  evidenceSegments?: VideoEvidenceSegment[] | null;
 }
 
 interface VideoSourceDialogProps {
@@ -85,8 +87,12 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
   }, [materialId]);
 
   const citedEndMs = source?.endMs ?? source?.startMs ?? 0;
+  const evidence = source?.evidenceSegments?.length ? source.evidenceSegments : null;
+  const evidenceIds = new Set(evidence?.map((segment) => segment.id));
+  const visibleIds = new Set(segments.map((segment) => segment.id));
+  const missingEvidence = evidence?.filter((segment) => !visibleIds.has(segment.id)) ?? [];
   const firstCitedIndex = segments.findIndex((segment) =>
-    segment.start_ms <= citedEndMs && segment.end_ms >= (source?.startMs ?? 0)
+    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= (source?.startMs ?? 0)
   );
 
   useEffect(() => {
@@ -116,7 +122,7 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                 {source.title}
               </DialogTitle>
               <DialogDescription>
-                Cited segment: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
+                Source interval: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
               </DialogDescription>
             </DialogHeader>
 
@@ -127,7 +133,7 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                     materialId={source.materialId}
                     filePath={source.filePath}
                     initialUrl={source.signedUrl}
-                    startMs={source.startMs}
+                    startMs={evidence?.[0]?.startMs ?? source.startMs}
                     seekRequest={seekRequest ?? undefined}
                   />
                 ) : externalUrl ? (
@@ -145,6 +151,17 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
 
               <div className="min-h-0 overflow-y-auto p-4" aria-label="Video transcript">
                 <h3 className="mb-3 text-sm font-semibold">Transcription</h3>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {evidence ? 'Exact supporting segments' : 'Approximate citation interval'}
+                </p>
+                {!isLoadingSegments && missingEvidence.length > 0 ? (
+                  <div className="mb-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+                    <p className="font-medium">Evidence from an earlier transcript</p>
+                    {missingEvidence.map((segment) => (
+                      <p key={segment.id}>{formatTimestamp(segment.startMs)}–{formatTimestamp(segment.endMs)} {segment.text}</p>
+                    ))}
+                  </div>
+                ) : null}
                 {loadError ? <p role="alert" className="mb-3 text-sm text-destructive">Unable to load transcript.</p> : null}
                 {isLoadingSegments && segments.length === 0 ? (
                   <div className="flex items-center py-8 text-sm text-muted-foreground">
@@ -155,7 +172,7 @@ export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
                 ) : (
                   <div className="space-y-2">
                     {segments.map((segment, index) => {
-                      const cited = segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
+                      const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
                       return (
                         <div
                           key={segment.id}

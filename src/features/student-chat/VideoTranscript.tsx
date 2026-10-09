@@ -22,8 +22,13 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
   const { segments, isLoading } = useTranscriptWindow(source.materialId, source.startMs, source.endMs);
   const hasPlayback = Boolean(source.signedUrl || source.filePath);
   const citedEndMs = source.endMs ?? source.startMs;
+  const evidence = source.evidenceSegments?.length ? source.evidenceSegments : null;
+  const evidenceIds = new Set(evidence?.map((segment) => segment.id));
+  const visibleIds = new Set(segments.map((segment) => segment.id));
+  const missingEvidence = evidence?.filter((segment) => !visibleIds.has(segment.id)) ?? [];
+  const playbackStartMs = evidence?.[0]?.startMs ?? source.startMs;
   const firstCitedIndex = segments.findIndex((segment) =>
-    segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs
+    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs
   );
 
   useEffect(() => {
@@ -50,8 +55,8 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
   }, [hasPlayback, previewVisible, source.materialId, source.signedUrl]);
 
   useEffect(() => {
-    if (previewRef.current) previewRef.current.currentTime = Math.max(0, source.startMs / 1000);
-  }, [source.startMs]);
+    if (previewRef.current) previewRef.current.currentTime = Math.max(0, playbackStartMs / 1000);
+  }, [playbackStartMs]);
 
   useEffect(() => {
     if (!highlightRef.current || isLoading) return;
@@ -65,7 +70,10 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">{source.title}</p>
           <p className="text-xs text-muted-foreground">
-            Cited segment: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
+            Source interval: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {evidence ? 'Exact supporting segments' : 'Approximate citation interval'}
           </p>
         </div>
       </div>
@@ -88,7 +96,7 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
                 muted
                 playsInline
                 onLoadedMetadata={(event) => {
-                  event.currentTarget.currentTime = Math.max(0, source.startMs / 1000);
+                  event.currentTarget.currentTime = Math.max(0, playbackStartMs / 1000);
                 }}
                 onError={() => setPreviewUrl(null)}
               />
@@ -106,6 +114,14 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
       ) : null}
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+        {!isLoading && missingEvidence.length > 0 ? (
+          <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+            <p className="font-medium">Evidence from an earlier transcript</p>
+            {missingEvidence.map((segment) => (
+              <p key={segment.id}>{formatTimestamp(segment.startMs)}–{formatTimestamp(segment.endMs)} {segment.text}</p>
+            ))}
+          </div>
+        ) : null}
         {isLoading ? (
           <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -114,7 +130,7 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
         ) : segments.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted-foreground">No transcript segments available.</div>
         ) : segments.map((segment, index) => {
-          const cited = segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
+          const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
           return (
             <div
               key={`${segment.start_ms}-${segment.end_ms}-${index}`}

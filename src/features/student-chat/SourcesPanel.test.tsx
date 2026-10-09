@@ -155,7 +155,7 @@ describe('SourcesPanel', () => {
       activeVideoSource: { title: 'Lecture', signedUrl: null, materialId: 'm1', startMs: 40_000, endMs: 45_000 },
     });
     render(<SourcesPanel {...value} />);
-    expect(screen.getByText('Cited segment: 0:40-0:45')).toBeInTheDocument();
+    expect(screen.getByText('Source interval: 0:40-0:45')).toBeInTheDocument();
     expect(screen.getByText('Lecture')).toBeInTheDocument();
     expect(screen.getByText('Relevant explanation.')).toBeInTheDocument();
     expect(screen.getByText('More context.')).toBeInTheDocument();

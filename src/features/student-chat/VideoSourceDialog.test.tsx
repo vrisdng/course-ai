@@ -53,6 +53,25 @@ describe('VideoSourceDialog', () => {
     expect(video.play).toHaveBeenCalledTimes(2);
   });
 
+  it('highlights only verified evidence IDs in the full transcript', async () => {
+    render(<VideoSourceDialog source={{ ...source, evidenceSegments: [
+      { id: 's2', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Relevant explanation.' },
+    ] }} onClose={vi.fn()} />);
+    await screen.findByText('More context.');
+    expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
+    expect(screen.getByText('More context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');
+  });
+
+  it('shows saved evidence when re-transcription has replaced its segment IDs', async () => {
+    render(<VideoSourceDialog source={{ ...source, evidenceSegments: [
+      { id: 'old-id', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Original supporting line.' },
+    ] }} onClose={vi.fn()} />);
+    await screen.findByText('More context.');
+    expect(screen.getByText(/Original supporting line\./)).toBeInTheDocument();
+    expect(screen.getByText(/earlier transcript/i)).toBeInTheDocument();
+    expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');
+  });
+
   it('fetches beyond one page of transcript segments', async () => {
     const firstPage = Array.from({ length: 500 }, (_, index) => ({
       id: `s${index}`, segment_index: index, start_ms: index * 1000,

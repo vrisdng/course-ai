@@ -20,9 +20,9 @@ const source: ActiveVideoSource = {
   startMs: 40_000, endMs: 45_000, excerpt: 'Relevant explanation.',
 };
 const segments = [
-  { start_ms: 20_000, end_ms: 30_000, text: 'Earlier context.' },
-  { start_ms: 35_000, end_ms: 42_000, text: 'Relevant explanation.' },
-  { start_ms: 42_000, end_ms: 48_000, text: 'More context.' },
+  { id: 'filler', start_ms: 20_000, end_ms: 30_000, text: 'Earlier context.' },
+  { id: 'evidence', start_ms: 35_000, end_ms: 42_000, text: 'Relevant explanation.' },
+  { id: 'context', start_ms: 42_000, end_ms: 48_000, text: 'More context.' },
 ];
 
 describe('VideoTranscript sidebar preview', () => {
@@ -65,7 +65,22 @@ describe('VideoTranscript sidebar preview', () => {
     expect(screen.getByText('Earlier context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');
     expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
     expect(screen.getByText('More context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
-    expect(screen.getByText('Cited segment: 0:40-0:45')).toBeInTheDocument();
+    expect(screen.getByText('Source interval: 0:40-0:45')).toBeInTheDocument();
+  });
+
+  it('highlights only persisted evidence IDs while leaving other overlapping lines as context', async () => {
+    render(<VideoTranscript source={{ ...source, startMs: 20_000, endMs: 48_000, evidenceSegments: [
+      { id: 'evidence', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Relevant explanation.' },
+      { id: 'context', segmentIndex: 2, startMs: 42_000, endMs: 48_000, text: 'More context.' },
+    ] }} onOpenVideo={vi.fn()} />);
+    await screen.findByText('More context.');
+    expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
+    expect(screen.getByText('More context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
+    expect(screen.getByText('Earlier context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');
+    expect(screen.getByText('Exact supporting segments')).toBeInTheDocument();
+    const frame = await screen.findByLabelText('Video thumbnail') as HTMLVideoElement;
+    fireEvent.loadedMetadata(frame);
+    expect(frame.currentTime).toBe(35);
   });
 
   it('keeps transcript access when the original video is unavailable', async () => {

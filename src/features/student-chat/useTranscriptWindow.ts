@@ -30,7 +30,7 @@ export function useTranscriptWindow(
 
     supabase
       .from('material_transcript_segments')
-      .select('start_ms, end_ms, text')
+      .select('id, start_ms, end_ms, text')
       .eq('material_id', materialId)
       .gte('end_ms', windowStart)
       .lte('start_ms', windowEnd)
