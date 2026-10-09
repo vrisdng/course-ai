@@ -735,7 +735,7 @@ serve(async (req: Request) => {
       // ── No-RAG path: answer from model knowledge only ─────────────────
       console.log(`Processing no-RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
-      systemPrompt = `You are EduChat, an AI learning assistant for university students.
+      systemPrompt = `You are CEEChat, an AI learning assistant for university students.
 
 The user has chosen to chat without grounding the answer in any uploaded course documents. Answer using your general knowledge.
 
@@ -919,7 +919,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
         ? "\nSUMMARY MODE: The student is asking for a broad summary or overview. Use ALL provided sources to give comprehensive coverage across the full material. Organise your response with clear ## sections for each major topic. Do not focus only on the most similar source — synthesise across all citations.\n"
         : "";
 
-      systemPrompt = `You are EduChat, an AI learning assistant for university students.
+      systemPrompt = `You are CEEChat, an AI learning assistant for university students.
 
 Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 ${summaryInstruction}

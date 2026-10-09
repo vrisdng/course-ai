@@ -62,7 +62,7 @@ The items below are **resolved** and kept here only as history. The active backl
 
 - [src/integrations/supabase/types.ts:8](src/integrations/supabase/types.ts#L8) has a stray `// Trigger redeployment` comment — leftover no-op edit, harmless but can be removed.
 
-**Resolved:** `REPLACE_WITH_PROJECT_ID` is gone from README.md, `package.json` is now `edu-chat`/`1.0.0`, and `entities.json` + `mempalace.yaml` were deleted (2026-09-13).
+**Resolved:** `REPLACE_WITH_PROJECT_ID` is gone from README.md, `package.json` is now `cee-chat`/`1.0.0`, and `entities.json` + `mempalace.yaml` were deleted (2026-09-13).
 
 ## Docs that describe things not fully built — reconcile or shelve
 
