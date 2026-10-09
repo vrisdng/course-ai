@@ -21,7 +21,7 @@ vi.mock('./LinkedUrlDialog', () => ({ LinkedUrlDialog: () => null }));
 vi.mock('./TranscriptDialog', () => ({ TranscriptDialog: () => null }));
 vi.mock('./EditFileNameDialog', () => ({ EditFileNameDialog: () => null }));
 vi.mock('@/features/video-playback/StoredVideoPlayer', () => ({
-  StoredVideoPlayer: ({ filePath }: { filePath: string }) => <div data-testid="stored-video-player">{filePath}</div>,
+  StoredVideoPlayer: ({ materialId, filePath }: { materialId: string; filePath: string }) => <div data-testid="stored-video-player">{materialId}:{filePath}</div>,
 }));
 vi.mock('@/components/ui/select', () => ({
   Select: ({ value, onValueChange, children, disabled }: { value: string; onValueChange: (value: string) => void; children: React.ReactNode; disabled?: boolean }) => <select aria-label="selection" value={value} disabled={disabled} onChange={(event) => onValueChange(event.target.value)}>{children}</select>,
@@ -58,7 +58,7 @@ describe('MaterialsTab', () => {
   it('allows playback as soon as a video is stored, while transcription continues', async () => {
     renderTab();
     fireEvent.click(screen.getByRole('button', { name: 'Play lecture.mp4' }));
-    expect(screen.getByTestId('stored-video-player')).toHaveTextContent('c1/lecture.mp4');
+    expect(screen.getByTestId('stored-video-player')).toHaveTextContent('m1:c1/lecture.mp4');
   });
   it('validates upload setup before opening the picker', () => {
     renderTab();

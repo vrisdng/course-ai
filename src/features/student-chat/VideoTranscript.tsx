@@ -40,6 +40,7 @@ export function VideoTranscript({ source }: { source: ActiveVideoSource }) {
       {source.signedUrl || source.filePath ? (
         <div className="space-y-2">
           <StoredVideoPlayer
+            materialId={source.materialId}
             filePath={source.filePath}
             initialUrl={source.signedUrl}
             startMs={source.startMs}

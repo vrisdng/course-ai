@@ -1,9 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ createSignedUrl: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  createSignedUrl: vi.fn(),
+  resolveSignedMediaUrl: vi.fn(),
+  invalidateSignedMediaCache: vi.fn(),
+}));
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: { storage: { from: () => ({ createSignedUrl: mocks.createSignedUrl }) } },
+}));
+vi.mock('@/features/student-chat/signedMedia', () => ({
+  resolveSignedMediaUrl: mocks.resolveSignedMediaUrl,
+  invalidateSignedMediaCache: mocks.invalidateSignedMediaCache,
 }));
 
 import { StoredVideoPlayer } from './StoredVideoPlayer';
@@ -12,6 +20,14 @@ describe('StoredVideoPlayer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://storage.test/video?token=new' }, error: null });
+    mocks.resolveSignedMediaUrl.mockResolvedValue('https://r2.test/video?token=new');
+  });
+
+  it('uses material-aware signing for an R2 video', async () => {
+    render(<StoredVideoPlayer materialId="material-1" filePath="course/video.mp4" startMs={0} />);
+    await waitFor(() => expect(mocks.resolveSignedMediaUrl).toHaveBeenCalledWith('material-1'));
+    expect(screen.getByLabelText('Video playback')).toHaveAttribute('src', 'https://r2.test/video?token=new');
+    expect(mocks.createSignedUrl).not.toHaveBeenCalled();
   });
 
   it('signs a private video and seeks to the cited time after metadata loads', async () => {

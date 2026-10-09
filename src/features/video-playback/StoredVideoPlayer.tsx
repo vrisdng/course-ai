@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 
+import { invalidateSignedMediaCache, resolveSignedMediaUrl } from '@/features/student-chat/signedMedia';
 import { supabase } from '@/integrations/supabase/client';
 
 const SIGNED_URL_SECONDS = 3600;
-const RENEW_AFTER_MS = 50 * 60 * 1000;
+const RENEW_AFTER_MS = 8 * 60 * 1000;
 
 interface StoredVideoPlayerProps {
+  materialId?: string | null;
   filePath?: string | null;
   initialUrl?: string | null;
   startMs: number;
@@ -14,7 +16,7 @@ interface StoredVideoPlayerProps {
   showOpenLink?: boolean;
 }
 
-export function StoredVideoPlayer({ filePath, initialUrl, startMs, seekMs, showOpenLink = false }: StoredVideoPlayerProps) {
+export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, seekMs, showOpenLink = false }: StoredVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const renewalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
@@ -25,7 +27,7 @@ export function StoredVideoPlayer({ filePath, initialUrl, startMs, seekMs, showO
   const [error, setError] = useState<string | null>(null);
 
   const renewUrl = useCallback(async (preservePosition: boolean) => {
-    if (!filePath) return;
+    if (!materialId && !filePath) return;
     const generation = generationRef.current;
     const video = videoRef.current;
     if (preservePosition && video) {
@@ -33,20 +35,30 @@ export function StoredVideoPlayer({ filePath, initialUrl, startMs, seekMs, showO
       resumePlayingRef.current = !video.paused;
     }
 
-    const { data, error: signError } = await supabase.storage
-      .from('course-materials')
-      .createSignedUrl(filePath, SIGNED_URL_SECONDS);
+    let signedUrl: string | null = null;
+    let signError: string | null = null;
+    if (materialId) {
+      if (preservePosition) invalidateSignedMediaCache(materialId);
+      signedUrl = await resolveSignedMediaUrl(materialId);
+      if (!signedUrl) signError = 'Unable to open this video.';
+    } else if (filePath) {
+      const { data, error: storageError } = await supabase.storage
+        .from('course-materials')
+        .createSignedUrl(filePath, SIGNED_URL_SECONDS);
+      signedUrl = data?.signedUrl ?? null;
+      signError = storageError?.message ?? null;
+    }
     if (generation !== generationRef.current) return;
-    if (signError || !data?.signedUrl) {
-      setError(signError?.message || 'Unable to open this video.');
+    if (signError || !signedUrl) {
+      setError(signError || 'Unable to open this video.');
       return;
     }
 
     setError(null);
-    setUrl(data.signedUrl);
+    setUrl(signedUrl);
     if (renewalTimerRef.current) clearTimeout(renewalTimerRef.current);
     renewalTimerRef.current = setTimeout(() => { void renewUrl(true); }, RENEW_AFTER_MS);
-  }, [filePath]);
+  }, [filePath, materialId]);
 
   useEffect(() => {
     generationRef.current += 1;
@@ -55,13 +67,13 @@ export function StoredVideoPlayer({ filePath, initialUrl, startMs, seekMs, showO
     errorRetryRef.current = 0;
     setError(null);
     setUrl(initialUrl ?? null);
-    if (filePath) void renewUrl(false);
+    if (materialId || filePath) void renewUrl(false);
 
     return () => {
       generationRef.current += 1;
       if (renewalTimerRef.current) clearTimeout(renewalTimerRef.current);
     };
-  }, [filePath, initialUrl, startMs, renewUrl]);
+  }, [filePath, initialUrl, materialId, startMs, renewUrl]);
 
   useEffect(() => {
     if (seekMs === undefined) return;
@@ -93,7 +105,7 @@ export function StoredVideoPlayer({ filePath, initialUrl, startMs, seekMs, showO
   };
 
   const onVideoError = () => {
-    if (filePath && errorRetryRef.current < 1) {
+    if ((materialId || filePath) && errorRetryRef.current < 1) {
       errorRetryRef.current += 1;
       void renewUrl(true);
       return;
@@ -129,7 +141,7 @@ export function StoredVideoPlayer({ filePath, initialUrl, startMs, seekMs, showO
       {error ? (
         <div role="alert" className="flex items-center gap-2 text-xs text-destructive">
           <span>{error}</span>
-          {filePath ? (
+          {materialId || filePath ? (
             <button type="button" className="underline" onClick={() => { errorRetryRef.current = 0; void renewUrl(true); }}>
               Retry video
             </button>

@@ -248,7 +248,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             <DialogDescription>Stored course video</DialogDescription>
           </DialogHeader>
           {playingMaterial?.file_path ? (
-            <StoredVideoPlayer filePath={playingMaterial.file_path} startMs={0} />
+            <StoredVideoPlayer materialId={playingMaterial.id} filePath={playingMaterial.file_path} startMs={0} />
           ) : null}
         </DialogContent>
       </Dialog>

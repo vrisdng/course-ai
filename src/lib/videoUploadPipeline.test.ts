@@ -75,6 +75,7 @@ describe('uploadVideoForTranscription', () => {
     expect(mocks.send.mock.calls.map(([command]) => command.input.PartNumber)).toEqual([1, 2]);
     expect(mocks.clients[0]).toEqual(expect.objectContaining({
       endpoint: credentials.endpoint,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
       credentials: expect.objectContaining({ sessionToken: credentials.sessionToken }),
     }));
     expect(mocks.invoke).toHaveBeenLastCalledWith('video-upload-session', expect.objectContaining({ body: { action: 'complete-multipart', materialId: 'material-1' } }));

@@ -102,7 +102,7 @@ serve(async (req: Request) => {
     const response = await fetch("https://api.assemblyai.com/v2/transcript", {
       method: "POST", headers: { Authorization: assemblyApiKey, "Content-Type": "application/json" },
       body: JSON.stringify({
-        audio_url: signed.signedUrl, speech_models: ["universal-2"],
+        audio_url: sourceUrl, speech_models: ["universal-2"],
         ...(webhookSecret && webhookUrl ? {
           webhook_url: webhookUrl, webhook_auth_header_name: "x-assemblyai-webhook-secret",
           webhook_auth_header_value: webhookSecret,

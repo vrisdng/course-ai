@@ -106,6 +106,7 @@ function r2Client(credentials: R2Credentials): S3Client {
     region: credentials.region,
     forcePathStyle: true,
     maxAttempts: 1,
+    requestChecksumCalculation: 'WHEN_REQUIRED',
     credentials: {
       accessKeyId: credentials.accessKeyId,
       secretAccessKey: credentials.secretAccessKey,

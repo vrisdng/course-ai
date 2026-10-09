@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ from: vi.fn() }));
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from } }));
+vi.mock('./signedMedia', () => ({
+  resolveSignedMediaUrl: vi.fn().mockResolvedValue('https://storage.test/video.mp4'),
+  invalidateSignedMediaCache: vi.fn(),
+}));
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import { VideoTranscript } from './VideoTranscript';
 
