@@ -591,7 +591,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
               <li>PDF, DOC, DOCX, PPTX, PNG, JPG, JPEG, WEBP, and GIF files.</li>
               <li>PDF, DOC, and image files must be {documentLimitMb}MB or smaller.</li>
-              <li>MP4 and WebM videos up to 3 GB are stored for playback and transcribed with timestamps.</li>
+               <li>MP4 and WebM videos are stored for playback and transcribed with timestamps (limited only by the storage provider's maximum object size).</li>
               <li>DOCX and PPTX files are extracted after upload.</li>
             </ul>
           </div>

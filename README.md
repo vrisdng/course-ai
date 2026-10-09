@@ -95,9 +95,11 @@ supabase functions serve rag-chat --env-file .env
 
 **Reminder**: `reap-stale-jobs` is meant to run on a schedule (stale-job cleanup, 5-minute staleness threshold, 5-attempt retry cap — see [GET_STARTED.md](GET_STARTED.md)'s dynamic-behavior table). No `pg_cron` schedule was found checked into migrations — confirm whether this is wired up via the Supabase dashboard's cron scheduler before assuming stuck jobs self-heal in whatever environment you're working in.
 
-### Stored video rollout (3 GB maximum)
+### Stored video rollout
 
-Deploy the two new video migrations in timestamp order, regenerate `src/integrations/supabase/types.ts` from that migrated schema, then deploy `video-upload-session`, `transcribe-video`, `assemblyai-video-webhook`, and `reconcile-video-transcriptions`. Configure the project-wide Storage upload limit to at least **3,000,000,000 bytes**; the migration sets the `course-materials` bucket limit to that exact value. Confirm the project's plan supports this size before enabling uploads. Keep the bucket private.
+Apply the three video migrations in timestamp order, then regenerate `src/integrations/supabase/types.ts`. Before the scheduling migration, create Vault secrets named `project_url` and `service_role_key`; use the project's current secret API key, not the legacy service-role JWT. Deploy `video-upload-session`, `transcribe-video`, `signed-media`, `assemblyai-video-webhook`, and `reconcile-video-transcriptions`.
+
+Set `CLOUDFLARE_R2_ENV` to `dev` or `prod` and configure the matching R2 bucket, S3 endpoint, access-key pair, and temporary-credential API token. Keep both buckets private. Their CORS policy must allow `PUT`, `GET`, and `HEAD` from the application origin, allow the AWS SDK request headers, and expose `ETag` for multipart uploads.
 
 Set `ASSEMBLYAI_WEBHOOK_SECRET` and `ASSEMBLYAI_VIDEO_WEBHOOK_URL` as Edge Function secrets. The webhook URL is the deployed `/functions/v1/assemblyai-video-webhook` endpoint. The existing `ASSEMBLY_API_KEY`, `OPENAI_API_KEY`, Supabase URL, and service-role key are also needed by the video workers. Never expose provider or service-role keys through a `VITE_*` variable.
 

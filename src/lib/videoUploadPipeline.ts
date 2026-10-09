@@ -1,7 +1,7 @@
-import { Upload } from 'tus-js-client';
+import { S3Client, UploadPartCommand } from '@aws-sdk/client-s3';
 
 import { supabase } from '@/integrations/supabase/client';
-import { VIDEO_MAX_FILE_SIZE_BYTES } from '@/lib/materialUpload';
+import { validateVideoSizeBytes } from '@/lib/videoUploadLimits';
 import { formatBytes } from '@/lib/utils';
 
 export interface VideoUploadProgress {
@@ -22,10 +22,30 @@ interface VideoUploadOptions {
   signal?: AbortSignal;
 }
 
+interface R2Credentials {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+  expiresAt: string;
+}
+
 interface CreatedVideoUpload {
   materialId: string;
   filePath: string;
   uploaded: boolean;
+  transcriptionStatus?: string;
+  r2UploadId?: string;
+  partSize?: number;
+  credentials?: R2Credentials;
+}
+
+interface ListedParts {
+  materialId: string;
+  r2UploadId: string;
+  parts: Array<{ partNumber: number; etag: string; size: number }>;
 }
 
 interface CompletedVideoUpload {
@@ -34,11 +54,9 @@ interface CompletedVideoUpload {
   transcriptionStatus: string;
 }
 
-const BUCKET = 'course-materials';
-const TUS_CHUNK_SIZE = 6 * 1024 * 1024;
-const RETRY_DELAYS_MS = [0, 3000, 5000, 10000, 20000];
+const RETRY_DELAYS_MS = [0, 1000, 3000, 5000, 10000];
+const UPLOAD_CONCURRENCY = 3;
 const STORAGE_KEY_PREFIX = 'educhat.video-upload.v1:';
-const MAX_RESUMABLE_URL_AGE_MS = 23 * 60 * 60 * 1000;
 
 function checkCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error('Upload cancelled');
@@ -69,20 +87,12 @@ function getOrCreateUploadKey(storageKey: string): string {
   }
 }
 
-async function getAccessToken(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) throw new Error(`Could not refresh upload authentication: ${error.message}`);
-  if (!data.session?.access_token) throw new Error('Not authenticated');
-  return data.session.access_token;
-}
-
 async function invokeUploadSession<T>(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<T> {
   checkCancelled(signal);
   const { data, error } = await supabase.functions.invoke('video-upload-session', { body, signal });
-  checkCancelled(signal);
   if (error) throw new Error(`Video upload session failed: ${error.message}`);
   if (!data || typeof data !== 'object' || 'error' in data) {
     throw new Error(typeof data?.error === 'string' ? data.error : 'Invalid video upload session response');
@@ -90,113 +100,146 @@ async function invokeUploadSession<T>(
   return data as T;
 }
 
-function uploadToStorage(
+function r2Client(credentials: R2Credentials): S3Client {
+  return new S3Client({
+    endpoint: credentials.endpoint,
+    region: credentials.region,
+    forcePathStyle: true,
+    maxAttempts: 1,
+    credentials: {
+      accessKeyId: credentials.accessKeyId,
+      secretAccessKey: credentials.secretAccessKey,
+      sessionToken: credentials.sessionToken,
+    },
+  });
+}
+
+function errorStatus(error: unknown): number | undefined {
+  return (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+}
+
+function isCredentialError(error: unknown): boolean {
+  const name = (error as { name?: string })?.name;
+  return name === 'ExpiredToken' || name === 'InvalidToken' || errorStatus(error) === 401 || errorStatus(error) === 403;
+}
+
+function isRetryable(error: unknown): boolean {
+  const status = errorStatus(error);
+  return status === undefined || status === 408 || status === 429 || status >= 500;
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  checkCancelled(signal);
+  if (delayMs === 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(resolve, delayMs);
+    signal?.addEventListener('abort', () => {
+      window.clearTimeout(timer);
+      reject(new Error('Upload cancelled'));
+    }, { once: true });
+  });
+}
+
+function validateActiveSession(session: CreatedVideoUpload): asserts session is CreatedVideoUpload & {
+  r2UploadId: string; partSize: number; credentials: R2Credentials;
+} {
+  const credentials = session.credentials;
+  if (!session.materialId || !session.filePath || session.uploaded || !session.r2UploadId ||
+    typeof session.partSize !== 'number' || session.partSize < 1 ||
+    !credentials?.endpoint || !credentials.region || !credentials.bucket || !credentials.accessKeyId ||
+    !credentials.secretAccessKey || !credentials.sessionToken) {
+    throw new Error('Invalid video upload session response');
+  }
+}
+
+async function uploadToR2(
   file: File,
-  filePath: string,
+  session: CreatedVideoUpload & { r2UploadId: string; partSize: number; credentials: R2Credentials },
+  refreshSession: () => Promise<CreatedVideoUpload>,
   onProgress: VideoUploadOptions['onProgress'],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<void> {
   checkCancelled(signal);
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let resumedUrlStorageKey: string | null = null;
-    let retriedExpiredUrl = false;
+  const listed = await invokeUploadSession<ListedParts>({ action: 'list-parts', materialId: session.materialId }, signal);
+  if (listed.materialId !== session.materialId || listed.r2UploadId !== session.r2UploadId || !Array.isArray(listed.parts)) {
+    throw new Error('Invalid multipart upload state');
+  }
 
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener('abort', onAbort);
-      if (error) reject(error);
-      else resolve();
-    };
-    const onAbort = () => {
-      void upload.abort(false).catch(() => undefined);
-      finish(new Error('Upload cancelled'));
-    };
+  const partCount = Math.ceil(file.size / session.partSize);
+  const accepted = new Map(listed.parts.map((part) => [part.partNumber, part.size]));
+  const pending = Array.from({ length: partCount }, (_, index) => index + 1)
+    .filter((partNumber) => !accepted.has(partNumber));
+  let bytesUploaded = [...accepted.values()].reduce((sum, size) => sum + size, 0);
+  let client = r2Client(session.credentials);
+  let refreshPromise: Promise<void> | null = null;
+  let cursor = 0;
 
-    const upload = new Upload(file, {
-      endpoint: `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/upload/resumable`,
-      headers: {},
-      retryDelays: RETRY_DELAYS_MS,
-      chunkSize: TUS_CHUNK_SIZE,
-      uploadDataDuringCreation: true,
-      removeFingerprintOnSuccess: true,
-      // A path belongs to one material; an older upload of the same file must
-      // never be resumed against a different material or access scope.
-      fingerprint: async () => `educhat:${BUCKET}:${filePath}:${file.size}:${file.lastModified}`,
-      metadata: {
-        bucketName: BUCKET,
-        objectName: filePath,
-        contentType: getVideoContentType(file),
-        cacheControl: '3600',
-      },
-      // Supabase may refresh its JWT during a multi-hour transfer. This hook
-      // runs before each create, HEAD, and PATCH request, including retries.
-      onBeforeRequest: async (request) => {
-        checkCancelled(signal);
-        request.setHeader('authorization', `Bearer ${await getAccessToken()}`);
-        request.setHeader('apikey', import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
-      },
-      onProgress: (bytesUploaded, bytesTotal) => {
-        if (settled || signal?.aborted) return;
-        const total = bytesTotal ?? file.size;
-        const percent = total > 0 ? Math.min(100, Math.floor((bytesUploaded / total) * 100)) : 0;
-        onProgress({
-          stage: 'uploading',
-          progress: percent,
-          statusText: `Uploading video: ${percent}% (${formatBytes(bytesUploaded)} of ${formatBytes(total)})`,
-          bytesUploaded,
-          bytesTotal: total,
-        });
-      },
-      onError: (error) => {
-        const response = (error as { originalResponse?: { getStatus?: () => number } }).originalResponse;
-        const status = response?.getStatus?.();
-        if (resumedUrlStorageKey && !retriedExpiredUrl && (status === 404 || status === 410) && !signal?.aborted) {
-          retriedExpiredUrl = true;
-          const staleKey = resumedUrlStorageKey;
-          resumedUrlStorageKey = null;
-          void Promise.resolve(upload.options.urlStorage?.removeUpload(staleKey)).then(() => {
-            upload.url = null;
-            upload.start();
-          }).catch((storageError: unknown) => {
-            finish(storageError instanceof Error ? storageError : new Error(String(storageError)));
-          });
-          return;
+  const reportProgress = () => {
+    const percent = Math.min(100, Math.floor((bytesUploaded / file.size) * 100));
+    onProgress({
+      stage: 'uploading', progress: percent,
+      statusText: `Uploading video: ${percent}% (${formatBytes(bytesUploaded)} of ${formatBytes(file.size)})`,
+      bytesUploaded, bytesTotal: file.size,
+    });
+  };
+  reportProgress();
+
+  const refreshCredentials = async () => {
+    if (!refreshPromise) {
+      refreshPromise = (async () => {
+        const refreshed = await refreshSession();
+        validateActiveSession(refreshed);
+        if (refreshed.materialId !== session.materialId || refreshed.r2UploadId !== session.r2UploadId) {
+          throw new Error('Video upload identity changed during credential refresh');
         }
-        finish(error);
-      },
-      onSuccess: () => finish(),
-    });
+        client = r2Client(refreshed.credentials);
+      })().finally(() => { refreshPromise = null; });
+    }
+    await refreshPromise;
+  };
 
-    signal?.addEventListener('abort', onAbort, { once: true });
-    void upload.findPreviousUploads().then((previousUploads) => {
-      if (settled || signal?.aborted) return;
-      const previous = previousUploads.find((entry) => {
-        const createdAt = Date.parse(entry.creationTime);
-        return entry.metadata?.bucketName === BUCKET &&
-          entry.metadata.objectName === filePath &&
-          Number.isFinite(createdAt) &&
-          Date.now() - createdAt < MAX_RESUMABLE_URL_AGE_MS;
-      });
-      if (previous) {
-        resumedUrlStorageKey = previous.urlStorageKey;
-        upload.resumeFromPreviousUpload(previous);
+  const worker = async () => {
+    while (cursor < pending.length) {
+      const partNumber = pending[cursor++];
+      const start = (partNumber - 1) * session.partSize;
+      const end = Math.min(start + session.partSize, file.size);
+      let refreshedCredentials = false;
+      for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+        checkCancelled(signal);
+        try {
+          const response = await client.send(new UploadPartCommand({
+            Bucket: session.credentials.bucket,
+            Key: session.filePath,
+            UploadId: session.r2UploadId,
+            PartNumber: partNumber,
+            Body: file.slice(start, end),
+          }), { abortSignal: signal });
+          if (!response.ETag) throw new Error(`R2 returned no ETag for part ${partNumber}`);
+          bytesUploaded += end - start;
+          reportProgress();
+          break;
+        } catch (error) {
+          if (signal?.aborted || (error as { name?: string })?.name === 'AbortError') throw new Error('Upload cancelled');
+          if (!refreshedCredentials && isCredentialError(error)) {
+            refreshedCredentials = true;
+            await refreshCredentials();
+            continue;
+          }
+          if (attempt === RETRY_DELAYS_MS.length - 1 || !isRetryable(error)) throw error;
+          await waitForRetry(RETRY_DELAYS_MS[attempt + 1], signal);
+        }
       }
-      upload.start();
-    }).catch((error: unknown) => {
-      finish(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, pending.length) }, worker));
 }
 
 export async function uploadVideoForTranscription(opts: VideoUploadOptions): Promise<{ materialId: string; transcriptionStatus: string }> {
   const { file, courseId, academicTermId, accessScope, onProgress, signal } = opts;
   checkCancelled(signal);
-  if (file.size > VIDEO_MAX_FILE_SIZE_BYTES) {
-    throw new Error('Video files must be 3 GB or smaller.');
-  }
-  if (file.size === 0) throw new Error('Video file is empty.');
+  const sizeError = validateVideoSizeBytes(file.size);
+  if (sizeError) throw new Error(sizeError);
 
   const storageKey = getUploadKeyStorageKey(opts);
   const uploadKey = getOrCreateUploadKey(storageKey);
@@ -206,22 +249,27 @@ export async function uploadVideoForTranscription(opts: VideoUploadOptions): Pro
     onProgress({ stage: 'uploading', progress: 0, statusText: 'Preparing video upload...', bytesUploaded: 0, bytesTotal: file.size });
     // Wait for create's response even if cancellation happens during it, so
     // we can identify and cancel a row the server may have already inserted.
-    const created = await invokeUploadSession<CreatedVideoUpload>({
-      action: 'create', courseId, academicTermId, accessScope,
+    const createBody = {
+      action: 'create-multipart', courseId, academicTermId, accessScope,
       fileName: file.name, fileSize: file.size, contentType: getVideoContentType(file), uploadKey,
-    });
+    };
+    const created = await invokeUploadSession<CreatedVideoUpload>(createBody);
     materialId = created.materialId;
     if (!created.materialId || !created.filePath || typeof created.uploaded !== 'boolean') {
       throw new Error('Invalid video upload session response');
     }
-    checkCancelled(signal);
-    if (!created.uploaded) {
-      await uploadToStorage(file, created.filePath, onProgress, signal);
+    if (created.uploaded) {
+      if (typeof created.transcriptionStatus !== 'string') throw new Error('Invalid video upload session response');
+      localStorage.removeItem(storageKey);
+      return { materialId: created.materialId, transcriptionStatus: created.transcriptionStatus };
     }
+    validateActiveSession(created);
+    checkCancelled(signal);
+    await uploadToR2(file, created, () => invokeUploadSession<CreatedVideoUpload>(createBody, signal), onProgress, signal);
     checkCancelled(signal);
     onProgress({ stage: 'parsing', progress: 100, statusText: 'Verifying video and starting transcription...', bytesUploaded: file.size, bytesTotal: file.size });
     completionStarted = true;
-    const completed = await invokeUploadSession<CompletedVideoUpload>({ action: 'complete', materialId: created.materialId }, signal);
+    const completed = await invokeUploadSession<CompletedVideoUpload>({ action: 'complete-multipart', materialId: created.materialId }, signal);
     if (completed.materialId !== created.materialId || completed.uploaded !== true || typeof completed.transcriptionStatus !== 'string') {
       throw new Error('Invalid video completion response');
     }
@@ -240,7 +288,7 @@ export async function uploadVideoForTranscription(opts: VideoUploadOptions): Pro
     if (signal?.aborted && !completionStarted) {
       if (materialId) {
         try {
-          await supabase.functions.invoke('video-upload-session', { body: { action: 'cancel', materialId } });
+          await supabase.functions.invoke('video-upload-session', { body: { action: 'abort-multipart', materialId } });
         } catch {
           // The server's abandoned-upload reconciler handles a failed cancel.
         }

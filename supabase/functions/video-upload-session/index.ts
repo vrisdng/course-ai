@@ -1,10 +1,11 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders } from '../_shared/cors.ts';
-import { handleUploadSession, reapVideoUploads, type CleanupEntry, type NewUploadMaterial, type StoredObjectInfo, type UploadMaterial, type UploadSessionStore } from './core.ts';
+import { handleUploadSession, reapVideoUploads, type CleanupEntry, type NewUploadMaterial, type R2MultipartUpload, type R2Part, type StoredObjectInfo, type UploadMaterial, type UploadSessionStore } from './core.ts';
+import { r2AbortMultipartUpload, r2CreateMultipartUpload, r2CompleteMultipartUpload, r2DeleteObject, r2IssueCredentials, r2ListParts, selectR2Env } from '../_shared/r2.ts';
 
 const BUCKET = 'course-materials';
-const MATERIAL_FIELDS = 'id, course_id, academic_term_id, access_scope, uploaded_by, file_name, file_size, file_type, file_path, video_content_type, video_upload_key, video_upload_state';
+const MATERIAL_FIELDS = 'id, course_id, academic_term_id, access_scope, uploaded_by, file_name, file_size, file_type, file_path, video_content_type, video_upload_key, video_upload_state, storage_provider';
 const json = (body: Record<string, unknown>, status: number) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
@@ -108,12 +109,20 @@ serve(async (req: Request) => {
         .eq('file_path', path).in('video_upload_state', ['cancelled', 'deleting']);
       if (error) throw error;
     },
-    async recordCleanup(path: string): Promise<void> {
+    async recordCleanup(path: string, provider: 'supabase' | 'r2', r2UploadId?: string): Promise<void> {
       const { error } = await adminClient.from('video_storage_cleanup')
-        .upsert({ file_path: path }, { onConflict: 'file_path', ignoreDuplicates: true });
+        .upsert({
+          file_path: path,
+          storage_provider: provider,
+          object_key: provider === 'r2' ? path : null,
+          r2_multipart_upload_id: r2UploadId ?? null,
+          next_cleanup_at: new Date().toISOString(),
+          last_error: null,
+        }, { onConflict: 'file_path' });
       if (error) throw error;
     },
-    async removeObject(path: string): Promise<void> {
+    async removeObject(path: string, provider: 'supabase' | 'r2'): Promise<void> {
+      if (provider === 'r2') return r2DeleteObject(path);
       const { error } = await adminClient.storage.from(BUCKET).remove([path]);
       if (error) throw error;
     },
@@ -142,7 +151,7 @@ serve(async (req: Request) => {
     },
     async dueCleanup(before: string, limit: number): Promise<CleanupEntry[]> {
       const { data, error } = await adminClient.from('video_storage_cleanup')
-        .select('file_path, created_at').lte('next_cleanup_at', before)
+        .select('file_path, created_at, storage_provider, object_key, r2_multipart_upload_id').lte('next_cleanup_at', before)
         .order('next_cleanup_at', { ascending: true }).limit(limit);
       if (error) throw error;
       return data as CleanupEntry[];
@@ -154,6 +163,46 @@ serve(async (req: Request) => {
     },
     async finishCleanup(path: string): Promise<void> {
       const { error } = await adminClient.from('video_storage_cleanup').delete().eq('file_path', path);
+      if (error) throw error;
+    },
+    async createR2MultipartUpload(filePath: string, contentType: string, fileSize: number): Promise<R2MultipartUpload> {
+      return r2CreateMultipartUpload(filePath, contentType, fileSize);
+    },
+    async listR2Parts(objectKey: string, r2UploadId: string): Promise<R2Part[]> {
+      return r2ListParts(objectKey, r2UploadId);
+    },
+    async completeR2MultipartUpload(objectKey: string, r2UploadId: string, parts: R2Part[]): Promise<{ size: number; contentType: string }> {
+      return r2CompleteMultipartUpload(objectKey, r2UploadId, parts);
+    },
+    async abortR2MultipartUpload(objectKey: string, r2UploadId: string): Promise<void> {
+      return r2AbortMultipartUpload(objectKey, r2UploadId);
+    },
+    async issueR2Credentials(objectKey: string, allowedActions: readonly string[]): Promise<Record<string, string>> {
+      return r2IssueCredentials(objectKey, allowedActions, selectR2Env());
+    },
+    async saveMultipartUpload(id: string, upload: R2MultipartUpload): Promise<void> {
+      const { error } = await adminClient.from('materials_multipart_uploads').insert({
+        material_id: id, object_key: upload.objectKey, r2_upload_id: upload.r2UploadId,
+        part_size_bytes: upload.partSize, state: 'in_progress', expires_at: upload.expiresAt,
+      });
+      if (error) throw error;
+    },
+    async loadMultipartUpload(id: string): Promise<R2MultipartUpload | null> {
+      const { data, error } = await adminClient.from('materials_multipart_uploads')
+        .select('object_key, r2_upload_id, part_size_bytes, expires_at')
+        .eq('material_id', id).eq('state', 'in_progress').maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      return { objectKey: data.object_key, r2UploadId: data.r2_upload_id, partSize: Number(data.part_size_bytes), expiresAt: data.expires_at };
+    },
+    async finishMultipartUpload(id: string): Promise<void> {
+      const { error } = await adminClient.from('materials_multipart_uploads')
+        .update({ state: 'completed' }).eq('material_id', id).eq('state', 'in_progress');
+      if (error) throw error;
+    },
+    async abandonMultipartUpload(id: string): Promise<void> {
+      const { error } = await adminClient.from('materials_multipart_uploads')
+        .update({ state: 'aborted' }).eq('material_id', id).eq('state', 'in_progress');
       if (error) throw error;
     },
   };

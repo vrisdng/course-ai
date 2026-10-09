@@ -1,10 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
+import { r2GetSignedGetUrl, r2HeadObject } from "../_shared/r2.ts";
 import { isStoredVideoPath } from "./pipeline.ts";
 
 interface TranscribeRequest { materialId: string; refinalize?: boolean; retry?: boolean }
-const MAX_VIDEO_BYTES = 3_000_000_000;
 const SOURCE_URL_TTL_SECONDS = 6 * 60 * 60;
 const VIDEO_BUCKET = "course-materials";
 function json(body: unknown, status = 200): Response {
@@ -35,7 +35,7 @@ serve(async (req: Request) => {
     const body = await req.json() as TranscribeRequest;
     if (!body?.materialId || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(body.materialId)) return json({ error: "Valid materialId is required" }, 400);
     const { data: material, error: materialError } = await admin.from("materials")
-      .select("id,file_type,file_path,file_size,video_upload_state,processing_status,duration_ms,transcription_language")
+      .select("id,file_type,file_path,file_size,video_upload_state,processing_status,duration_ms,transcription_language,storage_provider")
       .eq("id", body.materialId).maybeSingle();
     if (materialError) throw new Error(materialError.message);
     if (!material || material.file_type !== "video") return json({ error: "Video material not found" }, 404);
@@ -58,23 +58,37 @@ serve(async (req: Request) => {
       return json({ success: true, queued: true, mode: "refinalize", materialId: body.materialId });
     }
 
-    if (material.video_upload_state !== "uploaded" || !isStoredVideoPath(material.file_path)) return json({ error: "Stored video is not ready" }, 409);
-    const pathParts = material.file_path.split("/");
-    const filename = pathParts.pop()!;
-    const { data: files, error: listError } = await admin.storage.from(VIDEO_BUCKET).list(pathParts.join("/"), { search: filename, limit: 100 });
-    if (listError) throw new Error(listError.message);
-    const storedFile = files?.find((file) => file.name === filename);
-    const storedSize = Number(storedFile?.metadata?.size);
-    if (!storedFile || !Number.isFinite(storedSize) || storedSize <= 0 || storedSize > MAX_VIDEO_BYTES || storedSize !== Number(material.file_size)) {
-      return json({ error: "Stored video is missing, incomplete, or exceeds the 3 GB limit" }, 409);
+    if (material.video_upload_state !== "uploaded") return json({ error: "Stored video is not ready" }, 409);
+    const storageProvider = material.storage_provider ?? "supabase";
+    if (storageProvider === "r2") {
+      // R2: confirm the object exists and matches the recorded size before fetching.
+      const head = await r2HeadObject(material.file_path);
+      const size = head.contentLength ?? 0;
+      if (size === 0 || size !== Number(material.file_size)) {
+        return json({ error: "Stored video is missing, incomplete, or does not match the recorded size" }, 409);
+      }
+    } else if (!isStoredVideoPath(material.file_path)) {
+      return json({ error: "Stored video is not ready" }, 409);
+    } else {
+      const pathParts = material.file_path.split("/");
+      const filename = pathParts.pop()!;
+      const { data: files, error: listError } = await admin.storage.from(VIDEO_BUCKET).list(pathParts.join("/"), { search: filename, limit: 100 });
+      if (listError) throw new Error(listError.message);
+      const storedFile = files?.find((file) => file.name === filename);
+      const storedSize = Number(storedFile?.metadata?.size);
+      if (!storedFile || !Number.isFinite(storedSize) || storedSize <= 0 || storedSize !== Number(material.file_size)) {
+        return json({ error: "Stored video is missing, incomplete, or does not match the recorded size" }, 409);
+      }
     }
     if (body.retry === true) {
       const { data: reset, error: resetError } = await admin.rpc("retry_failed_video_transcription", { p_material_id: body.materialId });
       if (resetError) throw new Error(resetError.message);
       if (!reset) return json({ error: "Only a known failed transcription can be retried" }, 409);
     }
-    const { data: signed, error: signError } = await admin.storage.from(VIDEO_BUCKET).createSignedUrl(material.file_path, SOURCE_URL_TTL_SECONDS);
-    if (signError || !signed?.signedUrl) throw new Error(signError?.message ?? "Unable to sign stored video");
+    const sourceUrl = storageProvider === "r2"
+      ? await r2GetSignedGetUrl(material.file_path, SOURCE_URL_TTL_SECONDS)
+      : (await admin.storage.from(VIDEO_BUCKET).createSignedUrl(material.file_path, SOURCE_URL_TTL_SECONDS)).signedUrl;
+    if (!sourceUrl) throw new Error("Unable to sign stored video");
     const { data: claimed, error: claimError } = await admin.rpc("claim_video_transcription_submission", { p_material_id: body.materialId });
     if (claimError) throw new Error(claimError.message);
     const claim = claimed?.[0];

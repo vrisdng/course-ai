@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   INLINE_GEMINI_MAX_FILE_SIZE_BYTES,
-  VIDEO_MAX_FILE_SIZE_BYTES,
   TEXT_INGEST_MAX_CHARACTERS,
   getDeferredUploadValidationError,
   getImmediateUploadValidationError,
@@ -12,6 +11,7 @@ import {
   isTextLikeUpload,
   usesInlineGeminiExtraction,
 } from './materialUpload';
+import { R2_MAX_OBJECT_BYTES } from './videoUploadLimits';
 
 describe('material upload policy', () => {
   it('applies the 15MB immediate limit only to inline Gemini formats', () => {
@@ -30,16 +30,11 @@ describe('material upload policy', () => {
     expect(getImmediateUploadValidationError(docxCandidate)).toBeNull();
   });
 
-  it('applies the decimal 3 GB immediate limit to supported video uploads', () => {
-    const videoCandidate = {
-      name: 'lecture.mp4',
-      size: VIDEO_MAX_FILE_SIZE_BYTES + 1,
-    };
-
-    expect(isVideoUpload(videoCandidate)).toBe(true);
-    expect(VIDEO_MAX_FILE_SIZE_BYTES).toBe(3_000_000_000);
-    expect(getImmediateUploadValidationError({ name: 'lecture.mp4', size: VIDEO_MAX_FILE_SIZE_BYTES })).toBeNull();
-    expect(getImmediateUploadValidationError(videoCandidate)).toContain('3 GB');
+  it('imposes no product video size limit, only the storage provider ceiling', () => {
+    expect(isVideoUpload({ name: 'lecture.mp4' })).toBe(true);
+    expect(getImmediateUploadValidationError({ name: 'lecture.mp4', size: 3_000_000_000 })).toBeNull();
+    expect(getImmediateUploadValidationError({ name: 'lecture.mp4', size: R2_MAX_OBJECT_BYTES })).toBeNull();
+    expect(getImmediateUploadValidationError({ name: 'lecture.mp4', size: R2_MAX_OBJECT_BYTES + 1 })).toContain('5 TB');
   });
 
   it('treats code and text uploads as text-like content', () => {

@@ -1,29 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { R2_MAX_OBJECT_BYTES } from './videoUploadLimits';
+
 const mocks = vi.hoisted(() => ({
-  getSession: vi.fn(), invoke: vi.fn(),
-  previousUploads: [] as Array<Record<string, unknown>>,
-  uploads: [] as Array<{ options: Record<string, unknown>; start: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn>; findPreviousUploads: ReturnType<typeof vi.fn>; resumeFromPreviousUpload: ReturnType<typeof vi.fn> }>,
+  invoke: vi.fn(),
+  send: vi.fn(),
+  clients: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('@/integrations/supabase/client', () => ({
-  supabase: { auth: { getSession: mocks.getSession }, functions: { invoke: mocks.invoke } },
+  supabase: { functions: { invoke: mocks.invoke } },
 }));
-vi.mock('tus-js-client', () => ({
-  Upload: class {
-    constructor(_file: File, options: Record<string, unknown>) {
-      const upload = {
-        options, start: vi.fn(), abort: vi.fn().mockResolvedValue(undefined),
-        findPreviousUploads: vi.fn().mockImplementation(async () => mocks.previousUploads), resumeFromPreviousUpload: vi.fn(),
-      };
-      mocks.uploads.push(upload);
-      return upload;
-    }
+
+vi.mock('@aws-sdk/client-s3', () => ({
+  S3Client: class {
+    constructor(config: Record<string, unknown>) { mocks.clients.push(config); }
+    send(command: unknown, options?: unknown) { return mocks.send(command, options); }
+  },
+  UploadPartCommand: class {
+    input: Record<string, unknown>;
+    constructor(input: Record<string, unknown>) { this.input = input; }
   },
 }));
 
+const credentials = {
+  endpoint: 'https://account.r2.cloudflarestorage.com', region: 'auto', bucket: 'videos-dev',
+  accessKeyId: 'temporary-key', secretAccessKey: 'temporary-secret', sessionToken: 'temporary-token',
+  expiresAt: '2026-10-08T12:00:00.000Z',
+};
+const created = {
+  materialId: 'material-1', filePath: 'videos/material-1/source.mp4', r2UploadId: 'upload-1',
+  partSize: 5, credentials, uploaded: false,
+};
+
 const makeFile = (size = 10) => {
-  const file = new File(['video'], 'lecture.mp4', { type: 'video/mp4', lastModified: 123 });
+  const file = new File(['0123456789'], 'lecture.mp4', { type: 'video/mp4', lastModified: 123 });
   Object.defineProperty(file, 'size', { value: size });
   return file;
 };
@@ -39,130 +50,90 @@ async function run(overrides: Record<string, unknown> = {}) {
 describe('uploadVideoForTranscription', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.uploads.length = 0;
-    mocks.previousUploads = [];
+    mocks.clients.length = 0;
     localStorage.clear();
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => '00000000-0000-4000-8000-000000000001') });
-    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'access-token' } } });
-    mocks.invoke.mockImplementation(async (_name, { body }) => body.action === 'create'
-      ? { data: { materialId: 'material-1', filePath: 'course-1/material-1-lecture.mp4', uploaded: false }, error: null }
-      : { data: { materialId: 'material-1', uploaded: true, transcriptionStatus: 'pending' }, error: null });
+    mocks.send.mockResolvedValue({ ETag: '"etag"' });
+    mocks.invoke.mockImplementation(async (_name, { body }) => {
+      if (body.action === 'create-multipart') return { data: created, error: null };
+      if (body.action === 'list-parts') return { data: { materialId: created.materialId, r2UploadId: created.r2UploadId, parts: [] }, error: null };
+      if (body.action === 'complete-multipart') return { data: { materialId: created.materialId, uploaded: true, transcriptionStatus: 'pending' }, error: null };
+      if (body.action === 'abort-multipart') return { data: { materialId: created.materialId, aborted: true }, error: null };
+      return { data: null, error: new Error('Unexpected action') };
+    });
   });
 
-  it('creates a stable session, uploads with TUS and actual byte progress, then completes', async () => {
+  it('creates an R2 session, uploads missing parts, then completes', async () => {
     const onProgress = vi.fn();
-    const promise = run({ onProgress });
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
-    const upload = mocks.uploads[0];
+    await expect(run({ onProgress })).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
+
     expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', expect.objectContaining({
-      body: expect.objectContaining({ action: 'create', courseId: 'course-1', fileSize: 10, uploadKey: '00000000-0000-4000-8000-000000000001' }),
+      body: expect.objectContaining({ action: 'create-multipart', fileSize: 10, uploadKey: '00000000-0000-4000-8000-000000000001' }),
     }));
-    expect(upload.options).toEqual(expect.objectContaining({
-      endpoint: expect.stringContaining('/storage/v1/upload/resumable'),
-      chunkSize: 6 * 1024 * 1024, removeFingerprintOnSuccess: true,
-      metadata: expect.objectContaining({ bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' }),
+    expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', expect.objectContaining({ body: { action: 'list-parts', materialId: 'material-1' } }));
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    expect(mocks.send.mock.calls.map(([command]) => command.input.PartNumber)).toEqual([1, 2]);
+    expect(mocks.clients[0]).toEqual(expect.objectContaining({
+      endpoint: credentials.endpoint,
+      credentials: expect.objectContaining({ sessionToken: credentials.sessionToken }),
     }));
-    expect(upload.options.headers).not.toHaveProperty('x-upsert');
-    (upload.options.onProgress as (sent: number, total: number) => void)(5, 10);
-    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: 'uploading', progress: 50, bytesUploaded: 5, bytesTotal: 10 }));
-    (upload.options.onSuccess as () => void)();
-    await expect(promise).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
-    expect(mocks.invoke).toHaveBeenLastCalledWith('video-upload-session', expect.objectContaining({ body: { action: 'complete', materialId: 'material-1' } }));
+    expect(mocks.invoke).toHaveBeenLastCalledWith('video-upload-session', expect.objectContaining({ body: { action: 'complete-multipart', materialId: 'material-1' } }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ progress: 100, bytesUploaded: 10, bytesTotal: 10 }));
     expect(localStorage.length).toBe(0);
   });
 
-  it('reuses the upload key on retry and resumes a prior TUS URL', async () => {
-    const first = run();
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
-    (mocks.uploads[0].options.onError as (error: Error) => void)(new Error('network down'));
-    await expect(first).rejects.toThrow('network down');
-    const previous = { uploadUrl: 'https://upload.test/old', urlStorageKey: 'old-key', creationTime: new Date().toISOString(), metadata: { bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' } };
-    mocks.previousUploads = [previous];
-    const second = run();
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(2));
-    const upload = mocks.uploads[1];
-    await vi.waitFor(() => expect(upload.resumeFromPreviousUpload).toHaveBeenCalledWith(previous));
-    (upload.options.onSuccess as () => void)();
-    await expect(second).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
-    const creates = mocks.invoke.mock.calls.filter(([, options]) => options.body.action === 'create');
+  it('resumes from R2 server state and skips accepted parts', async () => {
+    mocks.invoke.mockImplementation(async (_name, { body }) => {
+      if (body.action === 'create-multipart') return { data: created, error: null };
+      if (body.action === 'list-parts') return { data: { materialId: created.materialId, r2UploadId: created.r2UploadId, parts: [{ partNumber: 1, etag: '"one"', size: 5 }] }, error: null };
+      return { data: { materialId: created.materialId, uploaded: true, transcriptionStatus: 'pending' }, error: null };
+    });
+    await run();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0][0].input.PartNumber).toBe(2);
+  });
+
+  it('refreshes expired credentials without creating another material or upload', async () => {
+    const expired = Object.assign(new Error('expired'), { name: 'ExpiredToken', $metadata: { httpStatusCode: 403 } });
+    mocks.send.mockRejectedValueOnce(expired).mockResolvedValue({ ETag: '"etag"' });
+    await run();
+    const creates = mocks.invoke.mock.calls.filter(([, options]) => options.body.action === 'create-multipart');
+    expect(creates).toHaveLength(2);
     expect(creates[0][1].body.uploadKey).toBe(creates[1][1].body.uploadKey);
+    expect(mocks.send).toHaveBeenCalledTimes(3);
   });
 
-  it('skips transfer when the server verifies the object already exists', async () => {
-    mocks.invoke.mockImplementation(async (_name, { body }) => body.action === 'create'
-      ? { data: { materialId: 'material-1', filePath: 'course-1/material-1-lecture.mp4', uploaded: true }, error: null }
-      : { data: { materialId: 'material-1', uploaded: true, transcriptionStatus: 'pending' }, error: null });
-    await expect(run()).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'pending' });
-    expect(mocks.uploads).toHaveLength(0);
+  it('returns immediately when the idempotent session is already uploaded', async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      data: { materialId: 'material-1', filePath: created.filePath, uploaded: true, transcriptionStatus: 'completed' },
+      error: null,
+    });
+    await expect(run()).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'completed' });
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
-  it('starts fresh when a stored TUS URL is near expiry', async () => {
-    mocks.previousUploads = [{
-      uploadUrl: 'https://upload.test/stale', urlStorageKey: 'old-key',
-      creationTime: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-      metadata: { bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' },
-    }];
-    const promise = run();
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
-    const upload = mocks.uploads[0];
-    await vi.waitFor(() => expect(upload.start).toHaveBeenCalled());
-    expect(upload.resumeFromPreviousUpload).not.toHaveBeenCalled();
-    (upload.options.onSuccess as () => void)();
-    await promise;
-  });
-
-  it('restarts a resumed transfer if its server URL has expired', async () => {
-    mocks.previousUploads = [{
-      uploadUrl: 'https://upload.test/expired', urlStorageKey: 'old-key',
-      creationTime: new Date().toISOString(),
-      metadata: { bucketName: 'course-materials', objectName: 'course-1/material-1-lecture.mp4' },
-    }];
-    const promise = run();
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
-    const upload = mocks.uploads[0];
-    await vi.waitFor(() => expect(upload.resumeFromPreviousUpload).toHaveBeenCalled());
-    (upload.options.onError as (error: Error) => void)(Object.assign(new Error('expired'), {
-      originalResponse: { getStatus: () => 410 },
-    }));
-    await vi.waitFor(() => expect(upload.start).toHaveBeenCalledTimes(2));
-    (upload.options.onSuccess as () => void)();
-    await promise;
-  });
-
-  it('uses a fresh session for each TUS request', async () => {
-    const promise = run();
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
-    const before = mocks.uploads[0].options.onBeforeRequest as (req: { setHeader: ReturnType<typeof vi.fn> }) => Promise<void>;
-    const req = { setHeader: vi.fn() };
-    await before(req);
-    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'refreshed-token' } } });
-    await before(req);
-    expect(req.setHeader).toHaveBeenCalledWith('authorization', 'Bearer refreshed-token');
-    (mocks.uploads[0].options.onSuccess as () => void)();
-    await promise;
-  });
-
-  it('reports a saved video with failed transcription without claiming it is processing', async () => {
-    mocks.invoke.mockImplementation(async (_name, { body }) => body.action === 'create'
-      ? { data: { materialId: 'material-1', filePath: 'course-1/material-1-lecture.mp4', uploaded: true }, error: null }
-      : { data: { materialId: 'material-1', uploaded: true, transcriptionStatus: 'failed' }, error: null });
-    const onProgress = vi.fn();
-    await expect(run({ onProgress })).resolves.toEqual({ materialId: 'material-1', transcriptionStatus: 'failed' });
-    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'error', statusText: expect.stringContaining('Transcription failed') }));
-    expect(localStorage.length).toBe(0);
-  });
-
-  it('enforces 3 GB before server work and aborts an in-flight transfer', async () => {
-    await expect(run({ file: makeFile(3_000_000_001) })).rejects.toThrow('3 GB');
-    expect(mocks.invoke).not.toHaveBeenCalled();
+  it('aborts the multipart session when the user cancels', async () => {
     const controller = new AbortController();
+    mocks.send.mockImplementation((_command, options) => new Promise((_resolve, reject) => {
+      options.abortSignal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+    }));
     const promise = run({ signal: controller.signal });
-    await vi.waitFor(() => expect(mocks.uploads).toHaveLength(1));
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalled());
     controller.abort();
     await expect(promise).rejects.toThrow('Upload cancelled');
-    expect(mocks.uploads[0].abort).toHaveBeenCalled();
-    expect(mocks.invoke.mock.calls.some(([, options]) => options.body.action === 'complete')).toBe(false);
-    expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', { body: { action: 'cancel', materialId: 'material-1' } });
-    expect(localStorage.length).toBe(0);
+    expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', { body: { action: 'abort-multipart', materialId: 'material-1' } });
+    expect(mocks.invoke.mock.calls.some(([, options]) => options.body.action === 'complete-multipart')).toBe(false);
+  });
+
+  it('keeps the upload key after a part upload failure', async () => {
+    mocks.send.mockRejectedValue(Object.assign(new Error('upload rejected'), { $metadata: { httpStatusCode: 400 } }));
+    await expect(run()).rejects.toThrow('upload rejected');
+    expect(localStorage.length).toBe(1);
+    expect(mocks.invoke.mock.calls.some(([, options]) => options.body.action === 'abort-multipart')).toBe(false);
+  });
+
+  it('rejects a file above the R2 ceiling before server work', async () => {
+    await expect(run({ file: makeFile(R2_MAX_OBJECT_BYTES + 1) })).rejects.toThrow('5 TB');
+    expect(mocks.invoke).not.toHaveBeenCalled();
   });
 });

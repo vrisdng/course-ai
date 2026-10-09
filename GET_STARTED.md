@@ -75,10 +75,10 @@ Admins upload course materials in two pipelines, both async and job-tracked.
 ### Video
 
 - Supported: `.mp4`, `.webm` only.
-- **3,000,000,000-byte** maximum per video, enforced by the browser, upload-session function, and private Storage bucket. The project-wide Storage setting must also allow at least this size.
-- Browser uploads directly to Supabase Storage using resumable TUS chunks. The server first creates an idempotent material record; progress reports actual uploaded bytes. An interrupted upload can resume when the same file is selected again. Explicit cancellation requests cleanup.
-- The video remains in Storage for later playback. The admin Materials list and student transcript panel play it through short-lived signed URLs; transcript timestamps seek within the video.
-- Once Storage verifies size and content type, the server submits a signed video URL to AssemblyAI. A webhook and scheduled reconciler track transcription, stage timed segments and RAG chunks, embed them, then publish them together. Provider or indexing failures leave the video playable and expose a transcription retry action.
+- **No application maximum** per video now; the browser and upload-session function only reject files the storage provider itself cannot store (a 5 TB object limit). The project-wide Storage setting must allow the largest expected video.
+- Browser uploads directly to private Cloudflare R2 using resumable multipart uploads. The server first creates an idempotent material record and durable multipart ledger; progress reports actual accepted bytes. An interrupted upload can resume when the same file is selected again. Explicit cancellation and the scheduled reaper abort unfinished parts and clean stored objects.
+- The video remains in R2 for later playback. The admin Materials list and student transcript panel play it through short-lived signed URLs; transcript timestamps seek within the video.
+- Once R2 verifies size and content type, the server submits a signed video URL to AssemblyAI. A webhook and scheduled reconciler track transcription, stage timed segments and RAG chunks, embed them, then publish them together. Provider or indexing failures leave the video playable and expose a transcription retry action.
 - AssemblyAI's URL transcription also has a **10-hour duration limit**. A video over that limit may upload and play but transcription will fail with a visible error. The upload flow currently checks bytes, not duration.
 - Note: a client-side FFmpeg-based audio extractor/chunker (`src/lib/ffmpegAudioExtractor.ts`) exists in the codebase but is not called from anywhere — leftover from an earlier design, not part of the live pipeline.
 
@@ -151,7 +151,7 @@ Requires a `.env` with Supabase project credentials and provider API keys (`GEMI
 | Conversation count per user | Unlimited (cap removed) | N/A |
 | Citation source preview link | Signed URL valid 120 seconds | Fixed TTL |
 | Document upload size | 15 MB max | Fixed limit |
-| Video upload size | 3,000,000,000 bytes max; project Storage setting must also allow it | Fixed limit |
+| Video upload size | No application limit; storage provider object limit (5 TB) | Provider limit |
 | Document text/chunk limits | 500,000 chars max, 250 chunks max per document | Fixed limit |
 | Embedding call retries | Up to 3 attempts | Fixed retry count |
 | Material processing job — stale detection | Reset to pending after 5 minutes stuck "processing" | Fixed timeout |
