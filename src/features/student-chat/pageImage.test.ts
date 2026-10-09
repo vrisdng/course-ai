@@ -13,11 +13,11 @@ vi.mock('@/integrations/supabase/client', () => ({
   },
 }));
 
-import { PAGE_IMAGE_URL_TTL_SECONDS, loadPageImage, pageImagePath } from './pageImage';
+import { PAGE_IMAGE_URL_TTL_SECONDS, loadBlockBoxes, loadPageImage, pageImagePath } from './pageImage';
 
 function query(result: { data: unknown; error: unknown }) {
   const chain: Record<string, unknown> = {};
-  for (const method of ['select', 'eq', 'maybeSingle']) chain[method] = vi.fn(() => chain);
+  for (const method of ['select', 'eq', 'in', 'maybeSingle']) chain[method] = vi.fn(() => chain);
   chain.then = (resolve: (value: typeof result) => unknown) => Promise.resolve(result).then(resolve);
   return chain;
 }
@@ -61,5 +61,42 @@ describe('loadPageImage', () => {
     mocks.from.mockReturnValueOnce(query({ data: { width: 1400, height: 788 }, error: null }));
     mocks.createSignedUrl.mockResolvedValueOnce({ data: null, error: { message: 'denied' } });
     await expect(loadPageImage('mat-1', 4)).resolves.toBeNull();
+  });
+});
+
+describe('loadBlockBoxes', () => {
+  beforeEach(() => mocks.from.mockReset());
+
+  it("returns the first cited block's page and the boxes of the cited blocks on it, in citation order", async () => {
+    const blocksQuery = query({
+      data: [
+        { id: 'b3', page_number: 4, box: [0.1, 0.1, 0.5, 0.2] },
+        { id: 'b1', page_number: 3, box: [0.1, 0.5, 0.9, 0.6] },
+        { id: 'b2', page_number: 3, box: [0.1, 0.7, 0.9, 0.8] },
+      ],
+      error: null,
+    });
+    mocks.from.mockReturnValueOnce(blocksQuery);
+
+    await expect(loadBlockBoxes(['b1', 'b2', 'b3'])).resolves.toEqual({
+      pageNumber: 3,
+      boxes: [
+        [0.1, 0.5, 0.9, 0.6],
+        [0.1, 0.7, 0.9, 0.8],
+      ],
+    });
+    expect(mocks.from).toHaveBeenCalledWith('page_blocks');
+    expect(blocksQuery.in).toHaveBeenCalledWith('id', ['b1', 'b2', 'b3']);
+  });
+
+  it('skips blocks without a usable box', async () => {
+    mocks.from.mockReturnValueOnce(query({ data: [{ id: 'b1', page_number: 2, box: null }, { id: 'b2', page_number: 2, box: [0.1, 0.1, 0.2, 0.2] }], error: null }));
+    await expect(loadBlockBoxes(['b1', 'b2'])).resolves.toEqual({ pageNumber: 2, boxes: [[0.1, 0.1, 0.2, 0.2]] });
+  });
+
+  it('returns null when nothing can be read', async () => {
+    await expect(loadBlockBoxes([])).resolves.toBeNull();
+    mocks.from.mockReturnValueOnce(query({ data: null, error: { message: 'denied' } }));
+    await expect(loadBlockBoxes(['b1'])).resolves.toBeNull();
   });
 });

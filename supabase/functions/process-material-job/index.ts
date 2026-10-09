@@ -16,13 +16,21 @@ import {
   type PageRange,
 } from "../_shared/extraction.ts";
 import { countPdfPages } from "../_shared/pdfPages.ts";
-import { createOpenAIEmbeddingService, generateDocumentText } from "../_shared/llm.ts";
+import { createOpenAIEmbeddingService, generateDocumentText, generatePageImagesText } from "../_shared/llm.ts";
 import { EMBEDDING_COLUMN } from "../_shared/embeddings.ts";
 import {
   createRendererClient,
+  pageImagePath,
   runPageRenderBatch,
   type PageRenderState,
 } from "../_shared/pageImages.ts";
+import { chunkBlocks, type BlockType, type StoredBlock } from "../_shared/blocks.ts";
+import {
+  initialBlockExtractionState,
+  runBlockExtractionBatch,
+  type BlockExtractionState,
+} from "../_shared/blockExtraction.ts";
+import type { Box, PageLine } from "../_shared/highlights.ts";
 
 interface ProcessMaterialJobRequest {
   materialId?: string;
@@ -34,6 +42,9 @@ interface ChunkData {
   start: number;
   end: number;
   pageNumber: number | null;
+  // Set for chunks built from page blocks (see _shared/blocks.ts).
+  blockIds?: string[];
+  highlightBox?: Box | null;
 }
 
 // Resumable extraction state for multi-page PDFs: pages [1, nextPage) are done.
@@ -56,9 +67,14 @@ interface JobPayload {
   chunks?: ChunkData[];
   embeddedUpTo?: number; // index of first un-embedded chunk
   totalChunks?: number;
-  // Resumable state — set once a PDF's chunks are embedded and its page
-  // images are being rendered (see _shared/pageImages.ts)
+  // PDFs with the renderer configured go: page images (pageRender) → blocks
+  // read from those images (blockExtraction) → chunks built from blocks →
+  // embedding. Each stage is resumable and stored here between invocations.
   pageRender?: PageRenderState;
+  blockExtraction?: BlockExtractionState;
+  // Set when the page-image stages failed: the PDF is then extracted as
+  // plain text from the file, without blocks.
+  skipPageImages?: boolean;
 }
 
 const INLINE_GEMINI_MAX_FILE_SIZE = 15 * 1024 * 1024;
@@ -91,6 +107,9 @@ const EXTRACTION_CALL_TIMEOUT_MS = 100_000;
 const EXTRACTION_SINGLE_CALL_MAX_PAGES = 16;
 const EXTRACTION_PROGRESS_START = 25;
 const EXTRACTION_PROGRESS_END = 50;
+const RENDERING_PROGRESS_START = 10;
+const CHUNK_SIZE = 1200;
+const CHUNK_OVERLAP = 200;
 
 declare const EdgeRuntime:
   | { waitUntil?: (promise: Promise<unknown>) => void }
@@ -529,45 +548,55 @@ function jsonResponse(body: Record<string, unknown>): Response {
   });
 }
 
-async function completeJob(
-  adminClient: SupabaseClient,
-  jobId: string,
-  payload: JobPayload,
-  note: string | null,
-): Promise<void> {
-  await adminClient
-    .from("material_processing_jobs")
-    .update({
-      status: "completed",
-      last_error: note,
-      locked_at: null,
-      locked_by: null,
-      payload: payload as unknown as Record<string, unknown>,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", jobId);
-}
-
-// One batch of page rendering per invocation. The material is already
-// completed and searchable, so any error here ends the stage (noted on the
-// job) instead of marking the material failed.
-async function runPageImageStage(options: {
+interface StageContext {
   adminClient: SupabaseClient;
   supabaseUrl: string;
   supabaseKey: string;
   jobId: string;
   materialId: string;
   attemptCount: number;
-  payload: JobPayload;
-  state: PageRenderState;
-  renderer: PageRendererConfig;
-}): Promise<Response> {
-  const { adminClient, jobId, materialId, payload, state, renderer } = options;
-  const { filePath, fileType, bucketName, totalChunks } = payload;
-  const basePayload: JobPayload = { filePath, fileType, bucketName, totalChunks };
+  // The file fields every payload carries.
+  base: JobPayload;
+}
 
+async function updateMaterialProgress(
+  adminClient: SupabaseClient,
+  materialId: string,
+  stage: string,
+  progress: number,
+): Promise<void> {
+  await adminClient
+    .from("materials")
+    .update({ processing_status: "processing", processing_error: null, processing_stage: stage, processing_progress: progress })
+    .eq("id", materialId);
+}
+
+// Abandons the page-image stages and restarts the job as a plain-text PDF
+// extraction, so a renderer problem never leaves a material unprocessed.
+async function fallBackToTextExtraction(context: StageContext, reason: string): Promise<Response> {
+  console.warn(`Page images skipped for ${context.materialId}: ${reason}; extracting text from the file instead`);
+  await context.adminClient.from("page_blocks").delete().eq("material_id", context.materialId);
+  await requeueJobAndContinue({ ...context, payload: { ...context.base, skipPageImages: true } });
+  return jsonResponse({ success: true, jobId: context.jobId, materialId: context.materialId, stage: "page_images", skipped: reason, continuing: true });
+}
+
+// Stage 1 for a PDF: one batch of page rendering per invocation. When every
+// page has an image, hands over to block extraction.
+async function runPageImageStage(context: StageContext, state: PageRenderState, renderer: PageRendererConfig): Promise<Response> {
+  const { adminClient, materialId, base } = context;
+  const { filePath, bucketName } = base;
+  if (state.totalPages) {
+    await updateMaterialProgress(
+      adminClient,
+      materialId,
+      "rendering",
+      Math.round(RENDERING_PROGRESS_START + (EXTRACTION_PROGRESS_START - RENDERING_PROGRESS_START) * ((state.nextPage - 1) / state.totalPages)),
+    );
+  }
+
+  let result: Awaited<ReturnType<typeof runPageRenderBatch>>;
   try {
-    const result = await runPageRenderBatch(materialId, state, {
+    result = await runPageRenderBatch(materialId, state, {
       createPdfDownloadUrl: async () => {
         const { data, error } = await adminClient.storage
           .from(bucketName)
@@ -591,69 +620,163 @@ async function runPageImageStage(options: {
         const { error } = await adminClient.from("material_pages").upsert(rows);
         if (error) throw new Error(`Failed to save page images: ${error.message}`);
       },
-      loadChunks: async (pageNumbers) => {
-        const { data, error } = await adminClient
-          .from("chunks")
-          .select("id, chunk_text, page_number")
-          .eq("material_id", materialId)
-          .in("page_number", pageNumbers);
-        if (error) throw new Error(`Failed to load chunks for highlighting: ${error.message}`);
-        return data ?? [];
-      },
-      saveHighlight: async (chunkId, box) => {
-        const { error } = await adminClient.from("chunks").update({ highlight_box: box }).eq("id", chunkId);
-        if (error) throw new Error(`Failed to save a chunk highlight: ${error.message}`);
-      },
     });
+  } catch (error) {
+    return fallBackToTextExtraction(context, error instanceof Error ? error.message : String(error));
+  }
 
-    if (result.failed.length > 0) {
-      console.warn(`Page images: ${result.failed.length} page(s) failed for ${materialId}`, result.failed);
-    }
+  if (result.failed.length > 0) {
+    return fallBackToTextExtraction(context, `${result.failed.length} page(s) failed to render`);
+  }
 
-    if (!result.done) {
-      await requeueJobAndContinue({
-        adminClient,
-        supabaseUrl: options.supabaseUrl,
-        supabaseKey: options.supabaseKey,
-        jobId,
-        materialId,
-        attemptCount: options.attemptCount,
-        payload: { ...basePayload, pageRender: result.state },
-      });
-      return jsonResponse({
-        success: true,
-        jobId,
-        materialId,
-        stage: "page_images",
-        pagesRendered: result.rendered,
-        chunksHighlighted: result.highlighted,
-        nextPage: result.state.nextPage,
-        totalPages: result.state.totalPages,
-        continuing: true,
-      });
-    }
-
-    await completeJob(
-      adminClient,
-      jobId,
-      basePayload,
-      result.failed.length > 0 ? `Page images: ${result.failed.length} page(s) failed in the last batch` : null,
-    );
+  if (!result.done) {
+    await requeueJobAndContinue({ ...context, payload: { ...base, pageRender: result.state } });
     return jsonResponse({
       success: true,
-      jobId,
+      jobId: context.jobId,
       materialId,
       stage: "page_images",
       pagesRendered: result.rendered,
-      chunksHighlighted: result.highlighted,
+      nextPage: result.state.nextPage,
       totalPages: result.state.totalPages,
+      continuing: true,
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Page images skipped for ${materialId}:`, message);
-    await completeJob(adminClient, jobId, basePayload, `Page images skipped: ${message}`);
-    return jsonResponse({ success: true, jobId, materialId, stage: "page_images", skipped: message });
   }
+
+  const totalPages = result.state.totalPages ?? 0;
+  const { count } = await adminClient
+    .from("material_pages")
+    .select("page_number", { count: "exact", head: true })
+    .eq("material_id", materialId);
+  if (totalPages < 1 || count !== totalPages) {
+    return fallBackToTextExtraction(context, `${count ?? 0} of ${totalPages} pages have images`);
+  }
+
+  await requeueJobAndContinue({ ...context, payload: { ...base, blockExtraction: initialBlockExtractionState(totalPages) } });
+  return jsonResponse({ success: true, jobId: context.jobId, materialId, stage: "page_images", totalPages, nextStage: "blocks", continuing: true });
+}
+
+function toStoredBlock(row: {
+  id: string;
+  page_number: number;
+  ordinal: number;
+  block_type: string;
+  text: string;
+  box: unknown;
+}): StoredBlock {
+  return {
+    id: row.id,
+    pageNumber: row.page_number,
+    ordinal: row.ordinal,
+    type: row.block_type as BlockType,
+    text: row.text,
+    box: Array.isArray(row.box) && row.box.length === 4 ? (row.box as Box) : null,
+  };
+}
+
+// Stage 2 for a PDF: one batch of page images per invocation is read into
+// blocks. When every page is done, builds chunks from whole blocks and hands
+// them to the embedding stage.
+async function runBlockStage(context: StageContext, state: BlockExtractionState, openAiApiKey: string): Promise<Response> {
+  const { adminClient, materialId, base } = context;
+  await updateMaterialProgress(
+    adminClient,
+    materialId,
+    "extracting",
+    Math.round(EXTRACTION_PROGRESS_START + (EXTRACTION_PROGRESS_END - EXTRACTION_PROGRESS_START) * ((state.nextPage - 1) / state.totalPages)),
+  );
+
+  const result = await runBlockExtractionBatch(state, {
+    loadPageImage: async (pageNumber) => {
+      const { data, error } = await adminClient.storage.from(base.bucketName).download(pageImagePath(materialId, pageNumber));
+      if (error || !data) throw new Error(`Missing image for page ${pageNumber}: ${error?.message ?? "no data"}`);
+      return { base64Data: encodeBytesToBase64(new Uint8Array(await data.arrayBuffer())), mimeType: "image/webp" };
+    },
+    loadPageLines: async (pageNumbers) => {
+      const { data, error } = await adminClient
+        .from("material_pages")
+        .select("page_number, lines")
+        .eq("material_id", materialId)
+        .in("page_number", pageNumbers);
+      if (error) throw new Error(`Failed to load page lines: ${error.message}`);
+      return new Map((data ?? []).map((row) => [row.page_number as number, (row.lines ?? []) as PageLine[]]));
+    },
+    readBlocks: async (prompt, pages) => {
+      const signal = AbortSignal.timeout(EXTRACTION_CALL_TIMEOUT_MS);
+      try {
+        return await generatePageImagesText({
+          apiKey: openAiApiKey,
+          model: OCR_MODEL,
+          prompt,
+          pages,
+          maxOutputTokens: OCR_MAX_OUTPUT_TOKENS,
+          maxRetries: 3,
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted) throw new ExtractionTimeoutError({ start: pages[0].pageNumber, end: pages[pages.length - 1].pageNumber });
+        throw error;
+      }
+    },
+    saveBlocks: async (blocks) => {
+      const { error } = await adminClient.from("page_blocks").upsert(
+        blocks.map((b) => ({
+          material_id: materialId,
+          page_number: b.pageNumber,
+          ordinal: b.ordinal,
+          block_type: b.type,
+          text: b.text,
+          box: b.box,
+        })),
+        { onConflict: "material_id,page_number,ordinal" },
+      );
+      if (error) throw new Error(`Failed to save page blocks: ${error.message}`);
+    },
+    isTimeout: (error) => error instanceof ExtractionTimeoutError,
+  });
+
+  if (!result.done) {
+    await requeueJobAndContinue({
+      ...context,
+      // A timeout counts as an attempt; a normal continuation does not.
+      attemptCount: result.timedOut ? context.attemptCount + 1 : context.attemptCount,
+      payload: { ...base, blockExtraction: result.state },
+    });
+    return jsonResponse({
+      success: true,
+      jobId: context.jobId,
+      materialId,
+      stage: "blocks",
+      blocksRead: result.blockCount,
+      nextPage: result.state.nextPage,
+      totalPages: result.state.totalPages,
+      timedOut: result.timedOut,
+      continuing: true,
+    });
+  }
+
+  await updateMaterialProgress(adminClient, materialId, "chunking", 55);
+  const { data: rows, error } = await adminClient
+    .from("page_blocks")
+    .select("id, page_number, ordinal, block_type, text, box")
+    .eq("material_id", materialId)
+    .order("page_number")
+    .order("ordinal");
+  if (error) throw new Error(`Failed to load page blocks: ${error.message}`);
+
+  const chunks: ChunkData[] = chunkBlocks((rows ?? []).map(toStoredBlock), CHUNK_SIZE);
+  if (chunks.length === 0) {
+    throw new Error("No text could be extracted from the document");
+  }
+  if (chunks.length > MAX_DOCUMENT_CHUNKS) {
+    throw new Error(
+      `Document expands to ${chunks.length} chunks, which exceeds the processing limit of ${MAX_DOCUMENT_CHUNKS}. Split the file into smaller parts.`,
+    );
+  }
+
+  await adminClient.from("chunks").delete().eq("material_id", materialId);
+  await requeueJobAndContinue({ ...context, payload: { ...base, chunks, embeddedUpTo: 0, totalChunks: chunks.length } });
+  return jsonResponse({ success: true, jobId: context.jobId, materialId, stage: "blocks", totalChunks: chunks.length, nextStage: "embedding", continuing: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -762,26 +885,34 @@ serve(async (req: Request) => {
     }
 
     // -----------------------------------------------------------------------
-    // Page-image stage (chunks are already embedded)
+    // PDF stages before embedding: page images, then blocks
     // -----------------------------------------------------------------------
+    const stageContext: StageContext = {
+      adminClient,
+      supabaseUrl,
+      supabaseKey,
+      jobId: claimedJobId,
+      materialId: claimedMaterialId,
+      attemptCount: claimedAttemptCount,
+      base: { filePath, fileType, bucketName },
+    };
+    const renderer = pageRendererConfig();
+
     if (payload.pageRender) {
-      const renderer = pageRendererConfig();
-      if (!renderer) {
-        const { pageRender: _done, ...rest } = payload;
-        await completeJob(adminClient, claimedJobId, rest, "Page images skipped: renderer not configured");
-        return jsonResponse({ success: true, jobId: claimedJobId, stage: "page_images", skipped: "not configured" });
-      }
-      return await runPageImageStage({
-        adminClient,
-        supabaseUrl,
-        supabaseKey,
-        jobId: claimedJobId,
-        materialId: claimedMaterialId,
-        attemptCount: claimedAttemptCount,
-        payload,
-        state: payload.pageRender,
-        renderer,
-      });
+      return renderer
+        ? await runPageImageStage(stageContext, payload.pageRender, renderer)
+        : await fallBackToTextExtraction(stageContext, "renderer not configured");
+    }
+    if (payload.blockExtraction) {
+      return await runBlockStage(stageContext, payload.blockExtraction, openAiApiKey);
+    }
+
+    const isFreshJob = !payload.chunks && !payload.extraction;
+    if (isFreshJob && !payload.skipPageImages && renderer && rendersPageImages(filePath, bucketName)) {
+      await adminClient.from("material_pages").delete().eq("material_id", claimedMaterialId);
+      await adminClient.from("page_blocks").delete().eq("material_id", claimedMaterialId);
+      await updateMaterialProgress(adminClient, claimedMaterialId, "rendering", RENDERING_PROGRESS_START);
+      return await runPageImageStage(stageContext, { nextPage: 1, totalPages: null }, renderer);
     }
 
     // -----------------------------------------------------------------------
@@ -946,12 +1077,10 @@ serve(async (req: Request) => {
         })
         .eq("id", materialIdForError);
 
-      const CHUNK_SIZE = 1200;
-      const OVERLAP = 200;
       chunks = [];
 
       for (const segment of extractedSegments) {
-        for (const chunk of chunkText(segment.text, CHUNK_SIZE, OVERLAP)) {
+        for (const chunk of chunkText(segment.text, CHUNK_SIZE, CHUNK_OVERLAP)) {
           chunks.push({ ...chunk, pageNumber: segment.pageNumber });
         }
       }
@@ -1027,6 +1156,8 @@ serve(async (req: Request) => {
         start_position: chunk.start,
         end_position: chunk.end,
         page_number: chunk.pageNumber,
+        block_ids: chunk.blockIds ?? null,
+        highlight_box: chunk.highlightBox ?? null,
       }));
 
       // Insert embedded chunks into DB
@@ -1056,29 +1187,6 @@ serve(async (req: Request) => {
            processing_progress: 100,
          })
          .eq("id", materialIdForError);
-
-       // PDFs continue into the page-image stage on the same job.
-       if (pageRendererConfig() && rendersPageImages(filePath, bucketName)) {
-         await adminClient.from("material_pages").delete().eq("material_id", claimedMaterialId);
-         await requeueJobAndContinue({
-           adminClient,
-           supabaseUrl,
-           supabaseKey,
-           jobId: claimedJobId,
-           materialId: claimedMaterialId,
-           attemptCount: claimedAttemptCount,
-           payload: { filePath, fileType, bucketName, totalChunks, pageRender: { nextPage: 1, totalPages: null } },
-         });
-         return jsonResponse({
-           success: true,
-           jobId: claimedJobId,
-           materialId: claimedMaterialId,
-           chunksInserted: totalChunks,
-           resumed: isResuming,
-           nextStage: "page_images",
-           continuing: true,
-         });
-       }
 
        await adminClient
          .from("material_processing_jobs")

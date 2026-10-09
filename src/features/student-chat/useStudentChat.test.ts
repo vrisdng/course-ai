@@ -322,7 +322,39 @@ describe('useStudentChat', () => {
         pageNumber: 4,
         signedUrl: 'https://signed.test/course/lecture7.pdf',
         pageImage: { url: 'https://signed.test/page-images/mat-1/page-4.webp', width: 1400, height: 788 },
-        highlightBox: [0.1, 0.2, 0.6, 0.3],
+        highlightBoxes: [[0.1, 0.2, 0.6, 0.3]],
+      });
+    });
+
+    it('boxes only the blocks the answer cited, on their page', async () => {
+      mockTables({ width: 1400, height: 788 });
+      const chunksAndMaterials = from.getMockImplementation()!;
+      from.mockImplementation((table: string) =>
+        table === 'page_blocks'
+          ? createQueryChain({
+              data: [
+                { id: 'blk-2', page_number: 5, box: [0.1, 0.5, 0.9, 0.6] },
+                { id: 'blk-1', page_number: 5, box: [0.1, 0.3, 0.9, 0.4] },
+              ],
+              error: null,
+            })
+          : chunksAndMaterials(table),
+      );
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource({ ...citation, blockIds: ['blk-1', 'blk-2'] }, 'key-3');
+      });
+
+      expect(from).toHaveBeenCalledWith('page_blocks');
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        pageNumber: 5,
+        pageImage: { url: 'https://signed.test/page-images/mat-1/page-5.webp' },
+        highlightBoxes: [
+          [0.1, 0.3, 0.9, 0.4],
+          [0.1, 0.5, 0.9, 0.6],
+        ],
       });
     });
 
@@ -338,7 +370,7 @@ describe('useStudentChat', () => {
         kind: 'pdf',
         signedUrl: 'https://signed.test/course/lecture7.pdf',
         pageImage: null,
-        highlightBox: null,
+        highlightBoxes: [],
       });
       expect(toast.error).not.toHaveBeenCalled();
     });

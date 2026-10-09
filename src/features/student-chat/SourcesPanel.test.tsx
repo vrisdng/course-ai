@@ -102,7 +102,7 @@ describe('SourcesPanel', () => {
       activeViewerSource: source({
         pageNumber: 2,
         pageImage: { url: 'https://img.test/p2.webp', width: 1400, height: 788 },
-        highlightBox: [0.1, 0.2, 0.6, 0.3],
+        highlightBoxes: [[0.1, 0.2, 0.6, 0.3]],
       }),
     });
     render(<SourcesPanel {...value} />);

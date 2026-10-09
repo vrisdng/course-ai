@@ -29,7 +29,7 @@ export function PageViewer({ source }: PageViewerProps) {
   // Tall pages would otherwise open at the top with the cited passage off-screen.
   useEffect(() => {
     highlightRef.current?.scrollIntoView?.({ block: 'center' });
-  }, [pageImage?.url, source.highlightBox]);
+  }, [pageImage?.url, source.highlightBoxes]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -46,7 +46,7 @@ export function PageViewer({ source }: PageViewerProps) {
               ref={highlightRef}
               image={pageImage}
               alt={`${source.documentName}, page ${pageNumber}`}
-              highlightBox={source.highlightBox}
+              highlightBoxes={source.highlightBoxes}
               className="w-full max-w-[840px] overflow-hidden rounded-md shadow-sm"
             />
           ) : source.kind === 'pdf' ? (

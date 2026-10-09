@@ -156,7 +156,7 @@ export function SourcesPanel({
                        <HighlightedPageImage
                          image={activeViewerSource.pageImage}
                          alt={`${activeViewerSource.documentName}, page ${page}`}
-                         highlightBox={activeViewerSource.highlightBox}
+                         highlightBoxes={activeViewerSource.highlightBoxes}
                        />
                      </button>
                    ) : activeViewerSource.signedUrl ? (

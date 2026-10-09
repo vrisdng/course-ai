@@ -18,7 +18,7 @@ import {
   getDocumentScopeSummary,
   sanitizeSelectedDocumentIds,
 } from './documentScope';
-import { loadPageImage } from './pageImage';
+import { loadBlockBoxes, loadPageImage } from './pageImage';
 import { parseMaybeJson, parseSseEventBlock, type ParsedSseEvent } from './sse';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
@@ -394,7 +394,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     const messageIds = rows.map((row) => row.id);
     const { data: citationRows, error: citationsError } = await supabase
       .from('citations')
-      .select('id, message_id, chunk_id, relevance_score, excerpt, image_url')
+      .select('id, message_id, chunk_id, relevance_score, excerpt, image_url, block_ids')
       .in('message_id', messageIds);
 
     if (citationsError) {
@@ -495,6 +495,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         relevanceScore: citation.relevance_score ?? 0,
         imageUrl: citation.image_url ?? null,
         materialId: chunk?.materialId ?? null,
+        blockIds: citation.block_ids ?? undefined,
       };
 
       if (!citationsByMessageId[citation.message_id]) {
@@ -1059,9 +1060,18 @@ export function useStudentChat(routeConversationId: string | null = null) {
       // PDFs/images render in-app; raw/binary files fall back to a new tab (the
       // "no new tab" rule was scoped to PDFs).
       const kind = classifyCitation(citation);
-      const pageNumber = ensureStartingPage(citation.pageNumber);
 
-      // A page rendered at ingestion shows as an image with the cited box,
+      // Cited blocks decide the page and the outlines; without them the
+      // chunk's own page and box are used.
+      const blockHighlight = kind === 'pdf' && citation.blockIds?.length
+        ? await loadBlockBoxes(citation.blockIds)
+        : null;
+      const pageNumber = blockHighlight?.pageNumber ?? ensureStartingPage(citation.pageNumber);
+      const highlightBoxes = blockHighlight && blockHighlight.boxes.length > 0
+        ? blockHighlight.boxes
+        : resolved.highlightBox ? [resolved.highlightBox] : [];
+
+      // A page rendered at ingestion shows as an image with the cited boxes,
       // without downloading the PDF; otherwise the viewer renders the PDF.
       const pageImage = kind === 'pdf' && resolved.materialId
         ? await loadPageImage(resolved.materialId, pageNumber)
@@ -1075,7 +1085,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         materialId: resolved.materialId,
         excerpt: citation.excerpt,
         pageImage,
-        highlightBox: pageImage ? resolved.highlightBox : null,
+        highlightBoxes: pageImage ? highlightBoxes : [],
       };
 
       // PDFs render in the side-panel gallery, scrolled to the cited page.

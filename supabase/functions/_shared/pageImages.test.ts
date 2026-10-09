@@ -32,14 +32,12 @@ describe("nextRenderBatch", () => {
   });
 });
 
-function deps(response: RenderResponseBody, chunks: { id: string; chunk_text: string; page_number: number | null }[] = []) {
+function deps(response: RenderResponseBody) {
   return {
     createPdfDownloadUrl: vi.fn(async () => "https://storage.test/pdf?token=d"),
     createUploadUrl: vi.fn(async (path: string) => `https://storage.test/upload/${path}?token=u`),
     callRenderer: vi.fn(async () => response),
     savePages: vi.fn(async () => {}),
-    loadChunks: vi.fn(async () => chunks),
-    saveHighlight: vi.fn(async () => {}),
   } satisfies PageRenderDeps;
 }
 
@@ -77,28 +75,8 @@ describe("runPageRenderBatch", () => {
       state: { nextPage: 3, totalPages: 2 },
       done: true,
       rendered: 2,
-      highlighted: 0,
       failed: [],
     });
-  });
-
-  it("matches the rendered pages' chunks to their lines and saves the boxes", async () => {
-    const d = deps(
-      { pageCount: 30, pages: [{ pageNumber: 21, width: 1400, height: 788, lines: [titleLine] }], failed: [] },
-      [
-        { id: "chunk-a", chunk_text: "Dynamic programming stores subproblem results so they are reused.", page_number: 21 },
-        { id: "chunk-b", chunk_text: "Nothing on the page says this.", page_number: 21 },
-      ],
-    );
-
-    const result = await runPageRenderBatch(MATERIAL, { nextPage: 21, totalPages: 30 }, d);
-
-    expect(d.loadChunks).toHaveBeenCalledWith([21]);
-    expect(d.saveHighlight).toHaveBeenCalledTimes(1);
-    expect(d.saveHighlight).toHaveBeenCalledWith("chunk-a", [0.1, 0.1, 0.8, 0.15]);
-    expect(result.highlighted).toBe(1);
-    expect(result.state).toEqual({ nextPage: 31, totalPages: 30 });
-    expect(result.done).toBe(true);
   });
 
   it("continues when more pages remain and reports genuine page failures", async () => {

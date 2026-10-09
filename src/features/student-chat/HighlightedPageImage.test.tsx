@@ -16,7 +16,7 @@ describe('HighlightedPageImage', () => {
   });
 
   it('draws the cited box over the image, padded slightly', () => {
-    render(<HighlightedPageImage image={image} alt="Notes, page 2" highlightBox={[0.1, 0.2, 0.6, 0.3]} />);
+    render(<HighlightedPageImage image={image} alt="Notes, page 2" highlightBoxes={[[0.1, 0.2, 0.6, 0.3]]} />);
     const highlight = screen.getByTestId('citation-highlight');
     expect(highlight).toHaveStyle({ left: '9.2%', top: '19.4%', width: '51.6%', height: '11.2%' });
     expect(screen.getByText('Cited passage highlighted')).toBeInTheDocument();
@@ -26,7 +26,22 @@ describe('HighlightedPageImage', () => {
   });
 
   it('keeps a box at the page edge inside the image', () => {
-    render(<HighlightedPageImage image={image} alt="Notes, page 2" highlightBox={[0, 0, 1, 1]} />);
+    render(<HighlightedPageImage image={image} alt="Notes, page 2" highlightBoxes={[[0, 0, 1, 1]]} />);
     expect(screen.getByTestId('citation-highlight')).toHaveStyle({ left: '0%', top: '0%', width: '100%', height: '100%' });
+  });
+
+  it('draws one outline per cited block and announces them once', () => {
+    render(
+      <HighlightedPageImage
+        image={image}
+        alt="Notes, page 2"
+        highlightBoxes={[
+          [0.1, 0.2, 0.6, 0.3],
+          [0.1, 0.5, 0.9, 0.7],
+        ]}
+      />,
+    );
+    expect(screen.getAllByTestId('citation-highlight')).toHaveLength(2);
+    expect(screen.getAllByText('Cited passage highlighted')).toHaveLength(1);
   });
 });

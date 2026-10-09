@@ -1,10 +1,10 @@
-// Page-image stage of process-material-job. Once a PDF's chunks are embedded,
-// its pages are rendered in batches by the Vercel renderer
-// (api/render-pdf-pages.ts): this side signs a download URL for the PDF and an
-// upload URL per page image, sends them over, then stores each page's size and
-// text lines and matches the batch's chunks to those lines for highlighting.
+// Page-image stage of process-material-job, the first stage for a PDF. Pages
+// are rendered in batches by the Vercel renderer (api/render-pdf-pages.ts):
+// this side signs a download URL for the PDF and an upload URL per page image,
+// sends them over, then stores each page's size and text lines. The block
+// extraction stage reads those images and snaps block boxes onto those lines.
 // One batch per invocation; the caller requeues until done.
-import { matchChunkToLines, type Box, type PageLine } from "./highlights.ts";
+import type { PageLine } from "./highlights.ts";
 
 export const PAGE_IMAGE_PREFIX = "page-images";
 // Under the renderer's 25-page cap, and small enough that rendering plus
@@ -50,26 +50,17 @@ export interface MaterialPageRow {
   lines: PageLine[];
 }
 
-export interface ChunkForHighlight {
-  id: string;
-  chunk_text: string;
-  page_number: number | null;
-}
-
 export interface PageRenderDeps {
   createPdfDownloadUrl(): Promise<string>;
   createUploadUrl(path: string): Promise<string>;
   callRenderer(body: RenderRequestBody): Promise<RenderResponseBody>;
   savePages(rows: MaterialPageRow[]): Promise<void>;
-  loadChunks(pageNumbers: number[]): Promise<ChunkForHighlight[]>;
-  saveHighlight(chunkId: string, box: Box): Promise<void>;
 }
 
 export interface PageRenderBatchResult {
   state: PageRenderState;
   done: boolean;
   rendered: number;
-  highlighted: number;
   // Pages that exist but failed to render or upload.
   failed: FailedPage[];
 }
@@ -96,7 +87,7 @@ export async function runPageRenderBatch(
 ): Promise<PageRenderBatchResult> {
   const pageNumbers = nextRenderBatch(state);
   if (pageNumbers.length === 0) {
-    return { state, done: true, rendered: 0, highlighted: 0, failed: [] };
+    return { state, done: true, rendered: 0, failed: [] };
   }
 
   const [pdfUrl, uploadUrls] = await Promise.all([
@@ -121,27 +112,12 @@ export async function runPageRenderBatch(
     );
   }
 
-  const linesByPage = new Map(response.pages.map((page) => [page.pageNumber, page.lines]));
-  let highlighted = 0;
-  if (linesByPage.size > 0) {
-    const chunks = await deps.loadChunks([...linesByPage.keys()]);
-    for (const chunk of chunks) {
-      const lines = chunk.page_number === null ? undefined : linesByPage.get(chunk.page_number);
-      const box = lines ? matchChunkToLines(chunk.chunk_text, lines) : null;
-      if (box) {
-        await deps.saveHighlight(chunk.id, box);
-        highlighted += 1;
-      }
-    }
-  }
-
   const totalPages = response.pageCount;
   const nextPage = Math.min(pageNumbers[pageNumbers.length - 1] + 1, totalPages + 1);
   return {
     state: { nextPage, totalPages },
     done: nextPage > totalPages,
     rendered: response.pages.length,
-    highlighted,
     // The first batch over-asks while the page count is unknown; those are not failures.
     failed: response.failed.filter((page) => page.pageNumber <= totalPages),
   };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCitationRewriteSourceContext,
+  formatLabelledBlocks,
   clipText,
   extractCitedImageTokens,
   formatTimestamp,
@@ -95,6 +96,33 @@ describe("normalizeCitationTokens", () => {
   });
 });
 
+describe("normalizeCitationTokens with block labels", () => {
+  const blocks = (source: number) => ({ 1: 2, 2: 3 } as Record<number, number>)[source] ?? 0;
+
+  it("keeps valid block labels, lowercased and sorted", () => {
+    expect(normalizeCitationTokens("See <<cite:2b>>.", 2, blocks)).toBe("See <<cite:2b>>.");
+    expect(normalizeCitationTokens("See <<cite: 2C, 2B >>.", 2, blocks)).toBe("See <<cite:2b,2c>>.");
+  });
+
+  it("falls back to the whole source for labels that don't exist", () => {
+    expect(normalizeCitationTokens("See <<cite:2z>>.", 2, blocks)).toBe("See <<cite:2>>.");
+    expect(normalizeCitationTokens("See <<cite:2b>>.", 2)).toBe("See <<cite:2>>.");
+  });
+
+  it("splits a token that names several sources into one token per source", () => {
+    expect(normalizeCitationTokens("See <<cite:1a,2b>>.", 2, blocks)).toBe("See <<cite:1a>><<cite:2b>>.");
+  });
+
+  it("lets a whole-source citation win over blocks of it in the same marker", () => {
+    expect(normalizeCitationTokens("See <<cite:2,2b>>.", 2, blocks)).toBe("See <<cite:2>>.");
+    expect(normalizeCitationTokens("See <<cite:2b,2>>.", 2, blocks)).toBe("See <<cite:2>>.");
+  });
+
+  it("drops references to sources that don't exist", () => {
+    expect(normalizeCitationTokens("See <<cite:9a>>.", 2, blocks)).toBe("See .");
+  });
+});
+
 describe("sanitizeAndRemapCitations", () => {
   it("remaps cited sources to a dense 1..n sequence in first-appearance order", () => {
     const result = sanitizeAndRemapCitations(
@@ -122,10 +150,57 @@ describe("sanitizeAndRemapCitations", () => {
     expect(result.text).toBe("Answer <<cite:1>>.");
   });
 
+  it("gives each distinct set of cited blocks its own number, reusing it on repeats", () => {
+    const blocks = () => 4;
+    const result = sanitizeAndRemapCitations(
+      "A <<cite:3b>>. B <<cite:3c>>. C <<cite:1>>. D <<cite:3b>>.",
+      3,
+      blocks,
+    );
+    expect(result.text).toBe("A <<cite:1>>. B <<cite:2>>. C <<cite:3>>. D <<cite:1>>.");
+    expect(result.citedRefs).toEqual([
+      { sourceNumber: 3, blockIndexes: [1] },
+      { sourceNumber: 3, blockIndexes: [2] },
+      { sourceNumber: 1, blockIndexes: [] },
+    ]);
+    expect(result.citedChunkNumbers).toEqual([3, 3, 1]);
+  });
+
+  it("treats the same blocks in a different order as one citation", () => {
+    const result = sanitizeAndRemapCitations("X <<cite:2c,2b>>. Y <<cite:2b,2c>>.", 2, () => 3);
+    expect(result.text).toBe("X <<cite:1>>. Y <<cite:1>>.");
+    expect(result.citedRefs).toEqual([{ sourceNumber: 2, blockIndexes: [1, 2] }]);
+  });
+
+  it("reports whole-source citations with no block indexes", () => {
+    const result = sanitizeAndRemapCitations("First <<cite:3>>. Second <<cite:1>>.", 3);
+    expect(result.citedRefs).toEqual([
+      { sourceNumber: 3, blockIndexes: [] },
+      { sourceNumber: 1, blockIndexes: [] },
+    ]);
+  });
+
   it("produces no citations when the answer cites nothing", () => {
     const result = sanitizeAndRemapCitations("No citations here.", 3);
     expect(result.citedChunkNumbers).toEqual([]);
     expect(result.text).toBe("No citations here.");
+  });
+});
+
+describe("formatLabelledBlocks", () => {
+  it("prefixes each block with its source number and label", () => {
+    expect(formatLabelledBlocks(3, ["Hashing", "A hash function maps keys to slots."], 1300)).toEqual({
+      text: "[3a] Hashing\n[3b] A hash function maps keys to slots.",
+      shownCount: 2,
+    });
+  });
+
+  it("stops at the first block over budget, but always shows the first", () => {
+    expect(formatLabelledBlocks(1, ["x".repeat(30), "y".repeat(30), "z"], 40)).toEqual({
+      text: `[1a] ${"x".repeat(30)}`,
+      shownCount: 1,
+    });
+    expect(formatLabelledBlocks(1, ["z".repeat(80)], 40).text).toBe(`[1a] ${"z".repeat(40)}...`);
   });
 });
 

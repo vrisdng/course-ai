@@ -58,6 +58,7 @@ export type Database = {
       }
       chunks: {
         Row: {
+          block_ids: string[] | null
           chunk_index: number
           chunk_text: string
           created_at: string
@@ -75,6 +76,7 @@ export type Database = {
           student_document_id: string | null
         }
         Insert: {
+          block_ids?: string[] | null
           chunk_index: number
           chunk_text: string
           created_at?: string
@@ -92,6 +94,7 @@ export type Database = {
           student_document_id?: string | null
         }
         Update: {
+          block_ids?: string[] | null
           chunk_index?: number
           chunk_text?: string
           created_at?: string
@@ -127,6 +130,7 @@ export type Database = {
       }
       citations: {
         Row: {
+          block_ids: string[] | null
           chunk_id: string
           created_at: string
           excerpt: string | null
@@ -136,6 +140,7 @@ export type Database = {
           relevance_score: number | null
         }
         Insert: {
+          block_ids?: string[] | null
           chunk_id: string
           created_at?: string
           excerpt?: string | null
@@ -145,6 +150,7 @@ export type Database = {
           relevance_score?: number | null
         }
         Update: {
+          block_ids?: string[] | null
           chunk_id?: string
           created_at?: string
           excerpt?: string | null
@@ -610,6 +616,47 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      page_blocks: {
+        Row: {
+          block_type: string
+          box: Json | null
+          created_at: string
+          id: string
+          material_id: string
+          ordinal: number
+          page_number: number
+          text: string
+        }
+        Insert: {
+          block_type: string
+          box?: Json | null
+          created_at?: string
+          id?: string
+          material_id: string
+          ordinal: number
+          page_number: number
+          text: string
+        }
+        Update: {
+          block_type?: string
+          box?: Json | null
+          created_at?: string
+          id?: string
+          material_id?: string
+          ordinal?: number
+          page_number?: number
+          text?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "page_blocks_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "materials"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       plans: {
         Row: {

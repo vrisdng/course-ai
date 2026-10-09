@@ -52,7 +52,7 @@ describe('PageViewer', () => {
       <PageViewer
         source={source({
           pageImage: { url: 'https://img.test/p3.webp', width: 1400, height: 1980 },
-          highlightBox: [0.1, 0.6, 0.8, 0.7],
+          highlightBoxes: [[0.1, 0.6, 0.8, 0.7]],
         })}
       />,
     );

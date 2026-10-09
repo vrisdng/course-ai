@@ -26,9 +26,10 @@ export interface ActiveViewerSource {
   endMs?: number;
   excerpt?: string;
   // Set for PDF pages rendered at ingestion; the viewer then shows the image
-  // (with highlightBox drawn on it) instead of loading the whole PDF.
+  // (with highlightBoxes outlined on it) instead of loading the whole PDF.
   pageImage?: PageImage | null;
-  highlightBox?: HighlightBox | null;
+  // The cited blocks' boxes, or the whole chunk's box when no blocks were cited.
+  highlightBoxes?: HighlightBox[];
 }
 
 export function isHighlightBox(value: unknown): value is HighlightBox {
