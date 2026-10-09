@@ -243,7 +243,8 @@ describe('PdfReader', () => {
       fireEvent.change(searchBox(), { target: { value: 'probing' } });
 
       expect(await screen.findByText('1 of 3')).toBeInTheDocument();
-      expect(pageInput().value).toBe('2');
+      // The jump to the first match's page follows the results showing.
+      await waitFor(() => expect(pageInput().value).toBe('2'));
       expect(scrolledTo.at(-1)).toBe(2);
     });
 
