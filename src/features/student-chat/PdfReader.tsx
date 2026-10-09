@@ -255,42 +255,53 @@ export function PdfReader({ source }: PdfReaderProps) {
     >
       <nav
         aria-label="Pages"
-        className="hidden w-40 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-muted/30 p-3 sm:flex"
+        className="hidden w-40 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-muted/40 px-4 py-4 sm:flex"
       >
-        {pages.map((page) => (
-          <button
-            key={page}
-            type="button"
-            ref={page === currentPage ? activeThumbnailRef : undefined}
-            onClick={() => goToPage(page)}
-            aria-label={`Page ${page}`}
-            aria-pressed={page === currentPage}
-            className={cn(
-              'flex shrink-0 flex-col items-center gap-1 rounded-md p-1 transition-colors',
-              page === currentPage ? 'bg-yellow-100 ring-2 ring-yellow-400' : 'hover:bg-muted',
-            )}
-          >
-            <Page
-              pageNumber={page}
-              width={THUMBNAIL_WIDTH}
-              renderTextLayer={false}
-              renderAnnotationLayer={false}
-              className="overflow-hidden rounded-sm border border-border bg-background"
-              loading={<div className="h-36 w-28 rounded-sm bg-background" />}
-            />
-            <span className="text-[11px] font-medium text-muted-foreground">{page}</span>
-          </button>
-        ))}
+        {pages.map((page) => {
+          const isCurrent = page === currentPage;
+          return (
+            <button
+              key={page}
+              type="button"
+              ref={isCurrent ? activeThumbnailRef : undefined}
+              onClick={() => goToPage(page)}
+              aria-label={`Page ${page}`}
+              aria-pressed={isCurrent}
+              className="group flex shrink-0 flex-col items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              <Page
+                pageNumber={page}
+                width={THUMBNAIL_WIDTH}
+                renderTextLayer={false}
+                renderAnnotationLayer={false}
+                className={cn(
+                  'overflow-hidden rounded-sm bg-background transition-shadow',
+                  isCurrent
+                    ? 'ring-2 ring-primary ring-offset-2 ring-offset-muted'
+                    : 'border border-border opacity-80 group-hover:opacity-100',
+                )}
+                loading={<div className="h-36 w-28 rounded-sm bg-background" />}
+              />
+              <span className={cn('text-xs tabular-nums', isCurrent ? 'font-medium text-foreground' : 'text-muted-foreground')}>
+                {page}
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 py-2 pl-3 pr-14">
-          <div className="relative w-full max-w-xs">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-background py-2.5 pl-4 pr-14">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={source.documentName}>
+            {source.documentName}
+          </p>
+
+          <div className="flex h-8 items-center rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring/30">
+            <Search aria-hidden="true" className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <input
               type="search"
               aria-label="Search document"
-              placeholder="Search in document"
+              placeholder="Search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
@@ -299,19 +310,61 @@ export function PdfReader({ source }: PdfReaderProps) {
                   stepMatch(event.shiftKey ? -1 : 1);
                 }
               }}
-              className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-2 text-sm"
+              className="h-full w-40 bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
             />
+            {searchStatus ? (
+              <span aria-live="polite" className="whitespace-nowrap pr-1 text-xs tabular-nums text-muted-foreground">
+                {searchStatus}
+              </span>
+            ) : null}
+            <span aria-hidden="true" className="mx-1 h-4 w-px bg-border" />
+            <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Previous match" onClick={() => stepMatch(-1)} disabled={matches.length === 0}>
+              <ChevronUp className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" className="mr-0.5 h-7 w-7" aria-label="Next match" onClick={() => stepMatch(1)} disabled={matches.length === 0}>
+              <ChevronDown className="h-4 w-4" />
+            </Button>
           </div>
-          <span aria-live="polite" className="min-w-[5.5rem] text-xs text-muted-foreground">
-            {searchStatus}
-          </span>
-          <Button size="icon" variant="ghost" aria-label="Previous match" onClick={() => stepMatch(-1)} disabled={matches.length === 0}>
-            <ChevronUp className="h-4 w-4" />
-          </Button>
-          <Button size="icon" variant="ghost" aria-label="Next match" onClick={() => stepMatch(1)} disabled={matches.length === 0}>
-            <ChevronDown className="h-4 w-4" />
-          </Button>
+
+          <div className="flex h-8 items-center rounded-md border border-input bg-background">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="ml-0.5 h-7 w-7"
+              aria-label="Previous page"
+              onClick={() => goToPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <input
+              type="number"
+              inputMode="numeric"
+              aria-label="Page number"
+              min={1}
+              max={numPages ?? undefined}
+              value={pageDraft}
+              onChange={(event) => setPageDraft(event.target.value)}
+              onBlur={commitPageDraft}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') commitPageDraft();
+              }}
+              className="h-6 w-9 rounded-sm bg-transparent text-center text-sm tabular-nums outline-none focus:bg-muted [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+            <span className="pr-1 text-sm tabular-nums text-muted-foreground">{numPages !== null ? `/ ${numPages}` : ''}</span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="mr-0.5 h-7 w-7"
+              aria-label="Next page"
+              onClick={() => goToPage(currentPage + 1)}
+              disabled={numPages !== null && currentPage >= numPages}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
+
         <div
           ref={viewerRef}
           data-testid="pdf-scroll"
@@ -350,45 +403,6 @@ export function PdfReader({ source }: PdfReaderProps) {
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border bg-muted/30 px-3 py-2">
-          <Button
-            size="icon"
-            variant="outline"
-            aria-label="Previous page"
-            onClick={() => goToPage(currentPage - 1)}
-            disabled={currentPage <= 1}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-            Page
-            <input
-              type="number"
-              inputMode="numeric"
-              aria-label="Page number"
-              min={1}
-              max={numPages ?? undefined}
-              value={pageDraft}
-              onChange={(event) => setPageDraft(event.target.value)}
-              onBlur={commitPageDraft}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') commitPageDraft();
-              }}
-              className="h-8 w-14 rounded-md border border-input bg-background px-2 text-center text-sm [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            />
-            <span className="text-muted-foreground">{numPages !== null ? `/ ${numPages}` : ''}</span>
-          </label>
-          <Button
-            size="icon"
-            variant="outline"
-            aria-label="Next page"
-            onClick={() => goToPage(currentPage + 1)}
-            disabled={numPages !== null && currentPage >= numPages}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
         </div>
       </div>
     </Document>
