@@ -61,7 +61,7 @@ describe('getCachedPdf', () => {
     fetchMock.mockResolvedValueOnce(new Response('gone', { status: 404 }));
     await expect(getCachedPdf(storage('c/a.pdf'))).rejects.toThrow('PDF download failed (404)');
 
-    await expect(getCachedPdf(storage('c/a.pdf'))).resolves.toBeInstanceOf(Blob);
+    expect((await getCachedPdf(storage('c/a.pdf'))).size).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
