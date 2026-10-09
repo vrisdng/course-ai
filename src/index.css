@@ -363,3 +363,11 @@
     border-radius: 3px;
   }
 }
+
+/* Document reader search: matches in the PDF text layer (text itself stays
+   transparent; the page image underneath shows through the highlight). */
+.react-pdf__Page__textContent mark.pdf-search-hit {
+  background-color: rgb(250 204 21 / 0.45);
+  color: transparent;
+  border-radius: 2px;
+}

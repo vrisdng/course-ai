@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import 'react-pdf/dist/Page/TextLayer.css';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 import { ensureStartingPage, type ActiveViewerSource } from './documentViewer';
+import { findMatches, highlightMatches } from './pdfSearch';
 
 const workerUrl = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -28,6 +30,27 @@ const RENDER_WINDOW = 3;
 // of the viewer's height.
 const CURRENT_PAGE_LINE = 1 / 3;
 
+// The parts of pdf.js's loaded document that search reads.
+interface SearchablePdf {
+  numPages: number;
+  getPage(pageNumber: number): Promise<{ getTextContent(): Promise<{ items: unknown[] }> }>;
+}
+
+async function readPageTexts(pdf: SearchablePdf): Promise<string[]> {
+  const texts: string[] = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const content = await (await pdf.getPage(pageNumber)).getTextContent();
+    texts.push(
+      content.items
+        .map((item) => (typeof item === 'object' && item !== null && 'str' in item ? String(item.str) : ''))
+        .join(' '),
+    );
+  }
+  return texts;
+}
+
+const MIN_SEARCH_LENGTH = 2;
+
 interface ViewerSize {
   width: number;
   height: number;
@@ -44,7 +67,8 @@ function fitPageWidth(viewer: ViewerSize, aspectRatio: number | null): number {
 
 // The "View document" reader: every page in one continuous scroll (each sized
 // to fit the viewer's height), thumbnails in a sidebar, and a page-number box
-// for jumping to any page. All pages come from one loaded document.
+// for jumping to any page, plus text search over the loaded PDF with matches
+// highlighted. All pages come from one loaded document.
 export function PdfReader({ source }: PdfReaderProps) {
   const viewerObserverRef = useRef<ResizeObserver | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -60,6 +84,11 @@ export function PdfReader({ source }: PdfReaderProps) {
   const [viewer, setViewer] = useState<ViewerSize>({ width: 0, height: 0 });
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
 
+  const pdfRef = useRef<SearchablePdf | null>(null);
+  const [query, setQuery] = useState('');
+  const [pageTexts, setPageTexts] = useState<string[] | null>(null);
+  const [activeMatch, setActiveMatch] = useState(0);
+
   const file = useMemo(
     () => (source.signedUrl ? { url: source.signedUrl } : false),
     [source.signedUrl],
@@ -71,6 +100,9 @@ export function PdfReader({ source }: PdfReaderProps) {
     setAspectRatio(null);
     setCurrentPage(ensureStartingPage(source.pageNumber));
     openedAtPageRef.current = false;
+    pdfRef.current = null;
+    setPageTexts(null);
+    setQuery('');
   }, [source.signedUrl, source.pageNumber]);
 
   useEffect(() => {
@@ -150,6 +182,54 @@ export function PdfReader({ source }: PdfReaderProps) {
     setPageDraft(String(clamped));
   }, [pageDraft, currentPage, numPages, goToPage]);
 
+  const searchActive = query.trim().length >= MIN_SEARCH_LENGTH;
+
+  // Page text is read from the loaded PDF the first time someone searches.
+  useEffect(() => {
+    const pdf = pdfRef.current;
+    if (!searchActive || pageTexts !== null || !pdf) {
+      return;
+    }
+    let cancelled = false;
+    void readPageTexts(pdf)
+      .then((texts) => {
+        if (!cancelled) setPageTexts(texts);
+      })
+      .catch(() => {
+        if (!cancelled) setPageTexts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchActive, pageTexts, numPages]);
+
+  const matches = useMemo(() => findMatches(pageTexts ?? [], query), [pageTexts, query]);
+
+  useEffect(() => setActiveMatch(0), [query]);
+
+  // Bring the active match's page into view.
+  const matchPage = matches[activeMatch]?.page;
+  useEffect(() => {
+    if (matchPage !== undefined) goToPage(matchPage);
+  }, [matchPage, activeMatch, goToPage]);
+
+  const stepMatch = useCallback(
+    (delta: number) => {
+      if (matches.length === 0) return;
+      setActiveMatch((current) => (current + delta + matches.length) % matches.length);
+    },
+    [matches.length],
+  );
+
+  const renderHighlightedText = useCallback(({ str }: { str: string }) => highlightMatches(str, query), [query]);
+
+  let searchStatus = '';
+  if (searchActive) {
+    if (pageTexts === null) searchStatus = 'Searching…';
+    else if (matches.length === 0) searchStatus = 'No matches';
+    else searchStatus = `${activeMatch + 1} of ${matches.length}`;
+  }
+
   const pages = useMemo(
     () => Array.from({ length: numPages ?? 0 }, (_, index) => index + 1),
     [numPages],
@@ -166,7 +246,10 @@ export function PdfReader({ source }: PdfReaderProps) {
   return (
     <Document
       file={file}
-      onLoadSuccess={({ numPages: total }) => setNumPages(total)}
+      onLoadSuccess={(pdf: SearchablePdf) => {
+        pdfRef.current = pdf;
+        setNumPages(pdf.numPages);
+      }}
       loading={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading document…</div>}
       className="flex h-full min-h-0 bg-muted/20"
     >
@@ -201,6 +284,34 @@ export function PdfReader({ source }: PdfReaderProps) {
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 py-2 pl-3 pr-14">
+          <div className="relative w-full max-w-xs">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              aria-label="Search document"
+              placeholder="Search in document"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  stepMatch(event.shiftKey ? -1 : 1);
+                }
+              }}
+              className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-2 text-sm"
+            />
+          </div>
+          <span aria-live="polite" className="min-w-[5.5rem] text-xs text-muted-foreground">
+            {searchStatus}
+          </span>
+          <Button size="icon" variant="ghost" aria-label="Previous match" onClick={() => stepMatch(-1)} disabled={matches.length === 0}>
+            <ChevronUp className="h-4 w-4" />
+          </Button>
+          <Button size="icon" variant="ghost" aria-label="Next match" onClick={() => stepMatch(1)} disabled={matches.length === 0}>
+            <ChevronDown className="h-4 w-4" />
+          </Button>
+        </div>
         <div
           ref={viewerRef}
           data-testid="pdf-scroll"
@@ -223,7 +334,8 @@ export function PdfReader({ source }: PdfReaderProps) {
                   <Page
                     pageNumber={page}
                     width={pageWidth}
-                    renderTextLayer={false}
+                    renderTextLayer={searchActive}
+                    customTextRenderer={searchActive ? renderHighlightedText : undefined}
                     renderAnnotationLayer={false}
                     onLoadSuccess={(loaded) => setAspectRatio((current) => current ?? loaded.originalWidth / loaded.originalHeight)}
                     className="overflow-hidden rounded-md border border-border bg-background shadow-sm"

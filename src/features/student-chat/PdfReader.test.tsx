@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveViewerSource } from './documentViewer';
 import { PdfReader, THUMBNAIL_WIDTH as THUMB } from './PdfReader';
 
-const state = vi.hoisted(() => ({ numPages: 3 }));
+const state = vi.hoisted(() => ({
+  numPages: 3,
+  pageTexts: ['Intro page', 'Linear probing here', 'More probing and probing'] as string[],
+}));
 
 vi.mock('react-pdf', () => ({
   Document: ({
@@ -13,13 +16,18 @@ vi.mock('react-pdf', () => ({
     onLoadSuccess,
   }: {
     children?: React.ReactNode;
-    onLoadSuccess?: (meta: { numPages: number }) => void;
+    onLoadSuccess?: (pdf: { numPages: number; getPage: (n: number) => Promise<unknown> }) => void;
   }) => {
     // Like react-pdf, render the pages only once the document has loaded.
     const [loaded, setLoaded] = useState(false);
     useEffect(() => {
       queueMicrotask(() => {
-        onLoadSuccess?.({ numPages: state.numPages });
+        onLoadSuccess?.({
+          numPages: state.numPages,
+          getPage: async (n: number) => ({
+            getTextContent: async () => ({ items: [{ str: state.pageTexts[n - 1] ?? '' }] }),
+          }),
+        });
         setLoaded(true);
       });
     }, []);
@@ -29,15 +37,25 @@ vi.mock('react-pdf', () => ({
     pageNumber,
     width,
     onLoadSuccess,
+    renderTextLayer,
+    customTextRenderer,
   }: {
     pageNumber: number;
     width: number;
     onLoadSuccess?: (page: { originalWidth: number; originalHeight: number }) => void;
+    renderTextLayer?: boolean;
+    customTextRenderer?: (item: { str: string }) => string;
   }) => {
     queueMicrotask(() => onLoadSuccess?.({ originalWidth: 600, originalHeight: 800 }));
     return (
       <div data-testid="pdf-page" data-page={pageNumber} data-width={width}>
         Page {pageNumber}
+        {renderTextLayer && customTextRenderer ? (
+          <span
+            data-testid="text-layer"
+            dangerouslySetInnerHTML={{ __html: customTextRenderer({ str: state.pageTexts[pageNumber - 1] ?? '' }) }}
+          />
+        ) : null}
       </div>
     );
   },
@@ -71,6 +89,7 @@ const mainPages = () => screen.getAllByTestId('pdf-page').filter((p) => p.datase
 describe('PdfReader', () => {
   beforeEach(() => {
     state.numPages = 3;
+    state.pageTexts = ['Intro page', 'Linear probing here', 'More probing and probing'];
     Object.defineProperty(HTMLDivElement.prototype, 'clientWidth', { value: 600, configurable: true });
     Object.defineProperty(HTMLDivElement.prototype, 'clientHeight', { value: 432, configurable: true });
     Object.defineProperty(window, 'ResizeObserver', { value: MockResizeObserver, configurable: true });
@@ -186,5 +205,61 @@ describe('PdfReader', () => {
   it('shows a placeholder when there is no signed URL', async () => {
     render(<PdfReader source={source({ signedUrl: undefined })} />);
     expect(await screen.findByText(/No document available to preview/i)).toBeInTheDocument();
+  });
+  describe('search', () => {
+    const searchBox = () => screen.getByRole('searchbox', { name: 'Search document' });
+
+    it('finds matches across pages and jumps to the first one', async () => {
+      render(<PdfReader source={source({ pageNumber: 1 })} />);
+      await screen.findByText('/ 3');
+
+      fireEvent.change(searchBox(), { target: { value: 'probing' } });
+
+      expect(await screen.findByText('1 of 3')).toBeInTheDocument();
+      expect(pageInput().value).toBe('2');
+      expect(scrolledTo.at(-1)).toBe(2);
+    });
+
+    it('steps through matches with Enter and the arrows, wrapping at the ends', async () => {
+      render(<PdfReader source={source({ pageNumber: 1 })} />);
+      await screen.findByText('/ 3');
+      fireEvent.change(searchBox(), { target: { value: 'probing' } });
+      await screen.findByText('1 of 3');
+
+      fireEvent.keyDown(searchBox(), { key: 'Enter' });
+      expect(screen.getByText('2 of 3')).toBeInTheDocument();
+      expect(pageInput().value).toBe('3');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next match' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next match' }));
+      expect(screen.getByText('1 of 3')).toBeInTheDocument();
+      expect(pageInput().value).toBe('2');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Previous match' }));
+      expect(screen.getByText('3 of 3')).toBeInTheDocument();
+    });
+
+    it('highlights matches on the pages', async () => {
+      render(<PdfReader source={source({ pageNumber: 1 })} />);
+      await screen.findByText('/ 3');
+      fireEvent.change(searchBox(), { target: { value: 'probing' } });
+      await screen.findByText('1 of 3');
+
+      const marks = screen.getAllByTestId('text-layer').flatMap((layer) => [...layer.querySelectorAll('mark')]);
+      expect(marks.map((mark) => mark.textContent)).toEqual(['probing', 'probing', 'probing']);
+    });
+
+    it('says when nothing matches and clears when the box is emptied', async () => {
+      render(<PdfReader source={source({ pageNumber: 1 })} />);
+      await screen.findByText('/ 3');
+
+      fireEvent.change(searchBox(), { target: { value: 'quadratic' } });
+      expect(await screen.findByText('No matches')).toBeInTheDocument();
+
+      fireEvent.change(searchBox(), { target: { value: '' } });
+      expect(screen.queryByText('No matches')).not.toBeInTheDocument();
+      expect(screen.queryAllByTestId('text-layer')).toHaveLength(0);
+      expect(screen.getByRole('button', { name: 'Next match' })).toBeDisabled();
+    });
   });
 });
