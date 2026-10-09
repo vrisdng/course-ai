@@ -111,6 +111,15 @@ describe('RichMarkdown tables and images', () => {
     expect(container.querySelector('td')).toHaveTextContent('1');
   });
 
+  it('renders display maths whose lines look like markdown (a lone "=" is not a heading)', () => {
+    const content = 'Stress vector:\n\n$$\n\\boldsymbol{\\sigma}\n=\n\\begin{bmatrix}\n\\sigma_{xx} &\n\\tau_{zx}\n\\end{bmatrix}^{T}\n$$\n\nafter.';
+    const { container } = render(<RichMarkdown content={content} />);
+    expect(container.querySelector('h1, h2')).toBeNull();
+    expect(container.querySelector('.katex-display annotation')?.textContent).toContain('\\begin{bmatrix}');
+    expect(container.querySelector('.katex-error')).toBeNull();
+    expect(container.textContent).toContain('after.');
+  });
+
   it('keeps table rows intact when cells contain square roots', () => {
     const content = [
       '| Quantity | Relationship |',
