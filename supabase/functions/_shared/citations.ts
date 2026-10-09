@@ -56,37 +56,24 @@ export function stripTrailingSourcesSection(text: string): string {
   return withoutInlineSources.trim();
 }
 
+// Rewrites citation markers to canonical <<cite:N>> tokens, one source per
+// token. A marker listing several sources (<<cite:2,3>>) is split into
+// adjacent tokens; unknown sources are dropped. Bare [n] / (n) are left as
+// text: the model is told to use <<cite:N>>, and converting them would also
+// rewrite maths such as w^{(3)} or O(1).
 export function normalizeCitationTokens(content: string, maxSourceNumber: number): string {
   if (maxSourceNumber < 1) {
     return content;
   }
 
-  let normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return "";
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  // Backward compatibility: convert explicit [n] and (n) markers only.
-  normalized = normalized.replace(/\[([1-9]\d*)\]/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  normalized = normalized.replace(/\(([1-9]\d*)\)/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  return normalized;
+  return content.replace(/<<\s*cite\s*:\s*([^<>]*?)\s*>>/gi, (_, body: string) =>
+    body
+      .split(",")
+      .map((item) => Number(item.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= maxSourceNumber)
+      .map((n) => `<<cite:${n}>>`)
+      .join(""),
+  );
 }
 
 export function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: number): CitationSanitizationResult {

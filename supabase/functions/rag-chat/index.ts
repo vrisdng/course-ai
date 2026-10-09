@@ -332,7 +332,7 @@ Your job is to add reliable inline citations to an existing draft answer.
 
 Rules:
 1. Keep the answer content the same; only add or adjust citation markers.
-2. Use ONLY citation markers in the format <<cite:n>>.
+2. Use ONLY citation markers in the format <<cite:n>>, exactly one source number per marker (<<cite:1>><<cite:3>>, never <<cite:1,3>>).
 3. Only use citation numbers that exist in the provided source list.
 4. Place citations immediately after the sentence or claim they support.
 5. Do NOT add a sources section.
@@ -926,7 +926,7 @@ ${summaryInstruction}
 
 FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. ${FORMATTING_FORMATTING_EXTRA}. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
-CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that correspond to provided sources.
+CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support. Each marker holds exactly one source number: to cite several sources, write one marker per source, e.g. <<cite:1>><<cite:3>>, never <<cite:1,3>>. Never use [1] or (1) as citations. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that correspond to provided sources.
 
 Examples:
 - "Virtual memory allows for larger address spaces <<cite:1>>."
