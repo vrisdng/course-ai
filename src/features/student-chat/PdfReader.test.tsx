@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ActiveViewerSource } from './documentViewer';
@@ -14,8 +15,15 @@ vi.mock('react-pdf', () => ({
     children?: React.ReactNode;
     onLoadSuccess?: (meta: { numPages: number }) => void;
   }) => {
-    queueMicrotask(() => onLoadSuccess?.({ numPages: state.numPages }));
-    return <div data-testid="pdf-doc">{children}</div>;
+    // Like react-pdf, render the pages only once the document has loaded.
+    const [loaded, setLoaded] = useState(false);
+    useEffect(() => {
+      queueMicrotask(() => {
+        onLoadSuccess?.({ numPages: state.numPages });
+        setLoaded(true);
+      });
+    }, []);
+    return <div data-testid="pdf-doc">{loaded ? children : 'Loading document…'}</div>;
   },
   Page: ({
     pageNumber,

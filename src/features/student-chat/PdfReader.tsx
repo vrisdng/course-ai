@@ -40,7 +40,7 @@ function fitPageWidth(viewer: ViewerSize, aspectRatio: number | null): number {
 // sized to fit, and a page-number box for jumping to any page. All pages come
 // from one loaded document.
 export function PdfReader({ source }: PdfReaderProps) {
-  const viewerRef = useRef<HTMLDivElement | null>(null);
+  const viewerObserverRef = useRef<ResizeObserver | null>(null);
   const activeThumbnailRef = useRef<HTMLButtonElement | null>(null);
 
   const [numPages, setNumPages] = useState<number | null>(null);
@@ -67,8 +67,11 @@ export function PdfReader({ source }: PdfReaderProps) {
   }, [currentPage]);
 
   // Track the viewer's size so the page is re-fitted when the dialog resizes.
-  useEffect(() => {
-    const element = viewerRef.current;
+  // A callback ref, because the viewer only mounts once the document has
+  // loaded: an effect on mount would find no element and never measure.
+  const viewerRef = useCallback((element: HTMLDivElement | null) => {
+    viewerObserverRef.current?.disconnect();
+    viewerObserverRef.current = null;
     if (!element) {
       return;
     }
@@ -76,8 +79,10 @@ export function PdfReader({ source }: PdfReaderProps) {
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
-    return () => observer.disconnect();
-  }, [file]);
+    viewerObserverRef.current = observer;
+  }, []);
+
+  useEffect(() => () => viewerObserverRef.current?.disconnect(), []);
 
   const pageWidth = fitPageWidth(viewer, aspectRatio);
 
