@@ -65,14 +65,20 @@ class MockResizeObserver {
   disconnect() {}
 }
 
+const scrolledTo: number[] = [];
+const mainPages = () => screen.getAllByTestId('pdf-page').filter((p) => p.dataset.width !== String(THUMB));
+
 describe('PdfReader', () => {
   beforeEach(() => {
     state.numPages = 3;
     Object.defineProperty(HTMLDivElement.prototype, 'clientWidth', { value: 600, configurable: true });
     Object.defineProperty(HTMLDivElement.prototype, 'clientHeight', { value: 432, configurable: true });
     Object.defineProperty(window, 'ResizeObserver', { value: MockResizeObserver, configurable: true });
+    scrolledTo.length = 0;
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      value: () => undefined,
+      value(this: HTMLElement) {
+        if (this.dataset.pageAnchor) scrolledTo.push(Number(this.dataset.pageAnchor));
+      },
       configurable: true,
       writable: true,
     });
@@ -125,7 +131,7 @@ describe('PdfReader', () => {
     fireEvent.change(pageInput(), { target: { value: '3' } });
     fireEvent.keyDown(pageInput(), { key: 'Enter' });
     expect(screen.getByLabelText('Page 3')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getAllByTestId('pdf-page').find((p) => p.dataset.width === '300')?.dataset.page).toBe('3');
+    expect(scrolledTo.at(-1)).toBe(3);
   });
 
   it('clamps out-of-range numbers and restores the page for anything that is not a number', async () => {
@@ -147,16 +153,34 @@ describe('PdfReader', () => {
     fireEvent.click(screen.getByLabelText('Page 3'));
     expect(pageInput().value).toBe('3');
     expect(screen.getByLabelText('Page 3')).toHaveAttribute('aria-pressed', 'true');
+    expect(scrolledTo.at(-1)).toBe(3);
+  });
+
+  it('shows every page in one continuous scroll, opening at the cited page', async () => {
+    render(<PdfReader source={source()} />);
+    await screen.findByText('/ 3');
+    await waitFor(() => expect(mainPages().map((p) => p.dataset.page)).toEqual(['1', '2', '3']));
+    await waitFor(() => expect(scrolledTo).toContain(2));
+  });
+
+  it('follows the page being looked at while scrolling', async () => {
+    render(<PdfReader source={source({ pageNumber: 1 })} />);
+    await screen.findByText('/ 3');
+    const scroller = screen.getByTestId('pdf-scroll');
+    const anchors = [...scroller.querySelectorAll<HTMLElement>('[data-page-anchor]')];
+    anchors.forEach((anchor, index) => Object.defineProperty(anchor, 'offsetTop', { value: index * 432, configurable: true }));
+
+    Object.defineProperty(scroller, 'scrollTop', { value: 2 * 432 + 10, configurable: true });
+    fireEvent.scroll(scroller);
+    expect(pageInput().value).toBe('3');
+    expect(screen.getByLabelText('Page 3')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('sizes the page to fit the available height so it never overflows', async () => {
     // 600x432 viewer minus 32px padding: a 3:4 page fits at 400px tall, so 300px wide.
     render(<PdfReader source={source()} />);
     await screen.findByText('/ 3');
-    await waitFor(() => {
-      const main = screen.getAllByTestId('pdf-page').find((p) => p.dataset.page === '2' && p.dataset.width !== String(THUMB));
-      expect(main?.dataset.width).toBe('300');
-    });
+    await waitFor(() => expect(mainPages().map((p) => p.dataset.width)).toEqual(['300', '300', '300']));
   });
 
   it('shows a placeholder when there is no signed URL', async () => {

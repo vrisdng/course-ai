@@ -21,6 +21,12 @@ export const THUMBNAIL_WIDTH = 112;
 // Breathing room around the page inside the viewer (16px each side).
 const PAGE_PADDING = 32;
 const MIN_PAGE_WIDTH = 200;
+// Pages within this distance of the current page are drawn; the rest keep
+// their space as placeholders so long documents stay fast.
+const RENDER_WINDOW = 3;
+// The current page is the last one whose top has scrolled above this share
+// of the viewer's height.
+const CURRENT_PAGE_LINE = 1 / 3;
 
 interface ViewerSize {
   width: number;
@@ -36,11 +42,16 @@ function fitPageWidth(viewer: ViewerSize, aspectRatio: number | null): number {
   return Math.max(MIN_PAGE_WIDTH, Math.floor(width));
 }
 
-// The "View document" reader: page thumbnails in a sidebar, the current page
-// sized to fit, and a page-number box for jumping to any page. All pages come
-// from one loaded document.
+// The "View document" reader: every page in one continuous scroll (each sized
+// to fit the viewer's height), thumbnails in a sidebar, and a page-number box
+// for jumping to any page. All pages come from one loaded document.
 export function PdfReader({ source }: PdfReaderProps) {
   const viewerObserverRef = useRef<ResizeObserver | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const anchorsRef = useRef(new Map<number, HTMLDivElement>());
+  // Until the page shape is known, placeholder heights are guesses, so the
+  // opening scroll to the cited page is repeated once it is.
+  const openedAtPageRef = useRef(false);
   const activeThumbnailRef = useRef<HTMLButtonElement | null>(null);
 
   const [numPages, setNumPages] = useState<number | null>(null);
@@ -59,6 +70,7 @@ export function PdfReader({ source }: PdfReaderProps) {
     setNumPages(null);
     setAspectRatio(null);
     setCurrentPage(ensureStartingPage(source.pageNumber));
+    openedAtPageRef.current = false;
   }, [source.signedUrl, source.pageNumber]);
 
   useEffect(() => {
@@ -72,6 +84,7 @@ export function PdfReader({ source }: PdfReaderProps) {
   const viewerRef = useCallback((element: HTMLDivElement | null) => {
     viewerObserverRef.current?.disconnect();
     viewerObserverRef.current = null;
+    scrollerRef.current = element;
     if (!element) {
       return;
     }
@@ -86,13 +99,43 @@ export function PdfReader({ source }: PdfReaderProps) {
 
   const pageWidth = fitPageWidth(viewer, aspectRatio);
 
+  const scrollToPage = useCallback((page: number) => {
+    anchorsRef.current.get(page)?.scrollIntoView?.({ block: 'start' });
+  }, []);
+
   const goToPage = useCallback(
     (next: number) => {
-      const last = numPages ?? next;
-      setCurrentPage(Math.max(1, Math.min(last, next)));
+      const page = Math.max(1, Math.min(numPages ?? next, next));
+      setCurrentPage(page);
+      scrollToPage(page);
     },
-    [numPages],
+    [numPages, scrollToPage],
   );
+
+  // Open at the cited page once the pages exist, and again once their real
+  // height is known.
+  useEffect(() => {
+    if (numPages === null || openedAtPageRef.current) {
+      return;
+    }
+    scrollToPage(currentPage);
+    if (aspectRatio !== null) {
+      openedAtPageRef.current = true;
+    }
+  }, [numPages, aspectRatio, currentPage, scrollToPage]);
+
+  const followScroll = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) {
+      return;
+    }
+    const line = scroller.scrollTop + scroller.clientHeight * CURRENT_PAGE_LINE;
+    let page = 1;
+    for (const [number, anchor] of anchorsRef.current) {
+      if (anchor.offsetTop <= line && number > page) page = number;
+    }
+    setCurrentPage(page);
+  }, []);
 
   // Applies the typed page number: out-of-range numbers are clamped, anything
   // that isn't a number puts the current page back.
@@ -103,9 +146,9 @@ export function PdfReader({ source }: PdfReaderProps) {
       return;
     }
     const clamped = Math.max(1, Math.min(numPages ?? requested, requested));
-    setCurrentPage(clamped);
+    goToPage(clamped);
     setPageDraft(String(clamped));
-  }, [pageDraft, currentPage, numPages]);
+  }, [pageDraft, currentPage, numPages, goToPage]);
 
   const pages = useMemo(
     () => Array.from({ length: numPages ?? 0 }, (_, index) => index + 1),
@@ -158,21 +201,43 @@ export function PdfReader({ source }: PdfReaderProps) {
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div ref={viewerRef} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
-          <Page
-            pageNumber={currentPage}
-            width={pageWidth}
-            renderTextLayer={false}
-            renderAnnotationLayer={false}
-            onLoadSuccess={(page) => setAspectRatio(page.originalWidth / page.originalHeight)}
-            className="overflow-hidden rounded-md border border-border bg-background shadow-sm"
-            loading={<div className="text-sm text-muted-foreground">Loading page…</div>}
-            error={
-              <div className="text-center text-sm text-destructive">
-                Unable to load this page. It may have expired or been removed.
+        <div
+          ref={viewerRef}
+          data-testid="pdf-scroll"
+          onScroll={followScroll}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          <div className="flex flex-col items-center gap-4 p-4">
+            {pages.map((page) => (
+              <div
+                key={page}
+                data-page-anchor={page}
+                ref={(element) => {
+                  if (element) anchorsRef.current.set(page, element);
+                  else anchorsRef.current.delete(page);
+                }}
+                className="flex scroll-mt-4 justify-center"
+                style={{ minHeight: aspectRatio ? Math.round(pageWidth / aspectRatio) : viewer.height - PAGE_PADDING }}
+              >
+                {Math.abs(page - currentPage) <= RENDER_WINDOW ? (
+                  <Page
+                    pageNumber={page}
+                    width={pageWidth}
+                    renderTextLayer={false}
+                    renderAnnotationLayer={false}
+                    onLoadSuccess={(loaded) => setAspectRatio((current) => current ?? loaded.originalWidth / loaded.originalHeight)}
+                    className="overflow-hidden rounded-md border border-border bg-background shadow-sm"
+                    loading={<div className="text-sm text-muted-foreground">Loading page…</div>}
+                    error={
+                      <div className="text-center text-sm text-destructive">
+                        Unable to load this page. It may have expired or been removed.
+                      </div>
+                    }
+                  />
+                ) : null}
               </div>
-            }
-          />
+            ))}
+          </div>
         </div>
 
         <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border bg-muted/30 px-3 py-2">
