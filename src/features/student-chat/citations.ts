@@ -33,8 +33,14 @@ export function groupAdjacentCitations(content: string, citations: Citation[]): 
   });
 }
 
+// Code and maths (left as source for remark-math) come first in the
+// alternation so legacy markers inside them are matched as part of the
+// protected segment and left alone.
+const PROTECTED_OR_LEGACY_MARKER =
+  /(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)|\[([1-9]\d*)\]|\(([1-9]\d*)\)/g;
+
 function normalizeCitationTokens(content: string, maxCitationNumber?: number): string {
-  let normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
+  const normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
     const citationNumber = Number(rawNumber);
     if (!Number.isFinite(citationNumber) || citationNumber < 1) {
       return '';
@@ -49,24 +55,18 @@ function normalizeCitationTokens(content: string, maxCitationNumber?: number): s
     return normalized;
   }
 
-  // Backward compatibility for older messages that used [n] or (n).
-  normalized = normalized.replace(/\[([1-9]\d*)\]/g, (match, rawNumber) => {
+  // Backward compatibility for older messages that used [n] or (n). Maths and
+  // code are skipped so $O(1)$ or f(1) in a code block stay intact.
+  const toCitation = (match: string, rawNumber: string) => {
     const citationNumber = Number(rawNumber);
     if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxCitationNumber) {
       return match;
     }
     return `<<cite:${citationNumber}>>`;
-  });
-
-  normalized = normalized.replace(/\(([1-9]\d*)\)/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxCitationNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  return normalized;
+  };
+  return normalized.replace(PROTECTED_OR_LEGACY_MARKER, (match, protectedSegment, bracketNumber, parenNumber) =>
+    protectedSegment ? match : toCitation(match, bracketNumber ?? parenNumber),
+  );
 }
 
 export const markdownWithCitationLinks = (content: string, maxCitationNumber?: number) =>

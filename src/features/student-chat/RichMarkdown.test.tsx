@@ -79,6 +79,19 @@ describe('RichMarkdown math rendering', () => {
     expect(container.querySelector('.katex')).not.toBeNull();
   });
 
+  it('draws $$ blocks in display mode', () => {
+    const { container } = render(<RichMarkdown content={'Integral:\n\n$$\n\\int_0^1 x\\,dx\n$$\n\nafter.'} />);
+    expect(container.querySelector('.katex-display')).not.toBeNull();
+  });
+
+  it('leaves dollars inside code and lone dollars as plain text', () => {
+    const content = 'costs $5 each\n\n```python\nx = "$not_math$"\n```';
+    const { container } = render(<RichMarkdown content={content} />);
+    expect(container.textContent).toContain('costs $5 each');
+    expect(container.querySelector('pre')?.textContent).toContain('"$not_math$"');
+    expect(container.querySelector('.katex')).toBeNull();
+  });
+
   it('renders inline LaTeX delimited by backslash parens', () => {
     const content = 'Area is \\(\\pi r^2\\) here.';
     const { container } = render(<RichMarkdown content={content} />);
@@ -140,6 +153,15 @@ describe('RichMarkdown tables and images', () => {
 });
 
 describe('RichMarkdown citations', () => {
+  it('does not turn (n) or [n] inside maths or code into citations', () => {
+    const citation = { id: 'c1', chunkId: 'k1', excerpt: 'x', documentName: 'doc', documentType: 'pdf', relevanceScore: 1 };
+    const content = 'Appends cost $O(1)$ and $x_{[1]}$ <<cite:1>>\n\n```\nf(1)\n```';
+    const { container } = render(<RichMarkdown content={content} citations={[citation]} />);
+    expect(screen.getAllByRole('button', { name: /\[1\]/ })).toHaveLength(1);
+    expect(container.querySelector('.katex annotation')?.textContent).toBe('O(1)');
+    expect(container.querySelector('pre')?.textContent).toContain('f(1)');
+  });
+
   it('calls the citation callback when a citation link is clicked', () => {
     const onCitationClick = vi.fn();
     render(
