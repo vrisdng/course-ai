@@ -79,6 +79,19 @@ describe('RichMarkdown math rendering', () => {
     expect(container.querySelector('.katex')).not.toBeNull();
   });
 
+  it('draws $$ blocks in display mode', () => {
+    const { container } = render(<RichMarkdown content={'Integral:\n\n$$\n\\int_0^1 x\\,dx\n$$\n\nafter.'} />);
+    expect(container.querySelector('.katex-display')).not.toBeNull();
+  });
+
+  it('leaves dollars inside code and lone dollars as plain text', () => {
+    const content = 'costs $5 each\n\n```python\nx = "$not_math$"\n```';
+    const { container } = render(<RichMarkdown content={content} />);
+    expect(container.textContent).toContain('costs $5 each');
+    expect(container.querySelector('pre')?.textContent).toContain('"$not_math$"');
+    expect(container.querySelector('.katex')).toBeNull();
+  });
+
   it('renders inline LaTeX delimited by backslash parens', () => {
     const content = 'Area is \\(\\pi r^2\\) here.';
     const { container } = render(<RichMarkdown content={content} />);
@@ -96,6 +109,34 @@ describe('RichMarkdown tables and images', () => {
     expect(table).not.toBeNull();
     expect(container.querySelector('th')).toHaveTextContent('a');
     expect(container.querySelector('td')).toHaveTextContent('1');
+  });
+
+  it('renders display maths whose lines look like markdown (a lone "=" is not a heading)', () => {
+    const content = 'Stress vector:\n\n$$\n\\boldsymbol{\\sigma}\n=\n\\begin{bmatrix}\n\\sigma_{xx} &\n\\tau_{zx}\n\\end{bmatrix}^{T}\n$$\n\nafter.';
+    const { container } = render(<RichMarkdown content={content} />);
+    expect(container.querySelector('h1, h2')).toBeNull();
+    expect(container.querySelector('.katex-display annotation')?.textContent).toContain('\\begin{bmatrix}');
+    expect(container.querySelector('.katex-error')).toBeNull();
+    expect(container.textContent).toContain('after.');
+  });
+
+  it('keeps table rows intact when cells contain square roots', () => {
+    const content = [
+      '| Quantity | Relationship |',
+      '|---|---:|',
+      '| Natural circular frequency | $\\omega_i=\\sqrt{\\lambda_i}$ |',
+      '| Natural frequency | $f_i=\\dfrac{\\sqrt{\\lambda_i}}{2\\pi}$ |',
+      '| Eigenvector | $\\boldsymbol{\\phi}_i$ |',
+    ].join('\n');
+    const { container } = render(<RichMarkdown content={content} />);
+
+    const rows = [...container.querySelectorAll('tbody tr')];
+    expect(rows.map((row) => row.querySelector('td')?.textContent)).toEqual([
+      'Natural circular frequency',
+      'Natural frequency',
+      'Eigenvector',
+    ]);
+    expect(rows[0].querySelectorAll('td')[1].querySelector('.katex svg')).not.toBeNull();
   });
 
   it('resolves and displays a cited image, opening the lightbox on click', async () => {
@@ -121,6 +162,15 @@ describe('RichMarkdown tables and images', () => {
 });
 
 describe('RichMarkdown citations', () => {
+  it('does not turn (n) or [n] inside maths or code into citations', () => {
+    const citation = { id: 'c1', chunkId: 'k1', excerpt: 'x', documentName: 'doc', documentType: 'pdf', relevanceScore: 1 };
+    const content = 'Appends cost $O(1)$ and $x_{[1]}$ <<cite:1>>\n\n```\nf(1)\n```';
+    const { container } = render(<RichMarkdown content={content} citations={[citation]} />);
+    expect(screen.getAllByRole('button', { name: /\[1\]/ })).toHaveLength(1);
+    expect(container.querySelector('.katex annotation')?.textContent).toBe('O(1)');
+    expect(container.querySelector('pre')?.textContent).toContain('f(1)');
+  });
+
   it('calls the citation callback when a citation link is clicked', () => {
     const onCitationClick = vi.fn();
     render(
