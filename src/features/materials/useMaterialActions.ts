@@ -169,9 +169,45 @@ export function useMaterialActions({ onMaterialsChanged, setMaterials }: UseMate
     }
   };
 
+  const handleRetryTranscription = async (material: Material) => {
+    setReindexingIds((prev) => new Set(prev).add(material.id));
+    try {
+      const { data, error } = await supabase.functions.invoke('transcribe-video', {
+        body: { materialId: material.id, retry: true },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success(`Transcription retry queued for "${material.file_name}".`);
+      await onMaterialsChanged();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Transcription retry failed');
+    } finally {
+      setReindexingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(material.id);
+        return next;
+      });
+    }
+  };
+
   const handleDeleteMaterial = async (material: Material) => {
     const shouldDelete = window.confirm(`Delete ${material.file_name}? This cannot be undone.`);
     if (!shouldDelete) {
+      return;
+    }
+
+    if (material.file_type === 'video' && material.video_upload_state) {
+      try {
+        const { data, error } = await supabase.functions.invoke('video-upload-session', {
+          body: { action: 'delete', materialId: material.id },
+        });
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        toast.success('Video deleted');
+        await onMaterialsChanged();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to delete video');
+      }
       return;
     }
 
@@ -217,6 +253,7 @@ export function useMaterialActions({ onMaterialsChanged, setMaterials }: UseMate
 
     reindexingIds,
     handleReindexMaterial,
+    handleRetryTranscription,
     handleDeleteMaterial,
   };
 }

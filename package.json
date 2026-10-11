@@ -1,5 +1,5 @@
 {
-  "name": "edu-chat",
+  "name": "cee-chat",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -15,6 +15,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1147.0",
+    "@aws-sdk/signature-v4": "^3.374.0",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-alert-dialog": "^1.1.14",
     "@radix-ui/react-avatar": "^1.1.10",
@@ -46,6 +48,7 @@
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "tus-js-client": "^4.3.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

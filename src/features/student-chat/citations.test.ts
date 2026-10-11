@@ -28,10 +28,20 @@ describe('student chat citation formatting', () => {
     expect(groupAdjacentCitations('Claim <<cite:1>><<cite:99>>', sources)).toBe('Claim <<cite:1>><<cite:99>>');
   });
 
-  it('normalizes current and legacy citation syntax and rejects out-of-range tokens', () => {
-    expect(markdownWithCitationLinks('See << CITE : 2 >>, [1], and (2).', 2))
-      .toBe('See [\\[2\\]](citation:2), [\\[1\\]](citation:1), and [\\[2\\]](citation:2).');
+  it('normalizes citation tokens and rejects out-of-range ones', () => {
+    expect(markdownWithCitationLinks('See << CITE : 2 >>.', 2)).toBe('See [\\[2\\]](citation:2).');
     expect(markdownWithCitationLinks('Bad <<cite:3>> and [3].', 2)).toBe('Bad  and [3].');
     expect(markdownWithCitationLinks('Combined <<cite:1+2>>', 2)).toBe('Combined [\\[1·2\\]](citation:1+2)');
+  });
+
+  it('leaves [n] and (n) as plain text, so maths like $w^{(3)}$ and O(1) is never touched', () => {
+    expect(markdownWithCitationLinks('Value $w^{(3)}$, cost O(1), item [1].', 2)).toBe('Value $w^{(3)}$, cost O(1), item [1].');
+  });
+
+  it('splits a token listing several sources into one button per source', () => {
+    expect(markdownWithCitationLinks('Claim <<cite:2, 3>>.', 3)).toBe(
+      'Claim [\\[2\\]](citation:2)[\\[3\\]](citation:3).',
+    );
+    expect(markdownWithCitationLinks('Claim <<cite:1,9>>.', 3)).toBe('Claim [\\[1\\]](citation:1).');
   });
 });

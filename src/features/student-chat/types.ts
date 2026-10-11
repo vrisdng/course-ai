@@ -1,6 +1,14 @@
+export interface VideoEvidenceSegment {
+  id: string;
+  segmentIndex: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
 export interface Citation {
   id: string;
-  chunkId: string;
+  chunkId: string | null;
   excerpt: string;
   documentName: string;
   documentType: string;
@@ -10,6 +18,8 @@ export interface Citation {
   relevanceScore: number;
   imageUrl?: string | null;
   materialId?: string | null;
+  studentDocumentId?: string | null;
+  evidenceSegments?: VideoEvidenceSegment[] | null;
 }
 
 export interface Message {
