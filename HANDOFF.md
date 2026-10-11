@@ -110,7 +110,15 @@ Self-hosting GLM-OCR (Apache/MIT licensed, 0.9B params, runs via vLLM/SGLang/Oll
 
 The **hosted** GLM-OCR API doesn't have that problem, but it's still a third vendor alongside OpenAI (chat/STT) and Gemini (embeddings/OCR) rather than a consolidation. Not adopted yet — pricing/quality claims are from vendor docs, unverified against this codebase's actual PDFs/slides. If document-OCR cost or the 15MB ceiling becomes a real pain point, this is the first thing to prototype against `process-material-job`'s `extractTextWithGemini`.
 
-## Candidate: AssemblyAI → OpenAI STT swap (planned, not implemented, 2026-07-13)
+## Stored video rollout (Cloudflare R2, 2026-10-09)
+
+The new flow writes video bytes directly to private Cloudflare R2 through resumable multipart uploads (no application size ceiling; limited by R2's object and multipart limits), saves an idempotent material row and multipart ledger, submits a signed R2 URL to AssemblyAI, and uses a webhook plus scheduled reconciler to stage timed transcript segments and embedded RAG chunks. Playback uses renewed signed URLs, and transcript timestamps seek in the player. `video-upload-session` also performs provider-aware deletion and aborts abandoned multipart uploads.
+
+**Deployment is not implied by merge.** Apply the three video migrations, configure R2, CORS, AssemblyAI webhook, and Vault secrets, then deploy the affected functions listed in [README.md](README.md). The scheduling migration installs the reconciler and upload-reaper cron jobs. The hosted migration history may be empty even when schema objects already exist; inspect it before running `supabase db push` so old migrations are not replayed against production. The old `upload-video` proxy function remains in the tree but is no longer called by the browser upload path.
+
+No byte ceiling rejects a video; AssemblyAI's duration, source-size, format, and operational constraints can still reject transcription. A video rejected only by AssemblyAI remains playable and exposes an explicit retry. Before production rollout, verify an authenticated browser upload, playback/seek, transcript-backed RAG citation, and deletion against the intended R2 environment.
+
+## Historical candidate: AssemblyAI → OpenAI STT swap (planned, not implemented, 2026-07-13)
 
 `ASSEMBLY_API_KEY` (AssemblyAI) currently powers video transcription via `transcribe-video` + `upload-video`. Sunsetting it for OpenAI's transcription API (`whisper-1` / `gpt-4o-transcribe`) was scoped but **not implemented** — it's a pipeline restructure, not a config swap:
 

@@ -22,6 +22,8 @@ const authGetSession = vi.fn(async () => ({
 }));
 const rpc = vi.fn(async () => emptyResult);
 const from = vi.fn(() => createQueryChain(emptyResult));
+const createSignedUrl = vi.fn(async () => ({ data: { signedUrl: 'https://storage.test/notes.pdf' }, error: null }));
+const storageFrom = vi.fn(() => ({ createSignedUrl }));
 
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
@@ -31,7 +33,7 @@ vi.mock('@/integrations/supabase/client', () => ({
     },
     rpc: (...args: unknown[]) => rpc(...args),
     from: (...args: unknown[]) => from(...args),
-    storage: { from: vi.fn() },
+    storage: { from: (...args: unknown[]) => storageFrom(...args) },
   },
 }));
 
@@ -67,6 +69,8 @@ describe('useStudentChat', () => {
     authGetSession.mockClear();
     rpc.mockClear();
     from.mockClear();
+    storageFrom.mockClear();
+    createSignedUrl.mockClear();
     vi.mocked(toast.error).mockClear();
     vi.mocked(toast.success).mockClear();
     vi.stubGlobal('fetch', vi.fn());
@@ -123,7 +127,8 @@ describe('useStudentChat', () => {
       sseEvent('token', { text: 'lo' }) +
       sseEvent('final', {
         answer: 'Hello world',
-        citations: [{ id: 'c1', chunkId: 'chunk-1', excerpt: 'x', documentName: 'doc', documentType: 'pdf', relevanceScore: 0.9 }],
+        citations: [{ id: 'c1', chunkId: 'chunk-1', excerpt: 'x', documentName: 'video', documentType: 'video', relevanceScore: 0.9,
+          evidenceSegments: [{ id: 'segment-1', segmentIndex: 1, startMs: 1000, endMs: 2000, text: 'Evidence.' }] }],
         conversationId: 'conv-1',
       });
     fetchMock.mockResolvedValueOnce(streamResponse(body));
@@ -142,6 +147,7 @@ describe('useStudentChat', () => {
 
     const assistantMessage = result.current.messages.find((m) => m.role === 'assistant');
     expect(assistantMessage?.citations).toHaveLength(1);
+    expect(assistantMessage?.citations?.[0].evidenceSegments?.[0].id).toBe('segment-1');
     expect(result.current.messages.find((m) => m.role === 'user')?.content).toBe('What is X?');
     expect(result.current.isLoading).toBe(false);
   });
@@ -268,5 +274,65 @@ describe('useStudentChat', () => {
       result.current.setShowSidePanel(true);
     });
     expect(result.current.showSidePanel).toBe(true);
+  });
+
+  it('opens a stored video after a PDF without signing its R2 path through Supabase Storage', async () => {
+    const result = await setupWithCourse();
+    let type = 'pdf';
+    from.mockImplementation((table: string) => {
+      if (table === 'chunks') return createQueryChain({ data: { material_id: 'mat-1', student_document_id: null }, error: null });
+      if (table === 'materials') return createQueryChain({ data: {
+        file_path: type === 'video' ? 'course/lecture.mp4' : 'course/notes.pdf',
+        file_type: type, file_name: type === 'video' ? 'Lecture' : 'Notes',
+        linked_url: null, thumbnail_path: null,
+      }, error: null });
+      return createQueryChain(emptyResult);
+    });
+    const citation = { id: 'c1', chunkId: 'chunk-1', excerpt: 'Relevant passage',
+      documentName: 'Notes', documentType: 'pdf', relevanceScore: 0.9, startMs: 40_000, endMs: 45_000 };
+
+    await act(async () => { await result.current.openCitationSource(citation, 'm1-1'); });
+    expect(result.current.activeViewerSource?.documentName).toBe('Notes');
+    expect(storageFrom).toHaveBeenCalledTimes(1);
+
+    type = 'video';
+    await act(async () => { await result.current.openCitationSource({ ...citation, documentType: 'video' }, 'm1-2'); });
+    expect(result.current.activeViewerSource).toBeNull();
+    expect(result.current.activeVideoSource).toMatchObject({
+      title: 'Lecture', materialId: 'mat-1', filePath: 'course/lecture.mp4', startMs: 40_000,
+    });
+    expect(storageFrom).toHaveBeenCalledTimes(1);
+  });
+
+  it('hydrates saved evidence after the cited chunk has been replaced', async () => {
+    const evidence = [{ id: 'old-segment', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Supporting line.' }];
+    rpc.mockResolvedValueOnce({ data: [{ id: 'course-1', name: 'Course', code: 'C1', access_role: 'student' }], error: null });
+    from.mockImplementation((table: string) => {
+      if (table === 'conversations') {
+        const chain = createQueryChain({ data: [
+          { id: 'conv-1', title: 'Lecture', created_at: '2026-10-09', course_id: 'course-1' },
+        ], error: null });
+        chain.maybeSingle = vi.fn(async () => ({ data: { id: 'conv-1' }, error: null }));
+        return chain;
+      }
+      if (table === 'messages') return createQueryChain({ data: [
+        { id: 'msg-1', role: 'assistant', content: 'Answer <<cite:1>>', created_at: '2026-10-09' },
+      ], error: null });
+      if (table === 'citations') return createQueryChain({ data: [
+        { id: 'cite-1', message_id: 'msg-1', chunk_id: null, material_id: 'mat-1',
+          student_document_id: null, page_number: null, start_ms: 30_000, end_ms: 50_000,
+          relevance_score: 0.9, excerpt: 'Supporting line.', image_url: null, evidence_segments: evidence },
+      ], error: null });
+      if (table === 'materials') return createQueryChain({ data: [
+        { id: 'mat-1', file_name: 'Lecture', file_type: 'video' },
+      ], error: null });
+      return createQueryChain(emptyResult);
+    });
+
+    const { result } = renderHook(() => useStudentChat('conv-1'));
+    await waitFor(() => expect(result.current.messages[0]?.citations?.[0].evidenceSegments).toEqual(evidence));
+    expect(result.current.messages[0].citations?.[0]).toMatchObject({
+      chunkId: null, materialId: 'mat-1', startMs: 30_000, documentName: 'Lecture',
+    });
   });
 });

@@ -11,7 +11,7 @@ import { PdfThumbnail } from './PdfThumbnail';
 import { PageViewer } from './PageViewer';
 import { VideoTranscript } from './VideoTranscript';
 import { type ActiveViewerSource, ensureStartingPage } from './documentViewer';
-import type { ActiveVideoSource } from './VideoSourceDialog';
+import { VideoSourceDialog, type ActiveVideoSource } from './VideoSourceDialog';
 
 interface SourcesPanelProps {
   showSidePanel: boolean;
@@ -39,7 +39,12 @@ export function SourcesPanel({
   const [dragging, setDragging] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [singleOpen, setSingleOpen] = useState(false);
+  const [videoDialogOpen, setVideoDialogOpen] = useState(false);
   const dragRef = useRef({ startX: 0, startWidth: 0, active: false });
+
+  useEffect(() => {
+    setVideoDialogOpen(false);
+  }, [activeVideoSource?.materialId, activeVideoSource?.startMs, activeVideoSource?.endMs]);
 
   const startResize = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -167,8 +172,12 @@ export function SourcesPanel({
                    ) : null}
                   </div>
                 ) : activeVideoSource ? (
-                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                    <VideoTranscript source={activeVideoSource} />
+                  <div className="min-h-0 flex-1 p-3">
+                    <VideoTranscript
+                      source={activeVideoSource}
+                      onOpenVideo={() => setVideoDialogOpen(true)}
+                      previewVisible={!videoDialogOpen}
+                    />
                   </div>
                 ) : (
                  <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
@@ -208,6 +217,11 @@ export function SourcesPanel({
           {activeViewerSource ? <PageViewer source={activeViewerSource} /> : null}
         </DialogContent>
       </Dialog>
+
+      <VideoSourceDialog
+        source={videoDialogOpen ? activeVideoSource ?? null : null}
+        onClose={() => setVideoDialogOpen(false)}
+      />
     </>
   );
 }

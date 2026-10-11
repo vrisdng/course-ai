@@ -15,6 +15,15 @@ verify_jwt = false
 [functions.transcribe-video]
 verify_jwt = false
 
+[functions.video-upload-session]
+verify_jwt = false
+
+[functions.reconcile-video-transcriptions]
+verify_jwt = false
+
+[functions.assemblyai-video-webhook]
+verify_jwt = false
+
 [functions.process-material-job]
 verify_jwt = false
 

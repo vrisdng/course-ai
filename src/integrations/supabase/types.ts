@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       academic_terms: {
@@ -436,12 +461,16 @@ export type Database = {
           processing_progress: number | null
           processing_stage: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
+          storage_provider: string
           thumbnail_path: string | null
           topic: string | null
           transcription_language: string | null
           transcription_provider: string | null
           updated_at: string
           uploaded_by: string | null
+          video_content_type: string | null
+          video_upload_key: string | null
+          video_upload_state: string | null
           week_number: number | null
         }
         Insert: {
@@ -462,12 +491,16 @@ export type Database = {
           processing_progress?: number | null
           processing_stage?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          storage_provider?: string
           thumbnail_path?: string | null
           topic?: string | null
           transcription_language?: string | null
           transcription_provider?: string | null
           updated_at?: string
           uploaded_by?: string | null
+          video_content_type?: string | null
+          video_upload_key?: string | null
+          video_upload_state?: string | null
           week_number?: number | null
         }
         Update: {
@@ -488,12 +521,16 @@ export type Database = {
           processing_progress?: number | null
           processing_stage?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          storage_provider?: string
           thumbnail_path?: string | null
           topic?: string | null
           transcription_language?: string | null
           transcription_provider?: string | null
           updated_at?: string
           uploaded_by?: string | null
+          video_content_type?: string | null
+          video_upload_key?: string | null
+          video_upload_state?: string | null
           week_number?: number | null
         }
         Relationships: [
@@ -516,6 +553,44 @@ export type Database = {
             columns: ["uploaded_by"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      materials_multipart_uploads: {
+        Row: {
+          created_at: string
+          expires_at: string
+          material_id: string
+          object_key: string
+          part_size_bytes: number
+          r2_upload_id: string
+          state: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          material_id: string
+          object_key: string
+          part_size_bytes: number
+          r2_upload_id: string
+          state?: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          material_id?: string
+          object_key?: string
+          part_size_bytes?: number
+          r2_upload_id?: string
+          state?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "materials_multipart_uploads_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: true
+            referencedRelation: "materials"
             referencedColumns: ["id"]
           },
         ]
@@ -860,6 +935,171 @@ export type Database = {
         }
         Relationships: []
       }
+      video_chunks_staging: {
+        Row: {
+          chunk_index: number
+          chunk_text: string
+          embedding_openai: string | null
+          end_ms: number
+          material_id: string
+          start_ms: number
+        }
+        Insert: {
+          chunk_index: number
+          chunk_text: string
+          embedding_openai?: string | null
+          end_ms: number
+          material_id: string
+          start_ms: number
+        }
+        Update: {
+          chunk_index?: number
+          chunk_text?: string
+          embedding_openai?: string | null
+          end_ms?: number
+          material_id?: string
+          start_ms?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_chunks_staging_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      video_storage_cleanup: {
+        Row: {
+          created_at: string
+          file_path: string
+          last_error: string | null
+          next_cleanup_at: string
+          object_key: string | null
+          r2_multipart_upload_id: string | null
+          storage_provider: string | null
+        }
+        Insert: {
+          created_at?: string
+          file_path: string
+          last_error?: string | null
+          next_cleanup_at?: string
+          object_key?: string | null
+          r2_multipart_upload_id?: string | null
+          storage_provider?: string | null
+        }
+        Update: {
+          created_at?: string
+          file_path?: string
+          last_error?: string | null
+          next_cleanup_at?: string
+          object_key?: string | null
+          r2_multipart_upload_id?: string | null
+          storage_provider?: string | null
+        }
+        Relationships: []
+      }
+      video_transcript_segments_staging: {
+        Row: {
+          confidence: number | null
+          end_ms: number
+          material_id: string
+          segment_index: number
+          speaker_label: string | null
+          start_ms: number
+          text: string
+        }
+        Insert: {
+          confidence?: number | null
+          end_ms: number
+          material_id: string
+          segment_index: number
+          speaker_label?: string | null
+          start_ms: number
+          text: string
+        }
+        Update: {
+          confidence?: number | null
+          end_ms?: number
+          material_id?: string
+          segment_index?: number
+          speaker_label?: string | null
+          start_ms?: number
+          text?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_transcript_segments_staging_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      video_transcription_jobs: {
+        Row: {
+          attempt_count: number
+          created_at: string
+          duration_ms: number | null
+          language: string | null
+          last_error: string | null
+          locked_until: string | null
+          material_id: string
+          next_check_at: string
+          provider_transcript_id: string | null
+          retry_status: string
+          stage_chunk_cursor: number
+          stage_segment_cursor: number
+          stage_source: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempt_count?: number
+          created_at?: string
+          duration_ms?: number | null
+          language?: string | null
+          last_error?: string | null
+          locked_until?: string | null
+          material_id: string
+          next_check_at?: string
+          provider_transcript_id?: string | null
+          retry_status?: string
+          stage_chunk_cursor?: number
+          stage_segment_cursor?: number
+          stage_source?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempt_count?: number
+          created_at?: string
+          duration_ms?: number | null
+          language?: string | null
+          last_error?: string | null
+          locked_until?: string | null
+          material_id?: string
+          next_check_at?: string
+          provider_transcript_id?: string | null
+          retry_status?: string
+          stage_chunk_cursor?: number
+          stage_segment_cursor?: number
+          stage_source?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_transcription_jobs_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: true
+            referencedRelation: "materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       analytics_query_category_stats: {
@@ -919,6 +1159,43 @@ export type Database = {
       }
     }
     Functions: {
+      chunk_visible_for_search: {
+        Args: {
+          active_term_id: string
+          caller_id: string
+          chunk_material_id: string
+          chunk_student_document_id: string
+          course_id_filter: string
+          selected_material_ids: string[]
+        }
+        Returns: boolean
+      }
+      claim_due_video_transcription_job: {
+        Args: never
+        Returns: {
+          attempt_count: number
+          created_at: string
+          duration_ms: number | null
+          language: string | null
+          last_error: string | null
+          locked_until: string | null
+          material_id: string
+          next_check_at: string
+          provider_transcript_id: string | null
+          retry_status: string
+          stage_chunk_cursor: number
+          stage_segment_cursor: number
+          stage_source: string
+          status: string
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "video_transcription_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       claim_material_processing_job: {
         Args: {
           requested_job_type?: string
@@ -944,6 +1221,14 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      claim_video_transcription_submission: {
+        Args: { p_material_id: string }
+        Returns: {
+          claimed: boolean
+          current_status: string
+          transcript_id: string
+        }[]
       }
       get_active_academic_term_id: { Args: never; Returns: string }
       get_course_active_student_count:
@@ -1044,6 +1329,29 @@ export type Database = {
         Args: { check_material_id: string }
         Returns: string
       }
+      get_neighbor_chunks: {
+        Args: {
+          course_id_filter?: string
+          radius?: number
+          selected_material_ids?: string[]
+          target_chunk_id: string
+          user_id?: string
+        }
+        Returns: {
+          chunk_text: string
+          document_name: string
+          document_type: string
+          end_ms: number
+          id: string
+          material_id: string
+          material_name: string
+          material_type: string
+          page_number: number
+          relevance_score: number
+          start_ms: number
+          student_document_id: string
+        }[]
+      }
       get_org_entitlements: {
         Args: { check_org_id: string }
         Returns: {
@@ -1063,6 +1371,13 @@ export type Database = {
           status: string
           trial_ends_at: string
           video_minutes_used: number
+        }[]
+      }
+      get_video_storage_object_info: {
+        Args: { target_path: string }
+        Returns: {
+          content_type: string
+          size_bytes: number
         }[]
       }
       increment_usage_if_allowed: {
@@ -1192,7 +1507,46 @@ export type Database = {
         Args: { check_org_id: string }
         Returns: boolean
       }
+      publish_video_transcript: {
+        Args: {
+          p_duration_ms: number
+          p_language: string
+          p_material_id: string
+        }
+        Returns: undefined
+      }
       reap_stale_material_jobs: { Args: never; Returns: number }
+      record_video_transcription_submission: {
+        Args: { p_material_id: string; p_transcript_id: string }
+        Returns: undefined
+      }
+      retry_failed_video_transcription: {
+        Args: { p_material_id: string }
+        Returns: boolean
+      }
+      search_chunks_keyword: {
+        Args: {
+          course_id_filter?: string
+          match_count?: number
+          search_query: string
+          selected_material_ids?: string[]
+          user_id?: string
+        }
+        Returns: {
+          chunk_text: string
+          document_name: string
+          document_type: string
+          end_ms: number
+          id: string
+          material_id: string
+          material_name: string
+          material_type: string
+          page_number: number
+          relevance_score: number
+          start_ms: number
+          student_document_id: string
+        }[]
+      }
       set_active_academic_term: {
         Args: { target_term_id: string }
         Returns: {
@@ -1361,6 +1715,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       document_type: [

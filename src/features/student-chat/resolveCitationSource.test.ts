@@ -32,6 +32,18 @@ const citation = (overrides: Partial<Citation>): Citation => ({
 });
 
 describe('resolveCitationSource', () => {
+  it('resolves a saved video citation after its original chunk was replaced', async () => {
+    mocks.from.mockReturnValueOnce(query({ data: {
+      file_path: 'course/lecture.mp4', file_type: 'video', file_name: 'Lecture', linked_url: null,
+    }, error: null }));
+
+    const resolved = await resolveCitationSource(citation({ chunkId: null, materialId: 'mat-1', documentType: 'video' }));
+
+    expect(resolved.materialId).toBe('mat-1');
+    expect(resolved.filePath).toBe('course/lecture.mp4');
+    expect(mocks.from).toHaveBeenCalledWith('materials');
+  });
+
   it('resolves a course-materials PDF to its signed preview path', async () => {
     mocks.from
       .mockReturnValueOnce(query({ data: { material_id: 'mat-1', student_document_id: null }, error: null }))
