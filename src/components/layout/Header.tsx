@@ -41,8 +41,8 @@ export function Header() {
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center justify-between gap-3">
         <Link to="/" className="flex min-w-0 items-center gap-2">
-          <img src="/logo.png" alt="EduChat logo" className="h-9 w-9 shrink-0 object-contain" />
-          <span className="truncate text-lg font-semibold text-foreground sm:text-xl">EduChat</span>
+          <img src="/logo.png" alt="CEEChat logo" className="h-9 w-9 shrink-0 object-contain" />
+          <span className="truncate text-lg font-semibold text-foreground sm:text-xl">CEEChat</span>
         </Link>
 
         <nav className="flex shrink-0 items-center gap-1 sm:gap-4">
