@@ -86,12 +86,14 @@ describe("normalizeCitationTokens", () => {
     expect(normalizeCitationTokens("See <<cite:5>>.", 2)).toBe("See .");
   });
 
-  it("converts legacy [n] markers into cite tokens when in range", () => {
-    expect(normalizeCitationTokens("See [1].", 2)).toBe("See <<cite:1>>.");
+  it("leaves [n] and (n) as plain text, so maths like w^{(3)} is never turned into a citation", () => {
+    const answer = "Integrate $$\\int N_i EI w^{(4)} dx$$ twice; see [1] and O(1).";
+    expect(normalizeCitationTokens(answer, 4)).toBe(answer);
   });
 
-  it("leaves out-of-range [n] markers alone", () => {
-    expect(normalizeCitationTokens("See [9].", 2)).toBe("See [9].");
+  it("splits a token listing several sources into one token per source", () => {
+    expect(normalizeCitationTokens("Claim <<cite:2,3,5>>.", 5)).toBe("Claim <<cite:2>><<cite:3>><<cite:5>>.");
+    expect(normalizeCitationTokens("Claim << cite: 1 , 9 >>.", 2)).toBe("Claim <<cite:1>>.");
   });
 });
 

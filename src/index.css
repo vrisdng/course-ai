@@ -5,7 +5,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* EduChat Design System — Optimus monochrome aesthetic
+/* CEEChat Design System — Optimus monochrome aesthetic
    Off-white paper, near-black ink, hairline grid, no color accent.
    Instrument Sans display + JetBrains Mono utility. */
 
@@ -362,4 +362,19 @@
     background-color: hsl(var(--border));
     border-radius: 3px;
   }
+}
+
+/* Document reader search: matches in the PDF text layer (its text stays
+   transparent; the page image underneath shows through). Every match is
+   outlined; the current one is filled. */
+.react-pdf__Page__textContent mark.pdf-search-hit {
+  background-color: transparent;
+  color: transparent;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1.5px rgb(234 179 8);
+}
+
+.react-pdf__Page__textContent mark.pdf-search-hit--active {
+  background-color: rgb(250 204 21 / 0.5);
+  box-shadow: none;
 }

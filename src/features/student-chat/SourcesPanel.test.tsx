@@ -6,6 +6,11 @@ import { SourcesPanel } from './SourcesPanel';
 
 const viewport = vi.hoisted(() => ({ isMobile: false }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => viewport.isMobile }));
+vi.mock('./signedMedia', () => ({ resolveSignedMediaUrl: vi.fn().mockResolvedValue('https://r2.test/video.mp4') }));
+vi.mock('./VideoSourceDialog', () => ({
+  VideoSourceDialog: ({ source, onClose }: { source: { title: string } | null; onClose: () => void }) =>
+    source ? <div role="dialog" aria-label="Video with transcription"><span>{source.title}</span><button onClick={onClose}>Close video</button></div> : null,
+}));
 
 vi.mock('./PdfReader', () => ({
   PdfReader: ({ source }: { source: ActiveViewerSource }) => (
@@ -86,14 +91,14 @@ describe('SourcesPanel', () => {
     expect(screen.getByTestId('pdf-thumb')).toHaveAttribute('data-page', '2');
   });
 
-  it('opens the single-page viewer when the preview thumbnail is tapped', () => {
+  it('opens the document reader when the preview is tapped', () => {
     const value = props({ showSidePanel: true, activeViewerSource: source({ pageNumber: 2 }) });
     render(<SourcesPanel {...value} />);
-    expect(screen.queryByTestId('page-viewer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pdf-reader')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('pdf-thumb'));
-    expect(screen.getByTestId('page-viewer')).toBeInTheDocument();
-    expect(screen.getByTestId('page-viewer')).toHaveTextContent('Lecture Notes');
+    expect(screen.getByTestId('pdf-reader')).toHaveTextContent('Lecture Notes');
+    expect(screen.queryByTestId('page-viewer')).not.toBeInTheDocument();
   });
 
   it('shows the destination path for an active source', () => {
@@ -150,13 +155,14 @@ describe('SourcesPanel', () => {
       activeVideoSource: { title: 'Lecture', signedUrl: null, materialId: 'm1', startMs: 40_000, endMs: 45_000 },
     });
     render(<SourcesPanel {...value} />);
-    expect(screen.getByText('Cited segment: 0:40-0:45')).toBeInTheDocument();
+    expect(screen.getByText('Source interval: 0:40-0:45')).toBeInTheDocument();
     expect(screen.getByText('Lecture')).toBeInTheDocument();
-    expect(screen.getByText('Relevant explanation. More context.')).toBeInTheDocument();
-    expect(screen.getByText('0:35–0:48')).toBeInTheDocument();
+    expect(screen.getByText('Relevant explanation.')).toBeInTheDocument();
+    expect(screen.getByText('More context.')).toBeInTheDocument();
+    expect(screen.getByText('0:35–0:42')).toBeInTheDocument();
   });
 
-  it('opens the stored video when a signed video source is active', () => {
+  it('opens and closes the video dialog from the sidebar button', () => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
     const value = props({
       showSidePanel: true,
@@ -164,7 +170,10 @@ describe('SourcesPanel', () => {
       activeVideoSource: { title: 'Lecture', signedUrl: 'https://storage.test/video.mp4', materialId: 'm1', startMs: 40_000, endMs: 45_000 },
     });
     render(<SourcesPanel {...value} />);
-    expect(screen.getByRole('link', { name: 'Open video' })).toHaveAttribute('href', 'https://storage.test/video.mp4');
+    fireEvent.click(screen.getByRole('button', { name: 'View video with transcription' }));
+    expect(screen.getByRole('dialog', { name: 'Video with transcription' })).toHaveTextContent('Lecture');
+    fireEvent.click(screen.getByRole('button', { name: 'Close video' }));
+    expect(screen.queryByRole('dialog', { name: 'Video with transcription' })).not.toBeInTheDocument();
   });
 
   it('hides the transcript for a video source when the panel is collapsed', () => {
@@ -175,7 +184,7 @@ describe('SourcesPanel', () => {
       activeVideoSource: { title: 'Lecture', signedUrl: null, materialId: 'm1', startMs: 40_000, endMs: 45_000 },
     });
     render(<SourcesPanel {...value} />);
-    expect(screen.queryByText('Relevant explanation. More context.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Relevant explanation.')).not.toBeInTheDocument();
   });
 
   it('shares the row with a draggable width on desktop', () => {

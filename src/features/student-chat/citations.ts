@@ -33,39 +33,19 @@ export function groupAdjacentCitations(content: string, citations: Citation[]): 
   });
 }
 
-// Code and maths (left as source for remark-math) come first in the
-// alternation so legacy markers inside them are matched as part of the
-// protected segment and left alone.
-const PROTECTED_OR_LEGACY_MARKER =
-  /(```[\s\S]*?```|`[^`\n]+`|\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)|\[([1-9]\d*)\]|\(([1-9]\d*)\)/g;
-
+// Canonical <<cite:N>> tokens, one per source: a marker listing several
+// sources (<<cite:2,3>>, seen in older answers) becomes adjacent tokens, and
+// out-of-range numbers are dropped. Composite <<cite:1+2>> tokens from
+// groupAdjacentCitations pass through. Bare [n] / (n) are left as text so
+// maths such as $w^{(3)}$ or O(1) is never turned into a citation.
 function normalizeCitationTokens(content: string, maxCitationNumber?: number): string {
-  const normalized = content.replace(/<<\s*cite\s*:\s*([1-9]\d*)\s*>>/gi, (_, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (!Number.isFinite(citationNumber) || citationNumber < 1) {
-      return '';
-    }
-    if (maxCitationNumber && citationNumber > maxCitationNumber) {
-      return '';
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  if (!maxCitationNumber || maxCitationNumber < 1) {
-    return normalized;
-  }
-
-  // Backward compatibility for older messages that used [n] or (n). Maths and
-  // code are skipped so $O(1)$ or f(1) in a code block stay intact.
-  const toCitation = (match: string, rawNumber: string) => {
-    const citationNumber = Number(rawNumber);
-    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxCitationNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  };
-  return normalized.replace(PROTECTED_OR_LEGACY_MARKER, (match, protectedSegment, bracketNumber, parenNumber) =>
-    protectedSegment ? match : toCitation(match, bracketNumber ?? parenNumber),
+  return content.replace(/<<\s*cite\s*:\s*([\d\s,]+?)\s*>>/gi, (_, body: string) =>
+    body
+      .split(',')
+      .map((item) => Number(item.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 1 && (!maxCitationNumber || n <= maxCitationNumber))
+      .map((n) => `<<cite:${n}>>`)
+      .join(''),
   );
 }
 

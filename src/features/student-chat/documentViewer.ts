@@ -2,6 +2,13 @@ import type { Citation } from './types';
 
 export type ViewerKind = 'pdf' | 'video' | 'image' | 'other';
 
+// Where a source file lives in Supabase Storage, so viewers can fetch it
+// themselves (see pdfCache.ts) instead of relying on a short-lived link.
+export interface SourceStorage {
+  bucket: 'course-materials' | 'student-documents';
+  path: string;
+}
+
 // The in-app viewer holds exactly one open source at a time. It is replaced (never
 // merged) on each citation open, so it models a single document open request.
 export interface ActiveViewerSource {
@@ -9,6 +16,7 @@ export interface ActiveViewerSource {
   documentName: string;
   pageNumber?: number;      // null → page 1 (ensureStartingPage)
   signedUrl?: string | null;
+  storage?: SourceStorage | null;
   materialId?: string | null;
   startMs?: number;
   endMs?: number;

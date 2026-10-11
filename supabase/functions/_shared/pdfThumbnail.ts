@@ -10,7 +10,21 @@
 const PDFJS_LIB_URL = "https://esm.sh/pdfjs-dist@4.9.157/build/pdf.min.mjs";
 
 let pdfjsWorker: Worker | null = null;
-let pdfjsLoader: Promise<typeof import("pdfjs-dist")> | null = null;
+// The slice of the pdf.js module this file calls. Declared locally: a type
+// import of the module makes the edge runtime fail to boot the function.
+interface PdfJsModule {
+  getDocument(options: Record<string, unknown>): {
+    promise: Promise<{
+      getPage(pageNumber: number): Promise<{
+        getViewport(options: { scale: number }): { width: number; height: number };
+        render(options: Record<string, unknown>): { promise: Promise<void> };
+      }>;
+      destroy(): Promise<void>;
+    }>;
+  };
+}
+
+let pdfjsLoader: Promise<PdfJsModule> | null = null;
 
 async function loadPdfJs() {
   if (pdfjsLoader) return pdfjsLoader;
