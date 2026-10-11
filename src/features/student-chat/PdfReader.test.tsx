@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect, useRef, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -88,6 +88,40 @@ class MockResizeObserver {
   disconnect() {}
 }
 
+// Thumbnails render only while near the sidebar's view; tests decide which
+// thumbnails are "in view" by calling show(pages).
+const intersection = vi.hoisted(() => ({
+  observers: [] as { cb: IntersectionObserverCallback; elements: Element[] }[],
+  show(pages: number[]) {
+    for (const observer of intersection.observers) {
+      const entries = observer.elements.map((target) => ({
+        target,
+        isIntersecting: pages.includes(Number((target as HTMLElement).dataset.thumbnail)),
+      }));
+      observer.cb(entries as unknown as IntersectionObserverEntry[], observer as unknown as IntersectionObserver);
+    }
+  },
+}));
+
+class MockIntersectionObserver {
+  elements: Element[] = [];
+  constructor(public cb: IntersectionObserverCallback) {
+    intersection.observers.push(this);
+  }
+  observe(element: Element) {
+    this.elements.push(element);
+  }
+  unobserve(element: Element) {
+    this.elements = this.elements.filter((e) => e !== element);
+  }
+  disconnect() {
+    this.elements = [];
+  }
+}
+
+const thumbnailPages = () =>
+  screen.getAllByTestId('pdf-page').filter((p) => p.dataset.width === String(THUMB)).map((p) => Number(p.dataset.page));
+
 const cache = vi.hoisted(() => ({ getCachedPdf: vi.fn() }));
 vi.mock('./pdfCache', () => ({ getCachedPdf: (...args: unknown[]) => cache.getCachedPdf(...args) }));
 
@@ -102,6 +136,8 @@ describe('PdfReader', () => {
     Object.defineProperty(HTMLDivElement.prototype, 'clientHeight', { value: 432, configurable: true });
     Object.defineProperty(window, 'ResizeObserver', { value: MockResizeObserver, configurable: true });
     scrolledTo.length = 0;
+    intersection.observers.length = 0;
+    Object.defineProperty(window, 'IntersectionObserver', { value: MockIntersectionObserver, configurable: true, writable: true });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       value(this: HTMLElement) {
         if (this.dataset.pageAnchor) scrolledTo.push(Number(this.dataset.pageAnchor));
@@ -134,6 +170,27 @@ describe('PdfReader', () => {
     render(<PdfReader source={source({ pageNumber: 1 })} />);
     await screen.findByText('/ 12');
     expect(screen.getByLabelText('Page 12')).toBeInTheDocument();
+  });
+
+  it('draws only the thumbnails near the sidebar view, keeping the rest as placeholders', async () => {
+    state.numPages = 40;
+    render(<PdfReader source={source({ pageNumber: 1 })} />);
+    await screen.findByText('/ 40');
+    expect(screen.getAllByRole('button', { name: /^Page \d+$/ })).toHaveLength(40);
+
+    act(() => intersection.show([1, 2, 3]));
+    await waitFor(() => expect(thumbnailPages()).toEqual([1, 2, 3]));
+
+    // Scrolling the sidebar draws the newly visible thumbnails and drops the old ones.
+    act(() => intersection.show([20, 21]));
+    await waitFor(() => expect(thumbnailPages()).toEqual([20, 21]));
+  });
+
+  it('draws every thumbnail where IntersectionObserver is unavailable', async () => {
+    Object.defineProperty(window, 'IntersectionObserver', { value: undefined, configurable: true, writable: true });
+    render(<PdfReader source={source()} />);
+    await screen.findByText('/ 3');
+    await waitFor(() => expect(thumbnailPages()).toEqual([1, 2, 3]));
   });
 
   it('navigates with the prev/next controls and clamps at the ends', async () => {

@@ -52,6 +52,46 @@ async function readPageItems(pdf: SearchablePdf): Promise<string[][]> {
 
 const MIN_SEARCH_LENGTH = 2;
 
+// Thumbnails are drawn only while within this distance of the sidebar's
+// visible area; the rest are same-sized placeholders.
+const THUMBNAIL_MARGIN = '400px 0px';
+// Placeholder height until the page shape is known.
+const THUMBNAIL_FALLBACK_HEIGHT = 144;
+
+// Which sidebar thumbnails are near enough to the sidebar's view to draw.
+// Returns null where IntersectionObserver is unavailable: draw them all.
+function useVisibleThumbnails(sidebar: HTMLElement | null, pageCount: number): Set<number> | null {
+  const supported = typeof window !== 'undefined' && typeof window.IntersectionObserver === 'function';
+  const [visible, setVisible] = useState<Set<number>>(() => new Set());
+
+  useEffect(() => {
+    if (!supported || !sidebar || pageCount === 0) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        setVisible((current) => {
+          const next = new Set(current);
+          for (const entry of entries) {
+            const page = Number((entry.target as HTMLElement).dataset.thumbnail);
+            if (entry.isIntersecting) next.add(page);
+            else next.delete(page);
+          }
+          return next;
+        });
+      },
+      { root: sidebar, rootMargin: THUMBNAIL_MARGIN },
+    );
+    sidebar.querySelectorAll('[data-thumbnail]').forEach((thumbnail) => observer.observe(thumbnail));
+    return () => {
+      observer.disconnect();
+      setVisible(new Set());
+    };
+  }, [supported, sidebar, pageCount]);
+
+  return supported ? visible : null;
+}
+
 interface ViewerSize {
   width: number;
   height: number;
@@ -78,6 +118,7 @@ export function PdfReader({ source }: PdfReaderProps) {
   // opening scroll to the cited page is repeated once it is.
   const openedAtPageRef = useRef(false);
   const activeThumbnailRef = useRef<HTMLButtonElement | null>(null);
+  const [sidebar, setSidebar] = useState<HTMLElement | null>(null);
 
   const [numPages, setNumPages] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(() => ensureStartingPage(source.pageNumber));
@@ -243,6 +284,8 @@ export function PdfReader({ source }: PdfReaderProps) {
     () => Array.from({ length: numPages ?? 0 }, (_, index) => index + 1),
     [numPages],
   );
+  const visibleThumbnails = useVisibleThumbnails(sidebar, pages.length);
+  const thumbnailHeight = aspectRatio ? Math.round(THUMBNAIL_WIDTH / aspectRatio) : THUMBNAIL_FALLBACK_HEIGHT;
 
   if (!file) {
     const message =
@@ -267,34 +310,41 @@ export function PdfReader({ source }: PdfReaderProps) {
       className="flex h-full min-h-0 bg-muted/20"
     >
       <nav
+        ref={setSidebar}
         aria-label="Pages"
         className="hidden w-40 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-muted/40 px-4 py-4 sm:flex"
       >
         {pages.map((page) => {
           const isCurrent = page === currentPage;
+          const thumbnailFrame = isCurrent
+            ? 'ring-2 ring-primary ring-offset-2 ring-offset-muted'
+            : 'border border-border opacity-80 group-hover:opacity-100';
           return (
             <button
               key={page}
               type="button"
               ref={isCurrent ? activeThumbnailRef : undefined}
+              data-thumbnail={page}
               onClick={() => goToPage(page)}
               aria-label={`Page ${page}`}
               aria-pressed={isCurrent}
               className="group flex shrink-0 flex-col items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
-              <Page
-                pageNumber={page}
-                width={THUMBNAIL_WIDTH}
-                renderTextLayer={false}
-                renderAnnotationLayer={false}
-                className={cn(
-                  'overflow-hidden rounded-sm bg-background transition-shadow',
-                  isCurrent
-                    ? 'ring-2 ring-primary ring-offset-2 ring-offset-muted'
-                    : 'border border-border opacity-80 group-hover:opacity-100',
-                )}
-                loading={<div className="h-36 w-28 rounded-sm bg-background" />}
-              />
+              {!visibleThumbnails || visibleThumbnails.has(page) ? (
+                <Page
+                  pageNumber={page}
+                  width={THUMBNAIL_WIDTH}
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                  className={cn('overflow-hidden rounded-sm bg-background transition-shadow', thumbnailFrame)}
+                  loading={<div className="w-28 rounded-sm bg-background" style={{ height: thumbnailHeight }} />}
+                />
+              ) : (
+                <div
+                  className={cn('w-28 rounded-sm bg-background', thumbnailFrame)}
+                  style={{ height: thumbnailHeight }}
+                />
+              )}
               <span className={cn('text-xs tabular-nums', isCurrent ? 'font-medium text-foreground' : 'text-muted-foreground')}>
                 {page}
               </span>
