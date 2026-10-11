@@ -21,9 +21,9 @@ const authGetSession = vi.fn(async () => ({
   error: null,
 }));
 const rpc = vi.fn(async () => emptyResult);
-const from = vi.fn(() => createQueryChain(emptyResult));
+const from = vi.fn((_table: string) => createQueryChain(emptyResult));
 const createSignedUrl = vi.fn(async () => ({ data: { signedUrl: 'https://storage.test/notes.pdf' }, error: null }));
-const storageFrom = vi.fn(() => ({ createSignedUrl }));
+const storageFrom = vi.fn((_bucket: string) => ({ createSignedUrl }));
 
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
@@ -33,7 +33,7 @@ vi.mock('@/integrations/supabase/client', () => ({
     },
     rpc: (...args: unknown[]) => rpc(...args),
     from: (...args: unknown[]) => from(...args),
-    storage: { from: (...args: unknown[]) => storageFrom(...args) },
+    storage: { from: (bucket: string) => storageFrom(bucket) },
   },
 }));
 
@@ -274,6 +274,34 @@ describe('useStudentChat', () => {
       result.current.setShowSidePanel(true);
     });
     expect(result.current.showSidePanel).toBe(true);
+  });
+
+  it("records where a cited PDF lives so the reader can download it itself", async () => {
+    from.mockImplementation((table: string) => {
+      if (table === 'chunks') return createQueryChain({ data: { material_id: 'mat-1', student_document_id: null }, error: null });
+      if (table === 'materials') {
+        return createQueryChain({
+          data: { file_path: 'course/lecture7.pdf', file_type: 'pdf', file_name: 'Lecture 7.pdf', linked_url: null, thumbnail_path: null },
+          error: null,
+        });
+      }
+      return createQueryChain(emptyResult);
+    });
+    createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://signed.test/lecture7.pdf' }, error: null });
+    const { result } = renderHook(() => useStudentChat(null));
+
+    await act(async () => {
+      await result.current.openCitationSource(
+        { id: 'c1', chunkId: 'chunk-1', excerpt: 'x', documentName: 'Lecture 7.pdf', documentType: 'pdf', pageNumber: 4, relevanceScore: 1 },
+        'key-1',
+      );
+    });
+
+    expect(result.current.activeViewerSource).toMatchObject({
+      kind: 'pdf',
+      pageNumber: 4,
+      storage: { bucket: 'course-materials', path: 'course/lecture7.pdf' },
+    });
   });
 
   it('opens a stored video after a PDF without signing its R2 path through Supabase Storage', async () => {

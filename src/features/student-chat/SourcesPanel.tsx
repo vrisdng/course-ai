@@ -8,7 +8,6 @@ import { cn } from '@/lib/utils';
 
 import { PdfReader } from './PdfReader';
 import { PdfThumbnail } from './PdfThumbnail';
-import { PageViewer } from './PageViewer';
 import { VideoTranscript } from './VideoTranscript';
 import { type ActiveViewerSource, ensureStartingPage } from './documentViewer';
 import { VideoSourceDialog, type ActiveVideoSource } from './VideoSourceDialog';
@@ -38,7 +37,6 @@ export function SourcesPanel({
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [dragging, setDragging] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [singleOpen, setSingleOpen] = useState(false);
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
   const dragRef = useRef({ startX: 0, startWidth: 0, active: false });
 
@@ -157,7 +155,7 @@ export function SourcesPanel({
                          pageNumber={page}
                          width={280}
                          preview
-                         onClick={() => setSingleOpen(true)}
+                         onClick={() => setGalleryOpen(true)}
                        />
                      </div>
                    ) : null}
@@ -207,14 +205,6 @@ export function SourcesPanel({
           {isPdf && activeViewerSource ? (
             <PdfReader source={activeViewerSource} />
           ) : null}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={singleOpen} onOpenChange={setSingleOpen}>
-        <DialogContent className="h-[90vh] max-w-3xl overflow-hidden p-0">
-          <DialogTitle className="sr-only">{activeViewerSource?.documentName ?? 'Document page'}</DialogTitle>
-          <DialogDescription className="sr-only">The cited page of the document</DialogDescription>
-          {activeViewerSource ? <PageViewer source={activeViewerSource} /> : null}
         </DialogContent>
       </Dialog>
 

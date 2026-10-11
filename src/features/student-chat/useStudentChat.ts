@@ -1091,6 +1091,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         documentName: resolved.fileName,
         pageNumber: ensureStartingPage(citation.pageNumber),
         signedUrl,
+        storage: { bucket: resolved.bucket, path: resolved.filePath },
         materialId: resolved.materialId,
         excerpt: citation.excerpt,
         thumbnailUrl,
