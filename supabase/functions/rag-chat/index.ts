@@ -6,12 +6,16 @@ import {
   buildCitationRewriteSourceContext,
   clipText,
   extractCitedImageTokens,
+  formatLabelledBlocks,
   formatTimestamp,
   IMAGE_MATERIAL_TYPES,
   rewriteImageTokens,
   sanitizeAndRemapCitations,
   stripTrailingSourcesSection,
+  type BlockCountBySource,
+  type CitedRef,
 } from "../_shared/citations.ts";
+import { citedBlockIds, citedExcerpt, loadSourceBlocks, type SourceBlock } from "../_shared/sourceBlocks.ts";
 import {
   dedupeRetrievedChunksByBestScore,
   getRetrievalSettings,
@@ -39,7 +43,9 @@ import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts"
 import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
 import { parseVideoEvidenceSelection, type VideoEvidenceCandidate, type VideoEvidenceSegment } from "../_shared/videoEvidence.ts";
 
-const CITATION_PIPELINE_VERSION = "2026-10-09-video-evidence-v2";
+const CITATION_PIPELINE_VERSION = "2026-10-12-cite-blocks-video-evidence-v1";
+// Characters of a source shown to the answer model.
+const SOURCE_CONTEXT_CHARS = 1300;
 
 // Bucket that image-typed course materials live in. Stable image citations store
 // "<bucket>/<file_path>" references so the embedded markdown stays valid across
@@ -311,9 +317,12 @@ async function formatAnswerWithReliableCitations(options: {
   chunks: RetrievedChunk[];
   signal?: AbortSignal;
   imageResolver?: (sourceNumber: number) => SourceImage | null;
+  blockCountBySource?: BlockCountBySource;
 }): Promise<{
   answer: string;
   citedChunks: RetrievedChunk[];
+  // Parallel to citedChunks: which blocks of that source each citation names.
+  citedRefs: CitedRef[];
   imageByFinalCite: Map<number, SourceImage>;
 }> {
   const cleanedAnswer = stripTrailingSourcesSection(options.rawAnswer.trim());
@@ -321,11 +330,12 @@ async function formatAnswerWithReliableCitations(options: {
     return {
       answer: cleanedAnswer,
       citedChunks: [],
+      citedRefs: [],
       imageByFinalCite: new Map(),
     };
   }
 
-  let sanitized = sanitizeAndRemapCitations(cleanedAnswer, options.chunks.length);
+  let sanitized = sanitizeAndRemapCitations(cleanedAnswer, options.chunks.length, options.blockCountBySource);
 
   if (sanitized.citedChunkNumbers.length === 0) {
     const citationRewriteSystemPrompt = `You are a citation editor for a retrieval-augmented generation system.
@@ -360,7 +370,7 @@ ${buildCitationRewriteSourceContext(options.chunks)}`;
       signal: options.signal,
     });
 
-    sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length);
+    sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length, options.blockCountBySource);
   }
 
   // Rewrite embedded image tokens (img-source-<n>) to stable storage paths and
@@ -384,21 +394,23 @@ ${buildCitationRewriteSourceContext(options.chunks)}`;
     }
   });
 
-  const citedChunks = sanitized.citedChunkNumbers
-    .map((citationNumber) => options.chunks[citationNumber - 1])
-    .filter((chunk): chunk is RetrievedChunk => Boolean(chunk));
+  const cited = sanitized.citedRefs
+    .map((ref) => ({ ref, chunk: options.chunks[ref.sourceNumber - 1] }))
+    .filter((entry): entry is { ref: CitedRef; chunk: RetrievedChunk } => Boolean(entry.chunk));
 
-  if (citedChunks.length === 0) {
+  if (cited.length === 0) {
     return {
       answer: answer || cleanedAnswer,
       citedChunks: [],
+      citedRefs: [],
       imageByFinalCite,
     };
   }
 
   return {
     answer,
-    citedChunks,
+    citedChunks: cited.map((entry) => entry.chunk),
+    citedRefs: cited.map((entry) => entry.ref),
     imageByFinalCite,
   };
 }
@@ -774,6 +786,8 @@ serve(async (req: Request) => {
 
     // ── Variables shared by both RAG and no-RAG paths ─────────────────
     let retrievedChunks: RetrievedChunk[] = [];
+    // Source number → the blocks shown to the model for it (labels a, b, ...).
+    const shownBlocksBySource = new Map<number, SourceBlock[]>();
     let selectedMaterials: ResolvedSelectedMaterial[] = [];
     let hasSelectedDocumentFilter = false;
     // Maps 1-based source number -> stable image reference for image-typed
@@ -897,6 +911,20 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
         `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
       );
 
+      // Blocks behind PDF chunks, so the model can cite parts of a source.
+      const blocksByChunk = await loadSourceBlocks(retrievedChunks.map((c) => c.id), {
+        fetchChunkBlockIds: async (ids) => {
+          const { data, error } = await supabaseClient.from("chunks").select("id, block_ids").in("id", ids);
+          if (error) console.warn(`Could not load chunk blocks: ${error.message}`);
+          return (data ?? []) as { id: string; block_ids: string[] | null }[];
+        },
+        fetchBlocks: async (ids) => {
+          const { data, error } = await supabaseClient.from("page_blocks").select("id, text").in("id", ids);
+          if (error) console.warn(`Could not load page blocks: ${error.message}`);
+          return (data ?? []) as SourceBlock[];
+        },
+      });
+
       // Resolve stable storage paths for image-typed sources so the model can
       // embed them as markdown image citations. Only image uploads qualify.
       const materialIdsByImage = Array.from(
@@ -947,7 +975,14 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
                 : "";
 
           ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
-          ragContext += `${clipText(chunk.chunk_text, 1300)}\n\n`;
+          const blocks = blocksByChunk.get(chunk.id);
+          if (blocks) {
+            const labelled = formatLabelledBlocks(index + 1, blocks.map((b) => b.text), SOURCE_CONTEXT_CHARS);
+            shownBlocksBySource.set(index + 1, blocks.slice(0, labelled.shownCount));
+            ragContext += `${labelled.text}\n\n`;
+          } else {
+            ragContext += `${clipText(chunk.chunk_text, SOURCE_CONTEXT_CHARS)}\n\n`;
+          }
           const imageRef = imageSourceRefs.get(index + 1);
           if (imageRef) {
             ragContext += `\nImage reference token: img-source-${index + 1}\n`;
@@ -981,6 +1016,9 @@ CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately aft
 Examples:
 - "Virtual memory allows for larger address spaces <<cite:1>>."
 - "The CPU schedules processes based on priority <<cite:2>>. This ensures efficiency <<cite:3>>."
+
+PARTS: Some sources are split into labelled parts such as [2a], [2b], [2c] (a heading, a paragraph, an equation, a table, a figure...). When a claim rests on specific parts, cite exactly those parts: <<cite:2b>>, or <<cite:2b,2c>> for several parts of one source. Cite the whole source (<<cite:2>>) only when the claim draws on all of it. Only use labels that appear in the sources.
+- "Linear probing suffers from primary clustering <<cite:2c>>, which double hashing avoids <<cite:2d>>."
 
 IMAGES: A source labelled with an "Image reference token" is a course image (diagram, chart, screenshot). To show it, place the exact Markdown image token on the same line right after the claim it supports, immediately followed by its citation marker, like this: ![<short caption>](img-source-<n>) <<cite:<n>>. Use the token verbatim and only for sources provided; never invent an image token.
 
@@ -1106,7 +1144,7 @@ ${ragContext}`;
 
             ensureStreamActive();
 
-            const { answer, citedChunks, imageByFinalCite } = await formatAnswerWithReliableCitations({
+            const { answer, citedChunks, citedRefs, imageByFinalCite } = await formatAnswerWithReliableCitations({
               modelConfig: chatModelConfig,
               apiKey: chatApiKey,
               question: trimmedMessage,
@@ -1114,9 +1152,15 @@ ${ragContext}`;
               chunks: retrievedChunks,
               signal: requestAbortController.signal,
               imageResolver: (sourceNumber) => imageSourceRefs.get(sourceNumber) ?? null,
+              blockCountBySource: (sourceNumber) => shownBlocksBySource.get(sourceNumber)?.length ?? 0,
             });
 
             ensureStreamActive();
+
+            const citedBlocks = citedRefs.map((ref) => {
+              const shown = shownBlocksBySource.get(ref.sourceNumber) ?? [];
+              return { shown, indexes: ref.blockIndexes };
+            });
 
             const evidenceByCitation = await selectVideoEvidence({
               client: supabaseClient,
@@ -1132,7 +1176,8 @@ ${ragContext}`;
             const citations = citedChunks.map((chunk, index) => ({
               id: `citation-${index + 1}`,
               chunkId: chunk.id,
-              excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+              blockIds: citedBlockIds(citedBlocks[index].indexes, citedBlocks[index].shown),
+              excerpt: citedExcerpt(citedBlocks[index].indexes, citedBlocks[index].shown, chunk.chunk_text),
               documentName: chunk.material_name || chunk.document_name || "Unknown document",
               documentType: chunk.material_type || chunk.document_type || "document",
               pageNumber: chunk.page_number,
@@ -1198,16 +1243,17 @@ ${ragContext}`;
                 if (citedChunks.length > 0) {
                   const { error: citationsError } = await supabaseClient
                     .from("citations")
-                    .insert(citedChunks.map((chunk, index) => ({
+                    .insert(citations.map((citation, index) => ({
                       message_id: assistantMessage.id,
-                      chunk_id: chunk.id,
-                      material_id: chunk.material_id,
-                      student_document_id: chunk.student_document_id,
-                      page_number: chunk.page_number,
-                      start_ms: chunk.start_ms,
-                      end_ms: chunk.end_ms,
-                      relevance_score: chunk.relevance_score,
-                      excerpt: chunk.chunk_text.substring(0, 300) + (chunk.chunk_text.length > 300 ? "..." : ""),
+                      chunk_id: citation.chunkId,
+                      material_id: citedChunks[index].material_id,
+                      student_document_id: citedChunks[index].student_document_id,
+                      page_number: citedChunks[index].page_number,
+                      start_ms: citedChunks[index].start_ms,
+                      end_ms: citedChunks[index].end_ms,
+                      relevance_score: citation.relevanceScore,
+                      excerpt: citation.excerpt,
+                      block_ids: citation.blockIds.length > 0 ? citation.blockIds : null,
                       image_url: imageByFinalCite.get(index + 1)?.path ?? null,
                       evidence_segments: evidenceByCitation.get(index + 1) ?? null,
                     })));

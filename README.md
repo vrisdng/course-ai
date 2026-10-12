@@ -39,6 +39,11 @@ ASSEMBLY_API_KEY=
 
 # Transactional email — used by the course-invite email flow
 RESEND_API_KEY=
+
+# PDF page renderer (api/render-pdf-pages.ts on Vercel) — set on BOTH Supabase
+# and Vercel (see steps 5 and 6). Never give these a VITE_ prefix.
+RENDER_SERVICE_URL=      # https://<vercel-domain>/api/render-pdf-pages (Supabase only)
+RENDER_SERVICE_SECRET=   # random shared secret, e.g. `openssl rand -hex 32`
 ```
 
 The `VITE_*` vars are read by `src/integrations/supabase/client.ts` and get baked into the client bundle at build time. The non-`VITE_*` vars are consumed by Supabase Edge Functions, not the frontend build — see step 5.
@@ -85,7 +90,10 @@ Each function needs its own secrets set on the Supabase project (these are **sep
 
 ```sh
 supabase secrets set GEMINI_API_KEY=... OPENAI_API_KEY=... ASSEMBLY_API_KEY=... RESEND_API_KEY=...
+supabase secrets set RENDER_SERVICE_URL=https://<production-domain>/api/render-pdf-pages RENDER_SERVICE_SECRET=...
 ```
+
+Without the two `RENDER_SERVICE_*` secrets, ingestion skips PDF page images and citations fall back to rendering the PDF in the browser.
 
 Run a function locally against your local `.env` for faster iteration:
 
@@ -114,11 +122,11 @@ Store the scheduler key securely. The transcription reconciler discovers complet
 
 ## 6. Deploying the frontend (Vercel)
 
-`vercel.json` is minimal — just an SPA fallback rewrite (`/* → /index.html`), no build command or env vars defined in-repo. That means build settings and env vars live in the Vercel project dashboard, not this file. To deploy:
+`vercel.json` holds the SPA fallback rewrite (everything except `/api/*` → `/index.html`) and the config for the one Vercel Function, `api/render-pdf-pages.ts`. That function renders PDF pages to images during ingestion; `process-material-job` calls it, and nothing in the browser does (see [HANDOFF.md](HANDOFF.md), "Page images + citation highlights"). Build settings and env vars live in the Vercel project dashboard. To deploy:
 
 1. Import the repo into Vercel (or `vercel link` if a project already exists — check with whoever owns deployment before creating a duplicate project).
 2. Framework preset: Vite. Build command: `npm run build` (or leave as Vercel's auto-detected default, which matches). Output directory: `dist`.
-3. Set the three `VITE_*` env vars (step 3) in Vercel's project settings — these are the *only* ones the frontend build needs; the AI/email provider keys belong on Supabase (step 5), not Vercel, since those run in Edge Functions, not the Vercel build.
+3. Set the three `VITE_*` env vars (step 3) in Vercel's project settings, plus `RENDER_SERVICE_SECRET` (same value as the Supabase secret) for the renderer function. The renderer also reads `VITE_SUPABASE_URL` (or `SUPABASE_URL`) at runtime to restrict which storage URLs it will fetch from and upload to. The AI/email provider keys belong on Supabase (step 5), not Vercel, since those run in Edge Functions.
 4. Push to the branch Vercel is watching, or run `vercel --prod` for a manual deploy.
 
 There's no CI config in this repo (no `.github/workflows`) — deploys are push-triggered by Vercel directly and Supabase changes (migrations/functions) are pushed manually via the CLI. If you're setting up a new environment, that manual-push gap is worth knowing about before you assume "merging to main" does anything to the backend.

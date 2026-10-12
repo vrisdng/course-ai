@@ -1,6 +1,9 @@
 {
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/.*", "dest": "/index.html" }
-  ]
+  "functions": {
+    "api/render-pdf-pages.ts": {
+      "maxDuration": 120,
+      "includeFiles": "node_modules/pdfjs-dist/{standard_fonts,cmaps,wasm}/**"
+    }
+  },
+  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
 }

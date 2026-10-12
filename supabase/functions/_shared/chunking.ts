@@ -24,12 +24,19 @@ function alignToCodePoint(text: string, index: number): number {
   return index > 0 && index < text.length && isLowSurrogate(text.charCodeAt(index)) ? index - 1 : index;
 }
 
-export function chunkText(text: string, chunkSize: number, overlap: number): TextChunk[] {
-  const normalized = text
+// Text as it may be stored: control separators become spaces, lone
+// surrogates are removed, runs of spaces collapse.
+export function normalizeChunkText(text: string): string {
+  return text
     .replace(/\r\n/g, "\n")
     .replace(CONTROL_SEPARATORS, " ")
-    .replace(LONE_SURROGATES, "");
-  const cleaned = normalized.replace(/[ ]{2,}/g, " ").trim();
+    .replace(LONE_SURROGATES, "")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+}
+
+export function chunkText(text: string, chunkSize: number, overlap: number): TextChunk[] {
+  const cleaned = normalizeChunkText(text);
   if (!cleaned) return [];
 
   const safeChunkSize = Math.max(200, chunkSize);

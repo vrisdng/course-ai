@@ -38,3 +38,7 @@ external/*
 external
 .external 
 .playwright-mcp/
+
+# Supabase CLI local state
+supabase/.branches/
+supabase/.temp/start-secrets/

@@ -1,4 +1,5 @@
 // Citation token parsing/remapping and source formatting for rag-chat.
+import { blockIndexFromLabel, blockLabel } from "./blocks.ts";
 export interface CitationSourceChunk {
   material_name?: string;
   material_type?: string;
@@ -12,7 +13,10 @@ export interface CitationSourceChunk {
 
 export interface CitationSanitizationResult {
   text: string;
+  // Source number of each final citation, in final order (may repeat when one
+  // source is cited for different blocks).
   citedChunkNumbers: number[];
+  citedRefs: CitedRef[];
 }
 
 const CITATION_TOKEN_PATTERN = "<<cite:(\\d+)>>";
@@ -56,53 +60,96 @@ export function stripTrailingSourcesSection(text: string): string {
   return withoutInlineSources.trim();
 }
 
-// Rewrites citation markers to canonical <<cite:N>> tokens, one source per
-// token. A marker listing several sources (<<cite:2,3>>) is split into
-// adjacent tokens; unknown sources are dropped. Bare [n] / (n) are left as
-// text: the model is told to use <<cite:N>>, and converting them would also
-// rewrite maths such as w^{(3)} or O(1).
-export function normalizeCitationTokens(content: string, maxSourceNumber: number): string {
+// Number of labelled blocks shown for a source (0 = shown as plain text).
+export type BlockCountBySource = (sourceNumber: number) => number;
+
+// A cited source, optionally narrowed to some of its blocks (0-based indexes
+// into the blocks shown for it; empty = the whole source).
+export interface CitedRef {
+  sourceNumber: number;
+  blockIndexes: number[];
+}
+
+const RAW_CITE_TOKEN = /<<\s*cite\s*:\s*([^<>]*?)\s*>>/gi;
+const CANONICAL_CITE_TOKEN = /<<cite:(\d+)((?:[a-z]+)(?:,\d+[a-z]+)*)?>>/g;
+
+function canonicalToken(sourceNumber: number, blockIndexes: number[]): string {
+  if (blockIndexes.length === 0) return `<<cite:${sourceNumber}>>`;
+  return `<<cite:${blockIndexes.map((i) => `${sourceNumber}${blockLabel(i)}`).join(",")}>>`;
+}
+
+// Rewrites every citation marker to a canonical <<cite:3>> or <<cite:3b,3c>>
+// (one token per source), dropping unknown sources and unknown block labels. A
+// marker listing several sources (<<cite:2,3>>) becomes adjacent tokens. Bare
+// [n] / (n) are left as text: the model is told to use <<cite:N>>, and
+// converting them would also rewrite maths such as w^{(3)} or O(1).
+export function normalizeCitationTokens(
+  content: string,
+  maxSourceNumber: number,
+  blockCountBySource: BlockCountBySource = () => 0,
+): string {
   if (maxSourceNumber < 1) {
     return content;
   }
 
-  return content.replace(/<<\s*cite\s*:\s*([^<>]*?)\s*>>/gi, (_, body: string) =>
-    body
-      .split(",")
-      .map((item) => Number(item.trim()))
-      .filter((n) => Number.isInteger(n) && n >= 1 && n <= maxSourceNumber)
-      .map((n) => `<<cite:${n}>>`)
-      .join(""),
-  );
+  return content.replace(RAW_CITE_TOKEN, (_, body: string) => {
+    const bySource = new Map<number, Set<number> | null>();
+    for (const item of body.split(",")) {
+      const match = item.trim().toLowerCase().match(/^([1-9]\d*)([a-z]*)$/);
+      if (!match) continue;
+      const sourceNumber = Number(match[1]);
+      if (sourceNumber > maxSourceNumber) continue;
+      const index = match[2] ? blockIndexFromLabel(match[2]) : null;
+      const isKnownBlock = index !== null && index < blockCountBySource(sourceNumber);
+      const existing = bySource.get(sourceNumber);
+      if (!isKnownBlock) {
+        // A bare number or an unknown label cites the whole source, and the
+        // whole source wins over any blocks of it in the same marker.
+        bySource.set(sourceNumber, null);
+      } else if (existing === undefined) {
+        bySource.set(sourceNumber, new Set([index]));
+      } else if (existing !== null) {
+        existing.add(index);
+      }
+    }
+    return [...bySource.entries()]
+      .map(([sourceNumber, indexes]) => canonicalToken(sourceNumber, indexes ? [...indexes].sort((a, b) => a - b) : []))
+      .join("");
+  });
 }
 
-export function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: number): CitationSanitizationResult {
+function parseCanonicalToken(sourceNumber: number, blockPart: string | undefined): CitedRef {
+  if (!blockPart) return { sourceNumber, blockIndexes: [] };
+  const indexes = blockPart
+    .split(",")
+    .map((item) => blockIndexFromLabel(item.replace(/^\d+/, "")))
+    .filter((index): index is number => index !== null);
+  return { sourceNumber, blockIndexes: indexes };
+}
+
+// Cleans the answer and renumbers its citations densely (1..n) in order of
+// first appearance. Each distinct (source, blocks) pair gets its own number,
+// so two claims citing different parts of one source get different numbers.
+export function sanitizeAndRemapCitations(
+  rawAnswer: string,
+  maxSourceNumber: number,
+  blockCountBySource: BlockCountBySource = () => 0,
+): CitationSanitizationResult {
   const cleanedAnswer = stripTrailingSourcesSection(rawAnswer.trim());
-  const normalizedAnswer = normalizeCitationTokens(cleanedAnswer, maxSourceNumber);
+  const normalizedAnswer = normalizeCitationTokens(cleanedAnswer, maxSourceNumber, blockCountBySource);
 
-  const orderedOriginalCitationNumbers: number[] = [];
-  const seenOriginalCitationNumbers = new Set<number>();
-
-  for (const match of normalizedAnswer.matchAll(new RegExp(CITATION_TOKEN_PATTERN, "g"))) {
-    const citationNumber = Number(match[1]);
-    if (!Number.isFinite(citationNumber) || citationNumber < 1 || citationNumber > maxSourceNumber) {
-      continue;
+  const citedRefs: CitedRef[] = [];
+  const numberByKey = new Map<string, number>();
+  const remappedAnswer = normalizedAnswer.replace(CANONICAL_CITE_TOKEN, (_, rawNumber: string, blockPart?: string) => {
+    const ref = parseCanonicalToken(Number(rawNumber), blockPart);
+    const key = `${ref.sourceNumber}:${ref.blockIndexes.join(",")}`;
+    let mapped = numberByKey.get(key);
+    if (mapped === undefined) {
+      citedRefs.push(ref);
+      mapped = citedRefs.length;
+      numberByKey.set(key, mapped);
     }
-    if (!seenOriginalCitationNumbers.has(citationNumber)) {
-      seenOriginalCitationNumbers.add(citationNumber);
-      orderedOriginalCitationNumbers.push(citationNumber);
-    }
-  }
-
-  const remappedCitationNumbers = new Map<number, number>();
-  orderedOriginalCitationNumbers.forEach((originalCitationNumber, index) => {
-    remappedCitationNumbers.set(originalCitationNumber, index + 1);
-  });
-
-  const remappedAnswer = normalizedAnswer.replace(new RegExp(CITATION_TOKEN_PATTERN, "g"), (_, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    const mappedCitationNumber = remappedCitationNumbers.get(citationNumber);
-    return mappedCitationNumber ? `<<cite:${mappedCitationNumber}>>` : "";
+    return `<<cite:${mapped}>>`;
   });
 
   const cleanedRemappedAnswer = remappedAnswer
@@ -114,8 +161,30 @@ export function sanitizeAndRemapCitations(rawAnswer: string, maxSourceNumber: nu
 
   return {
     text: cleanedRemappedAnswer,
-    citedChunkNumbers: orderedOriginalCitationNumbers,
+    citedChunkNumbers: citedRefs.map((ref) => ref.sourceNumber),
+    citedRefs,
   };
+}
+
+export interface LabelledBlocks {
+  text: string;
+  // How many leading blocks were shown (labels a.. up to this count).
+  shownCount: number;
+}
+
+// A source's blocks as the answer model sees them: "[3a] text", one per line,
+// within a character budget. Blocks are shown as a leading run so the labels
+// stay contiguous; the first block is always shown, clipped if needed.
+export function formatLabelledBlocks(sourceNumber: number, texts: string[], maxChars: number): LabelledBlocks {
+  const lines: string[] = [];
+  let used = 0;
+  for (const [index, text] of texts.entries()) {
+    if (index > 0 && used + text.length > maxChars) break;
+    const shown = index === 0 ? clipText(text, maxChars) : text;
+    lines.push(`[${sourceNumber}${blockLabel(index)}] ${shown}`);
+    used += shown.length;
+  }
+  return { text: lines.join("\n"), shownCount: lines.length };
 }
 
 export function buildCitationRewriteSourceContext(chunks: CitationSourceChunk[]): string {

@@ -13,8 +13,10 @@ import {
 import {
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
+  buildPageImageMessages,
   requireGeneratedText,
   type DocumentInput,
+  type PageImageInput,
   type ReasoningEffort,
 } from "./llmConfig.ts";
 
@@ -135,6 +137,34 @@ export async function generateDocumentText(options: DocumentTextOptions): Promis
       messages: buildDocumentExtractionMessages(options.prompt, options.file),
       temperature: 0,
       // AI SDK v4 option name (v5 renamed it to maxOutputTokens).
+      maxTokens: options.maxOutputTokens ?? 32_000,
+      maxRetries: options.maxRetries ?? 3,
+      abortSignal: options.signal,
+    });
+    return requireGeneratedText(result.text, options.model, result.finishReason);
+  } catch (error) {
+    wrapProviderError(error);
+  }
+}
+
+export interface PageImagesTextOptions {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  pages: PageImageInput[];
+  maxOutputTokens?: number;
+  maxRetries?: number;
+  signal?: AbortSignal;
+}
+
+// Text generation over rendered page images (block extraction): same plumbing
+// as generateDocumentText, but several labelled images instead of one file.
+export async function generatePageImagesText(options: PageImagesTextOptions): Promise<string> {
+  try {
+    const result = await generateText({
+      model: toOpenAiModel(options.apiKey, options.model),
+      messages: buildPageImageMessages(options.prompt, options.pages),
+      temperature: 0,
       maxTokens: options.maxOutputTokens ?? 32_000,
       maxRetries: options.maxRetries ?? 3,
       abortSignal: options.signal,
