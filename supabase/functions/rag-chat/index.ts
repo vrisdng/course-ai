@@ -1017,8 +1017,10 @@ Examples:
 - "Virtual memory allows for larger address spaces <<cite:1>>."
 - "The CPU schedules processes based on priority <<cite:2>>. This ensures efficiency <<cite:3>>."
 
-PARTS: Some sources are split into labelled parts such as [2a], [2b], [2c] (a heading, a paragraph, an equation, a table, a figure...). When a claim rests on specific parts, cite exactly those parts: <<cite:2b>>, or <<cite:2b,2c>> for several parts of one source. Cite the whole source (<<cite:2>>) only when the claim draws on all of it. Only use labels that appear in the sources.
-- "Linear probing suffers from primary clustering <<cite:2c>>, which double hashing avoids <<cite:2d>>."
+PARTS: Some sources are split into labelled parts such as [2a], [2b], [2c] (a heading, a paragraph, an equation, a table, a figure...). Cite the parts a claim rests on, and keep parts of the same source together in ONE marker: <<cite:2b,2c>>, never <<cite:2b>><<cite:2c>>. Prefer one marker per source at the end of a sentence or bullet over a marker after every clause: if consecutive claims draw on the same source, cite it once after them with all the parts they used. Cite the whole source (<<cite:2>>) only when the claim draws on all of it. Only use labels that appear in the sources.
+- Good: "Linear probing suffers from primary clustering, which double hashing avoids <<cite:2c,2d>>."
+- Bad: "Linear probing suffers from primary clustering <<cite:2c>>, which double hashing avoids <<cite:2d>>."
+- Good (two sources): "Chaining stores colliding keys in a list <<cite:1a,1b>>, while open addressing probes the array <<cite:3b>>."
 
 IMAGES: A source labelled with an "Image reference token" is a course image (diagram, chart, screenshot). To show it, place the exact Markdown image token on the same line right after the claim it supports, immediately followed by its citation marker, like this: ![<short caption>](img-source-<n>) <<cite:<n>>. Use the token verbatim and only for sources provided; never invent an image token.
 
