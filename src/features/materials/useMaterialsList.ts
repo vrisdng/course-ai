@@ -51,7 +51,7 @@ export function useMaterialsList() {
     let query = supabase
       .from('materials')
       .select(
-        'id, course_id, duration_ms, file_name, file_path, file_type, file_size, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at',
+        'id, course_id, duration_ms, file_name, file_path, file_type, file_size, video_upload_state, linked_url, topic, week_number, processing_error, processing_progress, processing_stage, processing_status, access_scope, academic_term_id, created_at',
         { count: 'exact' }
       )
       .order('created_at', { ascending: false });

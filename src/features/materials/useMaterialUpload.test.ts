@@ -112,6 +112,17 @@ describe('useMaterialUpload', () => {
     }));
   });
 
+  it('keeps a saved video visible and reports a transcription failure without a queued success toast', async () => {
+    mocks.uploadVideo.mockResolvedValueOnce({ materialId: 'video-1', transcriptionStatus: 'failed' });
+    const result = setup();
+    add(result, [file('lecture.mp4', 'video', 'video/mp4')]);
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(onUploaded).toHaveBeenCalled();
+    expect(result.current.pendingFiles).toEqual([]);
+    expect(mocks.toastError).toHaveBeenCalledWith(expect.stringContaining('Video saved; transcription failed'));
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
   it('sanitises the storage key for names with disallowed characters but keeps the original display name', async () => {
     mocks.invoke.mockResolvedValueOnce({ data: { queued: true }, error: null });
     const result = setup();
