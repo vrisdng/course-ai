@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
+    PostgrestVersion: "14.1"
   }
   graphql_public: {
     Tables: {
@@ -156,33 +156,51 @@ export type Database = {
       citations: {
         Row: {
           block_ids: string[] | null
-          chunk_id: string
+          chunk_id: string | null
           created_at: string
+          end_ms: number | null
+          evidence_segments: Json | null
           excerpt: string | null
           id: string
           image_url: string | null
+          material_id: string | null
           message_id: string
+          page_number: number | null
           relevance_score: number | null
+          start_ms: number | null
+          student_document_id: string | null
         }
         Insert: {
           block_ids?: string[] | null
-          chunk_id: string
+          chunk_id?: string | null
           created_at?: string
+          end_ms?: number | null
+          evidence_segments?: Json | null
           excerpt?: string | null
           id?: string
           image_url?: string | null
+          material_id?: string | null
           message_id: string
+          page_number?: number | null
           relevance_score?: number | null
+          start_ms?: number | null
+          student_document_id?: string | null
         }
         Update: {
           block_ids?: string[] | null
-          chunk_id?: string
+          chunk_id?: string | null
           created_at?: string
+          end_ms?: number | null
+          evidence_segments?: Json | null
           excerpt?: string | null
           id?: string
           image_url?: string | null
+          material_id?: string | null
           message_id?: string
+          page_number?: number | null
           relevance_score?: number | null
+          start_ms?: number | null
+          student_document_id?: string | null
         }
         Relationships: [
           {
@@ -193,10 +211,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "citations_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "materials"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "citations_message_id_fkey"
             columns: ["message_id"]
             isOneToOne: false
             referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "citations_student_document_id_fkey"
+            columns: ["student_document_id"]
+            isOneToOne: false
+            referencedRelation: "student_documents"
             referencedColumns: ["id"]
           },
         ]
