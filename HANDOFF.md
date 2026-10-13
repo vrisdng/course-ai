@@ -32,7 +32,7 @@ All keys above should also be set on the Supabase project (separate from local `
 The ~20 pure functions that determine answer quality (citation parsing/remapping, chunk rerank/dedup, history windowing, document-scope handling) are now extracted into [supabase/functions/_shared/citations.ts](supabase/functions/_shared/citations.ts), [retrieval.ts](supabase/functions/_shared/retrieval.ts), [history.ts](supabase/functions/_shared/history.ts), [query.ts](supabase/functions/_shared/query.ts), each with a `.test.ts` (59 tests total, vitest). `index.ts` is down to ~1200 lines — the remaining size is request handling, Supabase queries, and the streaming response loop, which weren't extracted since they're not pure/reusable logic.
 
 ### 3. Every edge function has `verify_jwt = false`
-[supabase/config.toml](supabase/config.toml) disables Supabase's platform JWT verification for all 13 functions — each function must independently check the Authorization header. This is a common source of authz bugs (one function forgets the check, or checks role but not resource ownership). **Audit each function's auth logic individually**, don't assume it's consistent across them just because one is correct.
+[supabase/config.toml](supabase/config.toml) disables Supabase's platform JWT verification for all 13 functions — each function must independently check the Authorization header. The Vercel renderer (`api/render-pdf-pages.ts`) is outside this list and uses a shared secret instead — see "Page images + citation highlights". This is a common source of authz bugs (one function forgets the check, or checks role but not resource ownership). **Audit each function's auth logic individually**, don't assume it's consistent across them just because one is correct.
 
 ### 4. Test coverage — real progress, still gaps (updated 2026-09-13)
 Was "zero test coverage on anything that matters." Now:
@@ -84,6 +84,34 @@ The items below are **resolved** and kept here only as history. The active backl
 `.env` declares: `GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_PROJECT_ID`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`. `.env.example` (names only) now exists — see it.
 
 `ASSEMBLY_API_KEY` (AssemblyAI) and `RESEND_API_KEY` (Resend email) usage wasn't traced to specific functions during this pass — likely `transcribe-video` and the course-invite functions respectively, but confirm before assuming either is dead.
+
+## Page images + block citations (2026-10-07, blocks 2026-10-09)
+
+Clicking a PDF citation shows the cited page as a pre-rendered image with exactly the cited parts (a paragraph, an equation, a figure...) outlined, instead of downloading the whole PDF. It replaces the earlier thumbnail pipeline (`_shared/pdfThumbnail.ts`, `pdf-page-thumbnail`), which never produced an image: Deno has no canvas, and the frontend fetched a relative URL that hit Vercel's SPA fallback.
+
+**Ingestion flow for a PDF** (renderer configured), all in one `process-material-job` job via the usual requeue:
+1. **Page images** (`payload.pageRender`, `_shared/pageImages.ts`): 20 pages per run. The job signs a download URL for the PDF and an upload URL per page, then POSTs them to `api/render-pdf-pages.ts` (Vercel, Node). That renders with pdf.js + `@napi-rs/canvas`, uploads `course-materials/page-images/<material_id>/page-<n>.webp`, and returns each page's text lines with boxes. These go into `material_pages`.
+2. **Blocks** (`payload.blockExtraction`, `_shared/blockExtraction.ts` + `blocks.ts`): 6 page images per OCR call (`gpt-5.6-luna`, `llm.ts#generatePageImagesText`). Each call returns blocks: `{type, box (0-1000 grid), text}`, with maths in LaTeX and figures described. Text blocks' boxes are snapped onto the page's real text lines. Figures and equations are shifted by the offset measured on the snapped blocks. Results go into `page_blocks`.
+3. **Chunks** are packed from whole blocks (`chunkBlocks`, max 1200 chars, no paragraph split, headings kept with the next block). Each chunk stores `chunks.block_ids` and `chunks.highlight_box` (the union). Then the existing embedding stage runs.
+
+**Why images, not the PDF:** with the PDF file as input, the model's boxes were unusable (median overlap 0 with the true text; 4/21 box centres inside). With rendered images they're within about a line, and snapping makes text exact.
+
+**Answering:** `rag-chat` loads each retrieved chunk's blocks (`_shared/sourceBlocks.ts`) and shows them labelled `[3a]`, `[3b]`... (`citations.ts#formatLabelledBlocks`). The model cites `<<cite:3b>>` or `<<cite:3b,3c>>`, or `<<cite:3>>` for the whole chunk. `sanitizeAndRemapCitations` gives each distinct (source, blocks) pair its own final number. Citations carry `blockIds` (also saved in `citations.block_ids`), and the excerpt is the cited blocks' text. The frontend still only sees `<<cite:N>>`. Pipeline version: `2026-10-09-cite-blocks-v1`.
+
+**Viewer:** `useStudentChat` → `pageImage.ts#loadBlockBoxes` picks the first cited block's page and outlines every cited block on it (`HighlightedPageImage` draws several boxes). With no `blockIds` it falls back to the chunk's box, and without a page image to react-pdf.
+
+**Trust boundary:** the Vercel function holds **no Supabase credentials**. It checks `RENDER_SERVICE_SECRET` (constant-time) and only fetches from or uploads to URLs on the Supabase origin, via short-lived signed URLs (PDF: 10 min; uploads: Supabase's 2 h).
+
+**Failure handling:** if rendering fails or any page lacks an image, the job restarts as the old plain-text PDF extraction (`payload.skipPageImages`). The material then gets no blocks or highlights, but it isn't left unprocessed. Unset `RENDER_SERVICE_*` secrets skip straight to that path. A block-reading failure (e.g. the model returns nothing parseable) fails the job like any OCR failure would.
+
+**Known limits:**
+- **Scanned PDFs:** with no text layer, boxes are the model's own, typically within a line.
+- **Citation accuracy is unmeasured beyond spot checks.** One local test cited exactly the right paragraph for each claim. `eval/rag` could measure it properly.
+- **OCR input cost is higher:** page images cost ~3k input tokens per page versus ~700 for the PDF file.
+- **Existing materials** have no page images or blocks until reprocessed. There's no backfill trigger yet.
+- **Over-asking:** the first render batch asks for 20 pages before the page count is known; pages past the end are ignored.
+- **Image size:** ~1400px WebP q80, roughly 150–250 KB per text-heavy page.
+- **Cleanup still to do:** the deleted `pdf-page-thumbnail` function stays **deployed** until `supabase functions delete pdf-page-thumbnail`. `materials.thumbnail_path` is unused but kept, because `transcribe-video` still writes `null` to it.
 
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 

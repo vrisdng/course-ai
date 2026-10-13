@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
+  buildPageImageMessages,
   requireGeneratedText,
 } from "./llmConfig.ts";
 
@@ -51,5 +52,31 @@ describe("buildDocumentExtractionMessages", () => {
   it("rejects document types OpenAI cannot take as input", () => {
     expect(() => buildDocumentExtractionMessages("x", { base64Data: "QUJD", mimeType: "application/msword", filename: "a.doc" }))
       .toThrowError(/Unsupported document type/);
+  });
+});
+
+describe("buildPageImageMessages", () => {
+  it("labels each page image with its page number, after the prompt", () => {
+    const messages = buildPageImageMessages("Extract blocks.", [
+      { pageNumber: 3, base64Data: "AAA", mimeType: "image/webp" },
+      { pageNumber: 4, base64Data: "BBB", mimeType: "image/webp" },
+    ]);
+
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Extract blocks." },
+          { type: "text", text: "[Page 3]" },
+          { type: "image", image: "AAA", mimeType: "image/webp" },
+          { type: "text", text: "[Page 4]" },
+          { type: "image", image: "BBB", mimeType: "image/webp" },
+        ],
+      },
+    ]);
+  });
+
+  it("rejects an empty page list", () => {
+    expect(() => buildPageImageMessages("x", [])).toThrow("No page images");
   });
 });

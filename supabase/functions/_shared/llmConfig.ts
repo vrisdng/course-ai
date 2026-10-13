@@ -56,3 +56,24 @@ export function buildDocumentExtractionMessages(prompt: string, file: DocumentIn
   }
   return [{ role: "user", content: [{ type: "text", text: prompt }, part] }];
 }
+
+export interface PageImageInput {
+  pageNumber: number;
+  // Base64-encoded image bytes (no data: prefix).
+  base64Data: string;
+  mimeType: string;
+}
+
+// One user message with the prompt followed by each page image, each preceded
+// by a "[Page N]" label so the model can number its output by real pages.
+export function buildPageImageMessages(prompt: string, pages: PageImageInput[]): DocumentUserMessage[] {
+  if (pages.length === 0) {
+    throw new Error("No page images to send");
+  }
+  const content: DocumentContentPart[] = [{ type: "text", text: prompt }];
+  for (const page of pages) {
+    content.push({ type: "text", text: `[Page ${page.pageNumber}]` });
+    content.push({ type: "image", image: page.base64Data, mimeType: page.mimeType });
+  }
+  return [{ role: "user", content }];
+}

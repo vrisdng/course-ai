@@ -12,7 +12,7 @@ export default defineConfig({
       VITE_SUPABASE_PUBLISHABLE_KEY: "dummy-publishable-key",
     },
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}", "supabase/functions/**/*.{test,spec}.ts"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}", "supabase/functions/**/*.{test,spec}.ts", "api/**/*.{test,spec}.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "html"],
