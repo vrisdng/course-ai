@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Citation } from './types';
-import { classifyCitation, ensureStartingPage, isImageDocumentType } from './documentViewer';
+import { classifyCitation, ensureStartingPage, isHighlightBox, isImageDocumentType } from './documentViewer';
 
 const citation = (overrides: Partial<Citation>): Citation => ({
   id: 'citation-1',
@@ -50,5 +50,21 @@ describe('image type + page defaults', () => {
     expect(ensureStartingPage(0)).toBe(1);
     expect(ensureStartingPage(-3)).toBe(1);
     expect(ensureStartingPage(7)).toBe(7);
+  });
+});
+
+describe('isHighlightBox', () => {
+  it('accepts four page fractions in reading order', () => {
+    expect(isHighlightBox([0.1, 0.2, 0.5, 0.3])).toBe(true);
+    expect(isHighlightBox([0, 0, 1, 1])).toBe(true);
+  });
+
+  it('rejects anything else stored in the column', () => {
+    expect(isHighlightBox(null)).toBe(false);
+    expect(isHighlightBox([0.1, 0.2, 0.5])).toBe(false);
+    expect(isHighlightBox([0.5, 0.2, 0.1, 0.3])).toBe(false);
+    expect(isHighlightBox([0.1, 0.2, 1.5, 0.3])).toBe(false);
+    expect(isHighlightBox(['0.1', 0.2, 0.5, 0.3])).toBe(false);
+    expect(isHighlightBox({ x0: 0.1 })).toBe(false);
   });
 });

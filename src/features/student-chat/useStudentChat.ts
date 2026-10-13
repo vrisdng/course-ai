@@ -8,14 +8,17 @@ import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
 import { getCitationKey } from './citations';
 import {
   type ActiveViewerSource,
+  type HighlightBox,
   classifyCitation,
   ensureStartingPage,
+  isHighlightBox,
 } from './documentViewer';
 import {
   type ChatDocumentOption,
   getDocumentScopeSummary,
   sanitizeSelectedDocumentIds,
 } from './documentScope';
+import { loadBlockBoxes, loadPageImage } from './pageImage';
 import { parseMaybeJson, parseSseEventBlock, type ParsedSseEvent } from './sse';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
@@ -34,6 +37,7 @@ interface StoredCitationRow {
   excerpt: string | null;
   image_url: string | null;
   evidence_segments?: unknown;
+  block_ids?: string[] | null;
 }
 
 const RAG_CHAT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rag-chat`;
@@ -67,31 +71,39 @@ interface ResolvedCitationSource {
   fileName: string;
   materialId: string | null;
   linkedUrl: string | null;
-  thumbnailPaths: Record<string, string> | null;
+  // The cited chunk's box on its page, when ingestion matched one.
+  highlightBox: HighlightBox | null;
 }
 
 // Saved source IDs remain usable when re-transcription replaces the source chunk.
 export async function resolveCitationSource(citation: Citation): Promise<ResolvedCitationSource> {
-  let materialId = citation.materialId;
-  let studentDocumentId = citation.studentDocumentId;
-  if (!materialId && !studentDocumentId) {
-    if (!citation.chunkId) throw new Error('Unable to locate citation source chunk');
+  let materialId = citation.materialId ?? null;
+  let studentDocumentId = citation.studentDocumentId ?? null;
+  let highlightBox: HighlightBox | null = null;
+
+  // The chunk holds the highlight box. It may be gone (re-transcription replaces
+  // it), in which case the citation's saved source IDs still open the file.
+  if (citation.chunkId) {
     const { data: chunkRow, error: chunkError } = await supabase
       .from('chunks')
-      .select('material_id, student_document_id')
+      .select('material_id, student_document_id, highlight_box')
       .eq('id', citation.chunkId)
       .maybeSingle();
-    if (chunkError || !chunkRow) {
+    if (chunkRow) {
+      materialId ??= chunkRow.material_id;
+      studentDocumentId ??= chunkRow.student_document_id;
+      highlightBox = isHighlightBox(chunkRow.highlight_box) ? chunkRow.highlight_box : null;
+    } else if (!materialId && !studentDocumentId) {
       throw new Error(chunkError?.message || 'Unable to locate citation source chunk');
     }
-    materialId = chunkRow.material_id;
-    studentDocumentId = chunkRow.student_document_id;
+  } else if (!materialId && !studentDocumentId) {
+    throw new Error('Unable to locate citation source chunk');
   }
 
   if (materialId) {
     const { data: materialRow, error: materialError } = await supabase
       .from('materials')
-      .select('file_path, file_type, file_name, linked_url, thumbnail_path')
+      .select('file_path, file_type, file_name, linked_url')
       .eq('id', materialId)
       .maybeSingle();
 
@@ -104,16 +116,6 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
       throw new Error('Unable to locate source file');
     }
 
-    // Parse thumbnail paths from JSON if present
-    let thumbnailPaths: Record<string, string> | null = null;
-    if (materialRow.thumbnail_path) {
-      try {
-        thumbnailPaths = JSON.parse(materialRow.thumbnail_path);
-      } catch {
-        // Ignore parse errors
-      }
-    }
-
     return {
       bucket: 'course-materials',
       filePath: materialRow.file_path ?? '',
@@ -121,7 +123,7 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
       fileName: materialRow.file_name,
       materialId,
       linkedUrl: materialRow.linked_url ?? null,
-      thumbnailPaths,
+      highlightBox,
     };
   }
 
@@ -143,7 +145,7 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
       fileName: documentRow.file_name,
       materialId: null,
       linkedUrl: null,
-      thumbnailPaths: null,
+      highlightBox,
     };
   }
 
@@ -498,6 +500,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         imageUrl: citation.image_url ?? null,
         materialId,
         studentDocumentId,
+        blockIds: citation.block_ids ?? undefined,
         evidenceSegments: parseVideoEvidenceSegments(citation.evidence_segments),
       };
 
@@ -1056,45 +1059,34 @@ export function useStudentChat(routeConversationId: string | null = null) {
       // PDFs/images render in-app; raw/binary files fall back to a new tab (the
       // "no new tab" rule was scoped to PDFs).
       const kind = classifyCitation(citation);
-      
-      // For PDFs, fetch thumbnail URL if available
-      let thumbnailUrl: string | null = null;
-      if (resolved.thumbnailPaths && kind === 'pdf' && citation.pageNumber) {
-        const pageKey = String(ensureStartingPage(citation.pageNumber));
-        const thumbnailPath = resolved.thumbnailPaths[pageKey];
-        if (thumbnailPath) {
-          try {
-            const response = await fetch('/function/v1/pdf-page-thumbnail', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('sb-ksthojmoifnunsatmday-auth-token') || ''}`,
-              },
-              body: JSON.stringify({
-                materialId: resolved.materialId,
-                pageNumber: ensureStartingPage(citation.pageNumber),
-              }),
-            });
-            if (response.ok) {
-              const data = await response.json();
-              thumbnailUrl = data.signedUrl || null;
-            }
-          } catch {
-            // Silently fail - PDF.js fallback will be used
-          }
-        }
-      }
+
+      // Cited blocks decide the page and the outlines; without them the
+      // chunk's own page and box are used.
+      const blockHighlight = kind === 'pdf' && citation.blockIds?.length
+        ? await loadBlockBoxes(citation.blockIds)
+        : null;
+      const pageNumber = blockHighlight?.pageNumber ?? ensureStartingPage(citation.pageNumber);
+      const highlightBoxes = blockHighlight && blockHighlight.boxes.length > 0
+        ? blockHighlight.boxes
+        : resolved.highlightBox ? [resolved.highlightBox] : [];
+
+      // A page rendered at ingestion shows as an image with the cited boxes,
+      // without downloading the PDF; otherwise the viewer renders the PDF.
+      const pageImage = kind === 'pdf' && resolved.materialId
+        ? await loadPageImage(resolved.materialId, pageNumber)
+        : null;
       if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const viewerSource: ActiveViewerSource = {
         kind,
         documentName: resolved.fileName,
-        pageNumber: ensureStartingPage(citation.pageNumber),
+        pageNumber,
         signedUrl,
         storage: { bucket: resolved.bucket, path: resolved.filePath },
         materialId: resolved.materialId,
         excerpt: citation.excerpt,
-        thumbnailUrl,
+        pageImage,
+        highlightBoxes: pageImage ? highlightBoxes : [],
       };
 
       // PDFs render in the side-panel gallery, scrolled to the cited page.

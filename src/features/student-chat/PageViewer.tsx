@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 
+import { HighlightedPageImage } from './HighlightedPageImage';
 import { type ActiveViewerSource, ensureStartingPage } from './documentViewer';
 
 const workerUrl = new URL(
@@ -17,11 +18,18 @@ const PAGE_WIDTH = 720;
 
 export function PageViewer({ source }: PageViewerProps) {
   const [loaded, setLoaded] = useState(false);
+  const highlightRef = useRef<HTMLDivElement | null>(null);
   const pageNumber = ensureStartingPage(source.pageNumber);
+  const pageImage = source.kind === 'pdf' ? source.pageImage : null;
   const file = useMemo(
     () => (source.signedUrl ? { url: source.signedUrl } : false),
     [source.signedUrl],
   );
+
+  // Tall pages would otherwise open at the top with the cited passage off-screen.
+  useEffect(() => {
+    highlightRef.current?.scrollIntoView?.({ block: 'center' });
+  }, [pageImage?.url, source.highlightBoxes]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -32,6 +40,14 @@ export function PageViewer({ source }: PageViewerProps) {
               src={source.signedUrl}
               alt={source.documentName}
               className="max-h-[80vh] w-auto rounded-md object-contain shadow-sm"
+            />
+          ) : pageImage ? (
+            <HighlightedPageImage
+              ref={highlightRef}
+              image={pageImage}
+              alt={`${source.documentName}, page ${pageNumber}`}
+              highlightBoxes={source.highlightBoxes}
+              className="w-full max-w-[840px] overflow-hidden rounded-md shadow-sm"
             />
           ) : source.kind === 'pdf' ? (
             <div className="w-full max-w-[840px]">
@@ -60,7 +76,7 @@ export function PageViewer({ source }: PageViewerProps) {
         </div>
       </div>
 
-      {!loaded && source.kind === 'pdf' ? (
+      {!loaded && source.kind === 'pdf' && !pageImage ? (
         <div className="border-t border-border bg-muted/30 py-2 text-center text-xs text-muted-foreground">
           Loading page…
         </div>

@@ -22,7 +22,7 @@ const authGetSession = vi.fn(async () => ({
 }));
 const rpc = vi.fn(async () => emptyResult);
 const from = vi.fn((_table: string) => createQueryChain(emptyResult));
-const createSignedUrl = vi.fn(async () => ({ data: { signedUrl: 'https://storage.test/notes.pdf' }, error: null }));
+const createSignedUrl = vi.fn(async (_path: string) => ({ data: { signedUrl: 'https://storage.test/notes.pdf' }, error: null }));
 const storageFrom = vi.fn((_bucket: string) => ({ createSignedUrl }));
 
 vi.mock('@/integrations/supabase/client', () => ({
@@ -276,12 +276,116 @@ describe('useStudentChat', () => {
     expect(result.current.showSidePanel).toBe(true);
   });
 
+  describe('opening a PDF citation', () => {
+    const citation = {
+      id: 'c1',
+      chunkId: 'chunk-1',
+      excerpt: 'Optimal substructure',
+      documentName: 'Lecture 7',
+      documentType: 'pdf',
+      pageNumber: 4,
+      relevanceScore: 0.9,
+    };
+
+    function mockTables(pageRow: { width: number; height: number } | null) {
+      from.mockImplementation((table: string) => {
+        if (table === 'chunks') {
+          return createQueryChain({
+            data: { material_id: 'mat-1', student_document_id: null, highlight_box: [0.1, 0.2, 0.6, 0.3] },
+            error: null,
+          });
+        }
+        if (table === 'materials') {
+          return createQueryChain({
+            data: { file_path: 'course/lecture7.pdf', file_type: 'pdf', file_name: 'Lecture 7.pdf', linked_url: null },
+            error: null,
+          });
+        }
+        if (table === 'material_pages') {
+          return createQueryChain({ data: pageRow, error: null });
+        }
+        return createQueryChain(emptyResult);
+      });
+      createSignedUrl.mockImplementation(async (path: string) => ({
+        data: { signedUrl: `https://signed.test/${path}` },
+        error: null,
+      }));
+    }
+
+    it('opens the rendered page image with the cited box', async () => {
+      mockTables({ width: 1400, height: 788 });
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource(citation, 'key-1');
+      });
+
+      expect(result.current.showSidePanel).toBe(true);
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        pageNumber: 4,
+        signedUrl: 'https://signed.test/course/lecture7.pdf',
+        pageImage: { url: 'https://signed.test/page-images/mat-1/page-4.webp', width: 1400, height: 788 },
+        highlightBoxes: [[0.1, 0.2, 0.6, 0.3]],
+      });
+    });
+
+    it('boxes only the blocks the answer cited, on their page', async () => {
+      mockTables({ width: 1400, height: 788 });
+      const chunksAndMaterials = from.getMockImplementation()!;
+      from.mockImplementation((table: string) =>
+        table === 'page_blocks'
+          ? createQueryChain({
+              data: [
+                { id: 'blk-2', page_number: 5, box: [0.1, 0.5, 0.9, 0.6] },
+                { id: 'blk-1', page_number: 5, box: [0.1, 0.3, 0.9, 0.4] },
+              ],
+              error: null,
+            })
+          : chunksAndMaterials(table),
+      );
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource({ ...citation, blockIds: ['blk-1', 'blk-2'] }, 'key-3');
+      });
+
+      expect(from).toHaveBeenCalledWith('page_blocks');
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        pageNumber: 5,
+        pageImage: { url: 'https://signed.test/page-images/mat-1/page-5.webp' },
+        highlightBoxes: [
+          [0.1, 0.3, 0.9, 0.4],
+          [0.1, 0.5, 0.9, 0.6],
+        ],
+      });
+    });
+
+    it('falls back to the PDF without a highlight when the page was not rendered', async () => {
+      mockTables(null);
+      const { result } = renderHook(() => useStudentChat(null));
+
+      await act(async () => {
+        await result.current.openCitationSource(citation, 'key-1');
+      });
+
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        signedUrl: 'https://signed.test/course/lecture7.pdf',
+        pageImage: null,
+        highlightBoxes: [],
+      });
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+  });
+
   it("records where a cited PDF lives so the reader can download it itself", async () => {
     from.mockImplementation((table: string) => {
       if (table === 'chunks') return createQueryChain({ data: { material_id: 'mat-1', student_document_id: null }, error: null });
       if (table === 'materials') {
         return createQueryChain({
-          data: { file_path: 'course/lecture7.pdf', file_type: 'pdf', file_name: 'Lecture 7.pdf', linked_url: null, thumbnail_path: null },
+          data: { file_path: 'course/lecture7.pdf', file_type: 'pdf', file_name: 'Lecture 7.pdf', linked_url: null },
           error: null,
         });
       }
@@ -312,8 +416,9 @@ describe('useStudentChat', () => {
       if (table === 'materials') return createQueryChain({ data: {
         file_path: type === 'video' ? 'course/lecture.mp4' : 'course/notes.pdf',
         file_type: type, file_name: type === 'video' ? 'Lecture' : 'Notes',
-        linked_url: null, thumbnail_path: null,
+        linked_url: null,
       }, error: null });
+      if (table === 'material_pages') return createQueryChain({ data: null, error: null });
       return createQueryChain(emptyResult);
     });
     const citation = { id: 'c1', chunkId: 'chunk-1', excerpt: 'Relevant passage',

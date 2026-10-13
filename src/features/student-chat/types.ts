@@ -18,6 +18,8 @@ export interface Citation {
   relevanceScore: number;
   imageUrl?: string | null;
   materialId?: string | null;
+  // Page blocks the answer cited within the chunk; absent = the whole chunk.
+  blockIds?: string[];
   studentDocumentId?: string | null;
   evidenceSegments?: VideoEvidenceSegment[] | null;
 }
