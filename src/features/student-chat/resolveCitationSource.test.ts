@@ -46,7 +46,7 @@ describe('resolveCitationSource', () => {
 
   it('resolves a course-materials PDF to its signed preview path', async () => {
     mocks.from
-      .mockReturnValueOnce(query({ data: { material_id: 'mat-1', student_document_id: null }, error: null }))
+      .mockReturnValueOnce(query({ data: { material_id: 'mat-1', student_document_id: null, highlight_box: null }, error: null }))
       .mockReturnValueOnce(query({ data: { file_path: 'course-materials/notes.pdf', file_type: 'pdf', file_name: 'Notes', linked_url: null }, error: null }));
 
     const resolved = await resolveCitationSource(citation({ chunkId: 'chunk-1' }));
@@ -58,8 +58,28 @@ describe('resolveCitationSource', () => {
       fileName: 'Notes',
       materialId: 'mat-1',
       linkedUrl: null,
-      thumbnailPaths: null,
+      highlightBox: null,
     });
+  });
+
+  it("carries the chunk's highlight box when ingestion matched one", async () => {
+    mocks.from
+      .mockReturnValueOnce(query({ data: { material_id: 'mat-1', student_document_id: null, highlight_box: [0.1, 0.2, 0.6, 0.3] }, error: null }))
+      .mockReturnValueOnce(query({ data: { file_path: 'course-materials/notes.pdf', file_type: 'pdf', file_name: 'Notes', linked_url: null }, error: null }));
+
+    const resolved = await resolveCitationSource(citation({ chunkId: 'chunk-1' }));
+
+    expect(resolved.highlightBox).toEqual([0.1, 0.2, 0.6, 0.3]);
+  });
+
+  it('ignores a malformed highlight box', async () => {
+    mocks.from
+      .mockReturnValueOnce(query({ data: { material_id: 'mat-1', student_document_id: null, highlight_box: { bad: true } }, error: null }))
+      .mockReturnValueOnce(query({ data: { file_path: 'course-materials/notes.pdf', file_type: 'pdf', file_name: 'Notes', linked_url: null }, error: null }));
+
+    const resolved = await resolveCitationSource(citation({ chunkId: 'chunk-1' }));
+
+    expect(resolved.highlightBox).toBeNull();
   });
 
   it('resolves a student document to the student-documents bucket', async () => {
