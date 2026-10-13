@@ -13,6 +13,7 @@ import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
 import { supabase } from '@/integrations/supabase/client';
 
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
+import { useCourseModelTiers } from '@/features/chat-settings/useCourseModelTiers';
 import { ConversationsSidebar } from '@/features/student-chat/ConversationsSidebar';
 import { DocumentScopeSelector } from '@/features/student-chat/DocumentScopeSelector';
 import { DocumentViewerDialog } from '@/features/student-chat/DocumentViewerDialog';
@@ -73,6 +74,11 @@ export default function StudentChat() {
     openingCitationKey,
     clearClearViewSource,
   } = useStudentChat(routeConversationId || null);
+
+  const courseModelTiers = useCourseModelTiers(selectedCourseId);
+  useEffect(() => {
+    if (courseModelTiers.isLoaded) setSelectedModel(courseModelTiers.defaultTier);
+  }, [courseModelTiers, setSelectedModel]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -221,6 +227,7 @@ export default function StudentChat() {
             onStop={stopGenerating}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}
+            modelOptions={courseModelTiers.allowedTiers}
             documentSelector={(
               <DocumentScopeSelector
                 documents={availableDocuments}
