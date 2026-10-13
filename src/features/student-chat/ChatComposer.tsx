@@ -25,6 +25,8 @@ interface ChatComposerProps {
   documentHint?: string | null;
   selectedModel?: ChatModelTier;
   onModelChange?: (model: ChatModelTier) => void;
+  // Tiers the course allows; every tier when omitted.
+  modelOptions?: ChatModelTier[];
 }
 
 export function ChatComposer({
@@ -40,6 +42,7 @@ export function ChatComposer({
   documentHint,
   selectedModel,
   onModelChange,
+  modelOptions,
 }: ChatComposerProps) {
   const selectedModelOption = CHAT_MODEL_OPTIONS.find((modelOption) => modelOption.value === selectedModel);
   const selectedModelLabel = selectedModelOption?.label ?? 'GPT-5.6 Luna';
@@ -98,7 +101,7 @@ export function ChatComposer({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="top" className="w-56">
-                  {CHAT_MODEL_OPTIONS.map((option) => (
+                  {CHAT_MODEL_OPTIONS.filter((option) => !modelOptions || modelOptions.includes(option.value)).map((option) => (
                     <DropdownMenuItem
                       key={option.value}
                       onSelect={() => onModelChange(option.value)}
