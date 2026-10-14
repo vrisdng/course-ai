@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   chat: {} as Record<string, unknown>, auth: {} as Record<string, unknown>, invoke: vi.fn(), toastSuccess: vi.fn(),
+  modelTiers: { allowedTiers: ['fast', 'smart', 'pro'], defaultTier: 'fast', isLoaded: false } as Record<string, unknown>,
 }));
+vi.mock('@/features/chat-settings/useCourseModelTiers', () => ({ useCourseModelTiers: vi.fn(() => mocks.modelTiers) }));
 vi.mock('@/features/student-chat/useStudentChat', () => ({ useStudentChat: vi.fn(() => mocks.chat) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => mocks.auth }));
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { functions: { invoke: mocks.invoke } } }));
@@ -21,7 +23,7 @@ vi.mock('@/features/student-chat/MessageList', () => ({ MessageList: (props: Rec
   <button onClick={() => (props.onSuggestionClick as (value: string) => void)('suggestion')}>suggest</button>
 </section> }));
 vi.mock('@/features/student-chat/ChatComposer', () => ({ ChatComposer: (props: Record<string, unknown>) => <section>
-  composer:{String(props.input)} hint:{String(props.documentHint)}
+  composer:{String(props.input)} hint:{String(props.documentHint)} models:{String(props.modelOptions)}
   <button onClick={() => (props.onSend as () => void)()}>send</button>{props.documentSelector as React.ReactNode}
 </section> }));
 vi.mock('@/features/student-chat/DocumentScopeSelector', () => ({ DocumentScopeSelector: (props: Record<string, unknown>) => <div>
@@ -65,6 +67,17 @@ describe('StudentChat page', () => {
       deleteConversation: fn(), clearAllConversations: fn(), openSourcesForMessage: fn(), focusCitation: fn(), openCitationSource: fn(),
       closeActiveVideoSource: fn(), clearClearViewSource: fn(), activeViewerSource: null, clearViewSource: null,
     };
+    mocks.modelTiers = { allowedTiers: ['fast', 'smart', 'pro'], defaultTier: 'fast', isLoaded: false };
+  });
+  it("starts on the course's default model and only offers its allowed models", () => {
+    mocks.modelTiers = { allowedTiers: ['smart', 'pro'], defaultTier: 'pro', isLoaded: true };
+    renderPage();
+    expect(mocks.chat.setSelectedModel).toHaveBeenCalledWith('pro');
+    expect(screen.getByText(/models:smart,pro/)).toBeInTheDocument();
+  });
+  it('keeps the current model until the course settings load', () => {
+    renderPage();
+    expect(mocks.chat.setSelectedModel).not.toHaveBeenCalled();
   });
   it('composes course, document, chat, source, and video states', () => {
     renderPage();

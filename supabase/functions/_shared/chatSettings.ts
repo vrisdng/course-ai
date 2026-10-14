@@ -1,6 +1,8 @@
 // Per-course chat and retrieval settings that admins tune from the dashboard.
 // Rows live in public.course_chat_settings; anything missing or out of range
 // falls back to, or is clamped against, the defaults and ranges below.
+// The admin dashboard imports this file too (src/features/chat-settings), so
+// keep it free of Deno and URL imports.
 import type { ChatModelTier } from "./query.ts";
 
 export interface ChatSettings {
