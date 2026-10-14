@@ -7,6 +7,7 @@ import {
   rerankRetrievedChunks,
   tokenizeForLexicalScore,
 } from "./retrieval.ts";
+import { resolveChatSettings } from "./chatSettings.ts";
 
 describe("tokenizeForLexicalScore", () => {
   it("lowercases, strips punctuation, and drops short/stop words", () => {
@@ -77,6 +78,38 @@ describe("getRetrievalSettings", () => {
       finalCount: 10,
     });
   });
+
+  it("reads thresholds and counts from course chat settings", () => {
+    const settings = resolveChatSettings({
+      match_threshold: 0.3,
+      summary_match_threshold: 0.25,
+      match_count: 20,
+      summary_match_count: 40,
+      filtered_match_count: 26,
+      relevance_floor: 0.35,
+      summary_relevance_floor: 0.2,
+      final_count: 6,
+    });
+    expect(getRetrievalSettings({ isSummaryQuery: false, hasSelectedDocumentFilter: false }, settings)).toEqual({
+      matchThreshold: 0.3,
+      matchCount: 20,
+      relevanceFloor: 0.35,
+      finalCount: 6,
+    });
+    expect(getRetrievalSettings({ isSummaryQuery: true, hasSelectedDocumentFilter: false }, settings)).toEqual({
+      matchThreshold: 0.25,
+      matchCount: 40,
+      relevanceFloor: 0.2,
+      finalCount: 6,
+    });
+    expect(getRetrievalSettings({ isSummaryQuery: false, hasSelectedDocumentFilter: true }, settings)).toEqual({
+      matchThreshold: -2,
+      matchCount: 26,
+      relevanceFloor: -1,
+      finalCount: 6,
+    });
+    expect(getRetrievalSettings({ isSummaryQuery: true, hasSelectedDocumentFilter: true }, settings).matchCount).toBe(40);
+  });
 });
 
 describe("rerankRetrievedChunks", () => {
@@ -110,6 +143,15 @@ describe("rerankRetrievedChunks", () => {
       relevance_score: i / 5,
     }));
     expect(rerankRetrievedChunks(chunks, "text", 2)).toHaveLength(2);
+  });
+
+  it("orders purely by semantic score when the semantic weight is 1", () => {
+    const chunks = [
+      { id: "semantic-only", chunk_text: "completely unrelated filler text", relevance_score: 0.9 },
+      { id: "lexical-match", chunk_text: "virtual memory paging algorithm", relevance_score: 0.6 },
+    ];
+    const result = rerankRetrievedChunks(chunks, "virtual memory paging", 2, 1);
+    expect(result[0].id).toBe("semantic-only");
   });
 
   it("clamps out-of-range relevance scores before blending", () => {

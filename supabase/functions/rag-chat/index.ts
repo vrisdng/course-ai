@@ -34,18 +34,21 @@ import {
   inferUnresolvedReason,
   isLikelyAmbiguousQuestion,
   normalizeSelectedDocumentIds,
-  resolveChatModelTier,
   type ChatModelTier,
   type ResolvedSelectedMaterial,
 } from "../_shared/query.ts";
+import {
+  resolveChatSettings,
+  resolveRequestedModelTier,
+  type ChatSettings,
+  type CourseChatSettingsRow,
+} from "../_shared/chatSettings.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
 import { parseVideoEvidenceSelection, type VideoEvidenceCandidate, type VideoEvidenceSegment } from "../_shared/videoEvidence.ts";
 
 const CITATION_PIPELINE_VERSION = "2026-10-12-cite-blocks-video-evidence-v1";
-// Characters of a source shown to the answer model.
-const SOURCE_CONTEXT_CHARS = 1300;
 
 // Bucket that image-typed course materials live in. Stable image citations store
 // "<bucket>/<file_path>" references so the embedded markdown stays valid across
@@ -69,7 +72,9 @@ const CHAT_MODEL_CONFIGS: Record<ChatModelTier, ChatModelConfig> = {
   pro: { modelId: "gpt-5.6-sol", displayName: "Pro (GPT-5.6 Sol)" },
 };
 
-const CONVERSATION_HISTORY_FETCH_LIMIT = 24;
+// Covers the largest history_turn_limit a course can set (40), with room for
+// messages dropped as empty once citation tokens are stripped.
+const CONVERSATION_HISTORY_FETCH_LIMIT = 50;
 
 interface ChatRequest {
   message: string;
@@ -464,6 +469,23 @@ async function selectVideoEvidence(options: {
   }
 }
 
+// The course's admin-tuned chat settings, or the defaults when the row is
+// missing or unreadable.
+async function loadCourseChatSettings(
+  client: ReturnType<typeof createClient>,
+  courseId: string,
+): Promise<ChatSettings> {
+  const { data, error } = await client
+    .from("course_chat_settings")
+    .select("*")
+    .eq("course_id", courseId)
+    .maybeSingle();
+  if (error) {
+    console.warn(`Using default chat settings for course ${courseId}: ${error.message}`);
+  }
+  return resolveChatSettings((data as CourseChatSettingsRow | null) ?? null);
+}
+
 async function hasCourseAccess(
   supabaseClient: ReturnType<typeof createClient>,
   userId: string,
@@ -740,9 +762,6 @@ serve(async (req: Request) => {
     const selectedDocumentIds = normalizeSelectedDocumentIds(rawSelectedDocumentIds);
     const skipRag = rawSkipRag === true;
 
-    const modelTier = resolveChatModelTier(rawModel);
-    chatModelConfig = CHAT_MODEL_CONFIGS[modelTier];
-
     if (!trimmedMessage) {
       return new Response(
         JSON.stringify({ error: "Message is required" }),
@@ -766,8 +785,8 @@ serve(async (req: Request) => {
     const activeConversationId = resolved.conversationId;
     const activeCourseId = resolved.courseId;
 
-    // ── Fetch conversation history (always needed) ──────────────────────
-    const [activeAcademicTermId, { data: recentMessages, error: historyError }] = await Promise.all([
+    // ── Fetch conversation history and course settings (always needed) ──
+    const [activeAcademicTermId, { data: recentMessages, error: historyError }, chatSettings] = await Promise.all([
       getActiveAcademicTermId(supabaseClient),
       supabaseClient
         .from("messages")
@@ -775,14 +794,24 @@ serve(async (req: Request) => {
         .eq("conversation_id", activeConversationId)
         .order("created_at", { ascending: false })
         .limit(CONVERSATION_HISTORY_FETCH_LIMIT),
+      loadCourseChatSettings(supabaseAdminClient, activeCourseId),
     ]);
 
     if (historyError) {
       console.error("Failed to load conversation history:", historyError);
     }
 
+    chatModelConfig = CHAT_MODEL_CONFIGS[resolveRequestedModelTier(rawModel, chatSettings)];
+    const courseInstructionsBlock = chatSettings.courseInstructions
+      ? `\n\nCOURSE INSTRUCTIONS (set by the course staff):\n${chatSettings.courseInstructions}`
+      : "";
+
     const priorMessages = [...(recentMessages || [])].reverse();
-    const historyTurns = buildConversationHistoryTurns(priorMessages);
+    const historyTurns = buildConversationHistoryTurns(priorMessages, {
+      turnLimit: chatSettings.historyTurnLimit,
+      charBudget: chatSettings.historyCharBudget,
+      messageClip: chatSettings.historyMessageClip,
+    });
 
     // ── Variables shared by both RAG and no-RAG paths ─────────────────
     let retrievedChunks: RetrievedChunk[] = [];
@@ -807,7 +836,7 @@ FORMATTING: Every section title or topic heading MUST use ## markdown headings. 
 
 Do NOT include any citation markers (<<cite:N>>) since there are no retrieved sources.
 
-Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${customInstructionsBlock}`;
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}`;
     } else {
       // ── RAG path: retrieve relevant chunks then answer ─────────────────
       selectedMaterials = await resolveSelectedMaterials(
@@ -827,13 +856,15 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
 
       throwIfAborted(requestAbortController.signal);
 
-      const rewrittenQuery = await rewriteQueryForRetrieval({
-        modelConfig: chatModelConfig,
-        apiKey: chatApiKey,
-        studentQuestion: trimmedMessage,
-        historyContext,
-        signal: requestAbortController.signal,
-      });
+      const rewrittenQuery = chatSettings.queryRewriteEnabled
+        ? await rewriteQueryForRetrieval({
+          modelConfig: chatModelConfig,
+          apiKey: chatApiKey,
+          studentQuestion: trimmedMessage,
+          historyContext,
+          signal: requestAbortController.signal,
+        })
+        : trimmedMessage;
 
       // Only embed the rewritten query if it differs from the original
       const embeddings = [originalEmbedding];
@@ -856,7 +887,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
       } = getRetrievalSettings({
         isSummaryQuery,
         hasSelectedDocumentFilter: selectedMaterialIds.length > 0,
-      });
+      }, chatSettings);
 
       const retrievedChunkGroups = await Promise.all(
         embeddings.map((embedding) =>
@@ -878,14 +909,14 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
       let rerankedChunks = rerankRetrievedChunks(
         highRecallChunks,
         rewrittenQuery || trimmedMessage,
-        finalCount
+        finalCount,
+        chatSettings.semanticWeight,
       );
 
       // For summary queries on video materials: spread chunks across the full timeline
       // by dropping chunks whose time windows heavily overlap an already-selected chunk
       if (isSummaryQuery) {
         const spread: typeof rerankedChunks = [];
-        const OVERLAP_THRESHOLD_MS = 60_000; // 1 minute
         for (const chunk of rerankedChunks) {
           if (typeof chunk.start_ms !== "number") {
             spread.push(chunk);
@@ -896,7 +927,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
             (c) =>
               typeof c.start_ms === "number" &&
               c.start_ms !== null &&
-              Math.abs(c.start_ms - chunkStart) < OVERLAP_THRESHOLD_MS
+              Math.abs(c.start_ms - chunkStart) < chatSettings.videoSpreadWindowMs
           );
           if (!overlaps) spread.push(chunk);
         }
@@ -977,11 +1008,11 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
           ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
           const blocks = blocksByChunk.get(chunk.id);
           if (blocks) {
-            const labelled = formatLabelledBlocks(index + 1, blocks.map((b) => b.text), SOURCE_CONTEXT_CHARS);
+            const labelled = formatLabelledBlocks(index + 1, blocks.map((b) => b.text), chatSettings.sourceContextChars);
             shownBlocksBySource.set(index + 1, blocks.slice(0, labelled.shownCount));
             ragContext += `${labelled.text}\n\n`;
           } else {
-            ragContext += `${clipText(chunk.chunk_text, SOURCE_CONTEXT_CHARS)}\n\n`;
+            ragContext += `${clipText(chunk.chunk_text, chatSettings.sourceContextChars)}\n\n`;
           }
           const imageRef = imageSourceRefs.get(index + 1);
           if (imageRef) {
@@ -1026,7 +1057,7 @@ IMAGES: A source labelled with an "Image reference token" is a course image (dia
 
 RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If the question is outside the scope of the course materials, say so and suggest the student search online. Do not force-fit unrelated material.
 
-Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${customInstructionsBlock}
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}
 
 ${retrievalScopeInstruction}
 
@@ -1135,8 +1166,8 @@ ${ragContext}`;
               systemPrompt,
               userPrompt: trimmedMessage,
               historyTurns,
-              temperature: 0.4,
-              maxOutputTokens: 2000,
+              temperature: chatSettings.answerTemperature,
+              maxOutputTokens: chatSettings.maxAnswerTokens,
               signal: requestAbortController.signal,
               onTextDelta: (delta) => {
                 ensureStreamActive();

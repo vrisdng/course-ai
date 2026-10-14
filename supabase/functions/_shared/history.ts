@@ -1,5 +1,6 @@
 // Conversation history windowing/budgeting for rag-chat prompts.
 import { clipText, stripTrailingSourcesSection } from "./citations.ts";
+import { DEFAULT_CHAT_SETTINGS } from "./chatSettings.ts";
 
 export interface ConversationHistoryTurn {
   role: "user" | "assistant";
@@ -11,9 +12,20 @@ export interface OpenAIChatMessage {
   content: string;
 }
 
-const CONVERSATION_HISTORY_PROMPT_LIMIT = 14;
-const CONVERSATION_HISTORY_CHAR_BUDGET = 9000;
-const CONVERSATION_HISTORY_MESSAGE_CLIP = 850;
+export interface HistoryLimits {
+  // Most recent messages kept.
+  turnLimit: number;
+  // Total characters kept across those messages.
+  charBudget: number;
+  // Characters kept per message.
+  messageClip: number;
+}
+
+const DEFAULT_HISTORY_LIMITS: HistoryLimits = {
+  turnLimit: DEFAULT_CHAT_SETTINGS.historyTurnLimit,
+  charBudget: DEFAULT_CHAT_SETTINGS.historyCharBudget,
+  messageClip: DEFAULT_CHAT_SETTINGS.historyMessageClip,
+};
 const MEMORY_CITATION_TOKEN_PATTERN = /<<\s*cite\s*:\s*[1-9]\d*\s*>>/gi;
 
 export function sanitizeMessageForMemory(content: string): string {
@@ -27,8 +39,13 @@ export function sanitizeMessageForMemory(content: string): string {
 }
 
 export function buildConversationHistoryTurns(
-  rawMessages: Array<{ role: string; content: string }>
+  rawMessages: Array<{ role: string; content: string }>,
+  limits: HistoryLimits = DEFAULT_HISTORY_LIMITS,
 ): ConversationHistoryTurn[] {
+  if (limits.turnLimit <= 0) {
+    return [];
+  }
+
   const normalized = rawMessages
     .map((message): ConversationHistoryTurn | null => {
       const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
@@ -49,12 +66,12 @@ export function buildConversationHistoryTurns(
 
       return {
         role,
-        content: clipText(cleaned, CONVERSATION_HISTORY_MESSAGE_CLIP),
+        content: clipText(cleaned, limits.messageClip),
       };
     })
     .filter((message): message is ConversationHistoryTurn => Boolean(message));
 
-  const tailLimited = normalized.slice(-CONVERSATION_HISTORY_PROMPT_LIMIT);
+  const tailLimited = normalized.slice(-limits.turnLimit);
 
   let totalChars = 0;
   const budgeted: ConversationHistoryTurn[] = [];
@@ -62,7 +79,7 @@ export function buildConversationHistoryTurns(
     const message = tailLimited[index];
     const projectedSize = message.content.length + 24;
 
-    if (budgeted.length > 0 && totalChars + projectedSize > CONVERSATION_HISTORY_CHAR_BUDGET) {
+    if (budgeted.length > 0 && totalChars + projectedSize > limits.charBudget) {
       break;
     }
 

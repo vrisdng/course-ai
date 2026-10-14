@@ -268,6 +268,95 @@ export type Database = {
           },
         ]
       }
+      course_chat_settings: {
+        Row: {
+          allowed_model_tiers: string[]
+          answer_temperature: number
+          course_id: string
+          course_instructions: string
+          created_at: string
+          default_model_tier: string
+          filtered_match_count: number
+          final_count: number
+          history_char_budget: number
+          history_message_clip: number
+          history_turn_limit: number
+          match_count: number
+          match_threshold: number
+          max_answer_tokens: number
+          query_rewrite_enabled: boolean
+          relevance_floor: number
+          semantic_weight: number
+          source_context_chars: number
+          summary_match_count: number
+          summary_match_threshold: number
+          summary_relevance_floor: number
+          updated_at: string
+          updated_by: string | null
+          video_spread_window_ms: number
+        }
+        Insert: {
+          allowed_model_tiers?: string[]
+          answer_temperature?: number
+          course_id: string
+          course_instructions?: string
+          created_at?: string
+          default_model_tier?: string
+          filtered_match_count?: number
+          final_count?: number
+          history_char_budget?: number
+          history_message_clip?: number
+          history_turn_limit?: number
+          match_count?: number
+          match_threshold?: number
+          max_answer_tokens?: number
+          query_rewrite_enabled?: boolean
+          relevance_floor?: number
+          semantic_weight?: number
+          source_context_chars?: number
+          summary_match_count?: number
+          summary_match_threshold?: number
+          summary_relevance_floor?: number
+          updated_at?: string
+          updated_by?: string | null
+          video_spread_window_ms?: number
+        }
+        Update: {
+          allowed_model_tiers?: string[]
+          answer_temperature?: number
+          course_id?: string
+          course_instructions?: string
+          created_at?: string
+          default_model_tier?: string
+          filtered_match_count?: number
+          final_count?: number
+          history_char_budget?: number
+          history_message_clip?: number
+          history_turn_limit?: number
+          match_count?: number
+          match_threshold?: number
+          max_answer_tokens?: number
+          query_rewrite_enabled?: boolean
+          relevance_floor?: number
+          semantic_weight?: number
+          source_context_chars?: number
+          summary_match_count?: number
+          summary_match_threshold?: number
+          summary_relevance_floor?: number
+          updated_at?: string
+          updated_by?: string | null
+          video_spread_window_ms?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_chat_settings_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: true
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       course_invites: {
         Row: {
           course_id: string
