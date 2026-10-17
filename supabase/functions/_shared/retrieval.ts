@@ -151,3 +151,20 @@ export function rerankRetrievedChunks<T extends RerankableChunk>(
     relevance_score: entry.semantic,
   }));
 }
+
+// For summary questions over videos: spreads chunks across the timeline by
+// dropping any that start within windowMs of an already-kept chunk. Chunks
+// without a timestamp (documents) are always kept.
+export function spreadAcrossTimeline<T extends { start_ms: number | null }>(chunks: T[], windowMs: number): T[] {
+  const kept: T[] = [];
+  for (const chunk of chunks) {
+    const start = chunk.start_ms;
+    if (typeof start !== "number") {
+      kept.push(chunk);
+      continue;
+    }
+    const overlaps = kept.some((other) => typeof other.start_ms === "number" && Math.abs(other.start_ms - start) < windowMs);
+    if (!overlaps) kept.push(chunk);
+  }
+  return kept;
+}
