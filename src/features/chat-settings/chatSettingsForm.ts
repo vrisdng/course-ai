@@ -83,6 +83,32 @@ export function fromDisplayValue(field: NumericFieldSpec, value: number): number
   return value * (field.displayScale ?? 1);
 }
 
+export interface SliderRange {
+  min: number;
+  max: number;
+  step: number;
+}
+
+// A field's range and step in the units the admin sees.
+export function sliderRange(field: NumericFieldSpec): SliderRange {
+  const range = CHAT_SETTING_RANGES[field.key];
+  return { min: toDisplayValue(field, range.min), max: toDisplayValue(field, range.max), step: field.step };
+}
+
+function decimalsOf(step: number): number {
+  return (String(step).split('.')[1] ?? '').length;
+}
+
+// A slider's display value rounded to the field's step (counted from the
+// minimum), within range, and free of floating-point noise such as
+// 0.21000000000000002.
+export function snapToStep(field: NumericFieldSpec, displayValue: number): number {
+  const { min, max, step } = sliderRange(field);
+  const stepped = min + Math.round((displayValue - min) / step) * step;
+  const clamped = Math.min(max, Math.max(min, stepped));
+  return Number(clamped.toFixed(decimalsOf(step)));
+}
+
 export type ChatSettingsErrors = Partial<Record<keyof ChatSettings, string>>;
 
 export function validateChatSettings(settings: ChatSettings): ChatSettingsErrors {
