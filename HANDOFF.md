@@ -117,10 +117,11 @@ Clicking a PDF citation shows the cited page as a pre-rendered image with exactl
 
 DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get page images, blocks (with LaTeX maths) and block-level citations. Before this, their text came from the document XML: equations were dropped and page numbers were guessed.
 
-- **Flow:** on a fresh DOCX/PPTX job, `process-material-job` signs a download URL for the original and an upload URL for `course-materials/converted/<material_id>.pdf`, then calls the converter (`services/office-converter`, LibreOffice in a Vercel container). It records `materials.converted_pdf_path` and requeues the job with `filePath` set to the PDF. From there the PDF pipeline runs unchanged.
+- **Flow:** on a fresh DOCX/PPTX job, `process-material-job` signs a download URL for the original and runs a CloudConvert job (import/url → convert → export/url) on the sync endpoint (`_shared/officeConversion.ts`). It downloads the PDF, stores it at `course-materials/converted/<material_id>.pdf`, records `materials.converted_pdf_path` and requeues the job with `filePath` set to the PDF. From there the PDF pipeline runs unchanged.
 - **Viewer:** `resolveCitationSource` previews converted materials through their PDF (`previewAsPdf`), so citations open as page images with the cited blocks highlighted. `materials.file_path` still points at the original.
-- **Fallback:** if `OFFICE_CONVERTER_*` secrets are unset or conversion fails, the job falls through to the old XML extraction (logged as a warning).
-- **Trust boundary:** the same as the renderer: a shared secret, signed URLs only, and only the Supabase origin accepted.
+- **Fallback:** if `CLOUDCONVERT_API_KEY` is unset or conversion fails, the job falls through to the old XML extraction (logged as a warning).
+- **Trust boundary:** CloudConvert receives a 10-minute signed URL for the original and stores the files temporarily under its own retention policy. Conversions use CloudConvert credits; a failed or out-of-credit job falls back to XML extraction.
+- **History:** this replaced a self-hosted LibreOffice container (`services/office-converter`, removed 2026-10-17; see git history).
 - **Limits:**
   - PowerPoint equations depend on the fallback picture PowerPoint saves with each one. Test decks made with pandoc have none, so their equations convert blank. This hasn't yet been verified on a PowerPoint-authored deck.
   - Deleting a material doesn't remove `converted/` or `page-images/` objects.

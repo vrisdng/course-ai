@@ -19,7 +19,7 @@ RAG-based course companion: students chat over course materials with cited answe
 
 **Vercel Functions** (`api/`) — Node, not Deno. One function, `render-pdf-pages.ts`: renders PDF pages to WebP + text-line boxes for `process-material-job`, authenticated by a shared secret. Helpers in `api/_lib/` (the `_` prefix keeps them from becoming routes). Relative imports need `.js` extensions (ESM on Vercel's Node runtime).
 
-**Office converter** (`services/office-converter/`) — DOCX/PPTX → PDF with LibreOffice, a separate Vercel project deployed as a container (`Dockerfile.vercel`). Node runs its `.ts` directly, so keep it erasable-only and import with `.ts` extensions. See its README.
+**Office → PDF** — DOCX/PPTX are converted by the CloudConvert API from `process-material-job` (`_shared/officeConversion.ts`, `CLOUDCONVERT_API_KEY`). No service of our own.
 
 **Backend** (`supabase/`) — 13 Deno Edge Functions in `supabase/functions/`, 30 SQL migrations in `supabase/migrations/` (applied in filename/timestamp order; several reverse earlier ones — grep before assuming a table/column doesn't exist).
 - `supabase/functions/_shared/` — the real backend library: `llm.ts` (OpenAI wrapper — **all** LLM calls route through here), `retrieval.ts`, `citations.ts`, `chunking.ts`, `query.ts`, `history.ts`, `cors.ts`, `sse.ts`, `email.ts`. Reuse these; don't reimplement retrieval/citation/CORS logic per function.
