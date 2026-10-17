@@ -29,6 +29,6 @@ describe('ChatComposer', () => {
     const value = props(); const onModelChange = vi.fn();
     render(<ChatComposer {...value} input="ask" selectedModel="smart" onModelChange={onModelChange} />);
     expect(screen.getByRole('button', { name: /GPT-5.6 Terra/i })).toBeInTheDocument();
-    expect(screen.getByText(/EduChat uses RAG/)).toBeInTheDocument();
+    expect(screen.getByText(/CEEChat uses RAG/)).toBeInTheDocument();
   });
 });

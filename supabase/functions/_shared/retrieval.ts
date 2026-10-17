@@ -1,4 +1,6 @@
 // Chunk dedup, lexical scoring, and reranking for rag-chat retrieval.
+import { DEFAULT_CHAT_SETTINGS, type ChatSettings } from "./chatSettings.ts";
+
 export interface RerankableChunk {
   id: string;
   chunk_text: string;
@@ -12,33 +14,40 @@ export interface RetrievalSettings {
   finalCount: number;
 }
 
-export function getRetrievalSettings(options: {
-  isSummaryQuery: boolean;
-  hasSelectedDocumentFilter: boolean;
-}): RetrievalSettings {
+export function getRetrievalSettings(
+  options: {
+    isSummaryQuery: boolean;
+    hasSelectedDocumentFilter: boolean;
+  },
+  settings: ChatSettings = DEFAULT_CHAT_SETTINGS,
+): RetrievalSettings {
   // An explicit selection is already a strong relevance constraint. Always
   // return its best embedded chunks and use reranking/model judgment instead
   // of refusing solely because an arbitrary cosine cutoff was not reached.
   if (options.hasSelectedDocumentFilter) {
     return {
       matchThreshold: -2,
-      matchCount: options.isSummaryQuery ? 30 : 24,
+      matchCount: options.isSummaryQuery ? settings.summaryMatchCount : settings.filteredMatchCount,
       relevanceFloor: -1,
-      finalCount: 10,
+      finalCount: settings.finalCount,
     };
   }
 
-  // Calibrated for text-embedding-3-large on this corpus (2026-10-01). Short,
-  // casual questions ("when is the exam") score their answering chunk as low
-  // as 0.30–0.33, while short off-topic questions reach 0.29, so no cutoff
-  // separates them cleanly. The floor favours keeping answerable questions
-  // and leaves off-topic rejection to the model, as the Gemini setup did.
-  // Re-calibrate when the embedding model changes.
   if (options.isSummaryQuery) {
-    return { matchThreshold: 0.15, matchCount: 30, relevanceFloor: 0.15, finalCount: 10 };
+    return {
+      matchThreshold: settings.summaryMatchThreshold,
+      matchCount: settings.summaryMatchCount,
+      relevanceFloor: settings.summaryRelevanceFloor,
+      finalCount: settings.finalCount,
+    };
   }
 
-  return { matchThreshold: 0.20, matchCount: 18, relevanceFloor: 0.20, finalCount: 10 };
+  return {
+    matchThreshold: settings.matchThreshold,
+    matchCount: settings.matchCount,
+    relevanceFloor: settings.relevanceFloor,
+    finalCount: settings.finalCount,
+  };
 }
 
 const LEXICAL_STOP_WORDS = new Set([
@@ -120,11 +129,16 @@ export function dedupeRetrievedChunksByBestScore<T extends RerankableChunk>(chun
   return Array.from(byChunkId.values());
 }
 
-export function rerankRetrievedChunks<T extends RerankableChunk>(chunks: T[], query: string, topK: number): T[] {
+export function rerankRetrievedChunks<T extends RerankableChunk>(
+  chunks: T[],
+  query: string,
+  topK: number,
+  semanticWeight = DEFAULT_CHAT_SETTINGS.semanticWeight,
+): T[] {
   const scored = chunks.map((chunk) => {
     const semantic = Math.max(0, Math.min(1, chunk.relevance_score));
     const lexical = lexicalOverlapScore(query, chunk.chunk_text);
-    const combinedScore = semantic * 0.72 + lexical * 0.28;
+    const combinedScore = semantic * semanticWeight + lexical * (1 - semanticWeight);
     return { chunk, semantic, combinedScore };
   });
 

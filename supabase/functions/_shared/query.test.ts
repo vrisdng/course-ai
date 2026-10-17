@@ -7,20 +7,7 @@ import {
   inferUnresolvedReason,
   isLikelyAmbiguousQuestion,
   normalizeSelectedDocumentIds,
-  resolveChatModelTier,
 } from "./query.ts";
-
-describe("resolveChatModelTier", () => {
-  it("passes through valid tiers", () => {
-    expect(resolveChatModelTier("smart")).toBe("smart");
-    expect(resolveChatModelTier("pro")).toBe("pro");
-  });
-
-  it("defaults invalid or missing tiers to fast", () => {
-    expect(resolveChatModelTier("bogus")).toBe("fast");
-    expect(resolveChatModelTier(undefined)).toBe("fast");
-  });
-});
 
 describe("normalizeSelectedDocumentIds", () => {
   const validId = "123e4567-e89b-12d3-a456-426614174000";

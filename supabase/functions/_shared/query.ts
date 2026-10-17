@@ -17,13 +17,6 @@ const AMBIGUOUS_QUERY_MARKERS = [
   /\bmore on that\b/i,
 ];
 
-export function resolveChatModelTier(raw: unknown): ChatModelTier {
-  if (raw === "fast" || raw === "smart" || raw === "pro") {
-    return raw;
-  }
-  return "fast";
-}
-
 export function normalizeSelectedDocumentIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];

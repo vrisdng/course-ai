@@ -1,5 +1,5 @@
 {
-  "name": "edu-chat",
+  "name": "cee-chat",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -15,6 +15,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1147.0",
+    "@aws-sdk/signature-v4": "^3.374.0",
     "@hookform/resolvers": "^3.10.0",
     "@napi-rs/canvas": "^0.1.100",
     "@radix-ui/react-alert-dialog": "^1.1.14",
@@ -43,11 +45,14 @@
     "react-markdown": "^10.1.0",
     "react-pdf": "^10.5.0",
     "react-router-dom": "^6.30.1",
+    "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "tus-js-client": "^4.3.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -73,5 +78,10 @@
     "typescript-eslint": "^8.38.0",
     "vite": "^5.4.19",
     "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "rehype-katex": {
+      "katex": "$katex"
+    }
   }
 }

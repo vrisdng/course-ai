@@ -1,6 +1,6 @@
 # Tech Debt Backlog
 
-Strategic backlog of known tech debt for EduChat, ordered by priority. Effort estimates assume one engineer working focused. This is the **planning** doc — read `HANDOFF.md` first for the landmines that will bite you while editing a specific file.
+Strategic backlog of known tech debt for CEEChat, ordered by priority. Effort estimates assume one engineer working focused. This is the **planning** doc — read `HANDOFF.md` first for the landmines that will bite you while editing a specific file.
 
 Effort legend: 🟢 quick (< 1 hr) · 🟡 medium (half-day to a couple days) · 🔴 large (multi-day / risky).
 
@@ -72,7 +72,7 @@ All resolved 2026-07/09 unless noted. Active debts live in the sections above.
 - ✅ Lint clean — 0 errors (was failing on `any`, `@ts-ignore`, empty blocks, `require()`).
 - ✅ `.env.example` added (names only).
 - ✅ `lovable-tagger` removed from `vite.config.ts`.
-- ✅ `package.json` renamed to `edu-chat` (was `vite_react_shadcn_ts`), version set to `1.0.0`.
+- ✅ `package.json` renamed to `edu-chat` (was `vite_react_shadcn_ts`; now `cee-chat`), version set to `1.0.0`.
 - ✅ Stale `bun.lockb` removed; `entities.json` / `mempalace.yaml` (unrelated note-taking artifacts) deleted.
 
 ---

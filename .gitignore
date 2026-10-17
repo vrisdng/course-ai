@@ -17,6 +17,12 @@ coverage
 .claude/
 .codegraph/
 
+# Local planning and implementation scratchpads
+/docs/scratchpad/
+/.build-r2.mjs
+/.r2*.mjs
+/test_files/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -32,3 +38,7 @@ external/*
 external
 .external 
 .playwright-mcp/
+
+# Supabase CLI local state
+supabase/.branches/
+supabase/.temp/start-secrets/

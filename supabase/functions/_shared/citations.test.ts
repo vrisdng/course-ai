@@ -87,12 +87,41 @@ describe("normalizeCitationTokens", () => {
     expect(normalizeCitationTokens("See <<cite:5>>.", 2)).toBe("See .");
   });
 
-  it("converts legacy [n] markers into cite tokens when in range", () => {
-    expect(normalizeCitationTokens("See [1].", 2)).toBe("See <<cite:1>>.");
+  it("leaves [n] and (n) as plain text, so maths like w^{(3)} is never turned into a citation", () => {
+    const answer = "Integrate $$\\int N_i EI w^{(4)} dx$$ twice; see [1] and O(1).";
+    expect(normalizeCitationTokens(answer, 4)).toBe(answer);
   });
 
-  it("leaves out-of-range [n] markers alone", () => {
-    expect(normalizeCitationTokens("See [9].", 2)).toBe("See [9].");
+  it("splits a token listing several sources into one token per source", () => {
+    expect(normalizeCitationTokens("Claim <<cite:2,3,5>>.", 5)).toBe("Claim <<cite:2>><<cite:3>><<cite:5>>.");
+    expect(normalizeCitationTokens("Claim << cite: 1 , 9 >>.", 2)).toBe("Claim <<cite:1>>.");
+  });
+});
+
+describe("normalizeCitationTokens with block labels", () => {
+  const blocks = (source: number) => ({ 1: 2, 2: 3 } as Record<number, number>)[source] ?? 0;
+
+  it("keeps valid block labels, lowercased and sorted", () => {
+    expect(normalizeCitationTokens("See <<cite:2b>>.", 2, blocks)).toBe("See <<cite:2b>>.");
+    expect(normalizeCitationTokens("See <<cite: 2C, 2B >>.", 2, blocks)).toBe("See <<cite:2b,2c>>.");
+  });
+
+  it("falls back to the whole source for labels that don't exist", () => {
+    expect(normalizeCitationTokens("See <<cite:2z>>.", 2, blocks)).toBe("See <<cite:2>>.");
+    expect(normalizeCitationTokens("See <<cite:2b>>.", 2)).toBe("See <<cite:2>>.");
+  });
+
+  it("splits a token that names several sources into one token per source", () => {
+    expect(normalizeCitationTokens("See <<cite:1a,2b>>.", 2, blocks)).toBe("See <<cite:1a>><<cite:2b>>.");
+  });
+
+  it("lets a whole-source citation win over blocks of it in the same marker", () => {
+    expect(normalizeCitationTokens("See <<cite:2,2b>>.", 2, blocks)).toBe("See <<cite:2>>.");
+    expect(normalizeCitationTokens("See <<cite:2b,2>>.", 2, blocks)).toBe("See <<cite:2>>.");
+  });
+
+  it("drops references to sources that don't exist", () => {
+    expect(normalizeCitationTokens("See <<cite:9a>>.", 2, blocks)).toBe("See .");
   });
 });
 

@@ -22,6 +22,23 @@ import { loadBlockBoxes, loadPageImage } from './pageImage';
 import { parseMaybeJson, parseSseEventBlock, type ParsedSseEvent } from './sse';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
+import { parseVideoEvidenceSegments } from './videoEvidence';
+
+interface StoredCitationRow {
+  id: string;
+  message_id: string;
+  chunk_id: string | null;
+  material_id?: string | null;
+  student_document_id?: string | null;
+  page_number?: number | null;
+  start_ms?: number | null;
+  end_ms?: number | null;
+  relevance_score: number | null;
+  excerpt: string | null;
+  image_url: string | null;
+  evidence_segments?: unknown;
+  block_ids?: string[] | null;
+}
 
 const RAG_CHAT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rag-chat`;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -61,29 +78,36 @@ interface ResolvedCitationSource {
   previewAsPdf: boolean;
 }
 
-// Resolves a citation's underlying file and its signed preview URL through the
-// chunks → materials/student_documents lookup. Kept separate from the open handler
-// so the lookup can be unit-tested without a database UI. Throws when the chunk or
-// its linked file cannot be found. Videos without a stored file (audio extracted)
-// return an empty filePath so the caller can fall back to the transcript-only path.
+// Saved source IDs remain usable when re-transcription replaces the source chunk.
 export async function resolveCitationSource(citation: Citation): Promise<ResolvedCitationSource> {
-  const { data: chunkRow, error: chunkError } = await supabase
-    .from('chunks')
-    .select('material_id, student_document_id, highlight_box')
-    .eq('id', citation.chunkId)
-    .maybeSingle();
+  let materialId = citation.materialId ?? null;
+  let studentDocumentId = citation.studentDocumentId ?? null;
+  let highlightBox: HighlightBox | null = null;
 
-  if (chunkError || !chunkRow) {
-    throw new Error(chunkError?.message || 'Unable to locate citation source chunk');
+  // The chunk holds the highlight box. It may be gone (re-transcription replaces
+  // it), in which case the citation's saved source IDs still open the file.
+  if (citation.chunkId) {
+    const { data: chunkRow, error: chunkError } = await supabase
+      .from('chunks')
+      .select('material_id, student_document_id, highlight_box')
+      .eq('id', citation.chunkId)
+      .maybeSingle();
+    if (chunkRow) {
+      materialId ??= chunkRow.material_id;
+      studentDocumentId ??= chunkRow.student_document_id;
+      highlightBox = isHighlightBox(chunkRow.highlight_box) ? chunkRow.highlight_box : null;
+    } else if (!materialId && !studentDocumentId) {
+      throw new Error(chunkError?.message || 'Unable to locate citation source chunk');
+    }
+  } else if (!materialId && !studentDocumentId) {
+    throw new Error('Unable to locate citation source chunk');
   }
 
-  const highlightBox = isHighlightBox(chunkRow.highlight_box) ? chunkRow.highlight_box : null;
-
-  if (chunkRow.material_id) {
+  if (materialId) {
     const { data: materialRow, error: materialError } = await supabase
       .from('materials')
       .select('file_path, file_type, file_name, linked_url, converted_pdf_path')
-      .eq('id', chunkRow.material_id)
+      .eq('id', materialId)
       .maybeSingle();
 
     if (materialError || !materialRow) {
@@ -100,18 +124,18 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
       filePath: materialRow.converted_pdf_path ?? materialRow.file_path ?? '',
       fileType: materialRow.file_type,
       fileName: materialRow.file_name,
-      materialId: chunkRow.material_id,
+      materialId,
       linkedUrl: materialRow.linked_url ?? null,
       highlightBox,
       previewAsPdf: Boolean(materialRow.converted_pdf_path),
     };
   }
 
-  if (chunkRow.student_document_id) {
+  if (studentDocumentId) {
     const { data: documentRow, error: documentError } = await supabase
       .from('student_documents')
       .select('file_path, file_type, file_name')
-      .eq('id', chunkRow.student_document_id)
+      .eq('id', studentDocumentId)
       .maybeSingle();
 
     if (documentError || !documentRow?.file_path) {
@@ -152,6 +176,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const [openingCitationKey, setOpeningCitationKey] = useState<string | null>(null);
   const [activeVideoSource, setActiveVideoSource] = useState<ActiveVideoSource | null>(null);
   const [activeViewerSource, setActiveViewerSource] = useState<ActiveViewerSource | null>(null);
+  const sourceOpenRequestIdRef = useRef(0);
   const [clearViewSource, setClearViewSource] = useState<ActiveViewerSource | null>(null);
 
   // The gallery lives in the side panel; the clear-view dialog is a separate
@@ -399,15 +424,16 @@ export function useStudentChat(routeConversationId: string | null = null) {
     const messageIds = rows.map((row) => row.id);
     const { data: citationRows, error: citationsError } = await supabase
       .from('citations')
-      .select('id, message_id, chunk_id, relevance_score, excerpt, image_url, block_ids')
+      .select('*')
       .in('message_id', messageIds);
 
     if (citationsError) {
       console.error('Failed to load citations:', citationsError);
     }
 
-    const citationsSafe = citationRows || [];
-    const chunkIds = Array.from(new Set(citationsSafe.map((citation) => citation.chunk_id)));
+    // shortcut: generated DB types lag the additive migration until the linked database is reachable.
+    const citationsSafe = (citationRows || []) as StoredCitationRow[];
+    const chunkIds = Array.from(new Set(citationsSafe.map((citation) => citation.chunk_id).filter((id): id is string => Boolean(id))));
 
     const chunkById: Record<string, { pageNumber: number | null; startMs: number | null; endMs: number | null; materialId: string | null; studentDocumentId: string | null }> = {};
     const materialById: Record<string, { fileName: string; fileType: string }> = {};
@@ -432,61 +458,39 @@ export function useStudentChat(routeConversationId: string | null = null) {
           };
         }
 
-        const materialIds = Array.from(
-          new Set(
-            (chunkRows || [])
-              .map((chunk) => chunk.material_id)
-              .filter((id): id is string => Boolean(id))
-          )
-        );
-
-        const studentDocumentIds = Array.from(
-          new Set(
-            (chunkRows || [])
-              .map((chunk) => chunk.student_document_id)
-              .filter((id): id is string => Boolean(id))
-          )
-        );
-
-        // Fetch materials and student documents in parallel
-        const [materialsResult, studentDocsResult] = await Promise.all([
-          materialIds.length > 0
-            ? supabase.from('materials').select('id, file_name, file_type').in('id', materialIds)
-            : { data: null, error: null },
-          studentDocumentIds.length > 0
-            ? supabase.from('student_documents').select('id, file_name, file_type').in('id', studentDocumentIds)
-            : { data: null, error: null },
-        ]);
-
-        if (materialsResult.error) {
-          console.error('Failed to load citation materials:', materialsResult.error);
-        } else {
-          for (const material of materialsResult.data || []) {
-            materialById[material.id] = {
-              fileName: material.file_name,
-              fileType: material.file_type,
-            };
-          }
-        }
-
-        if (studentDocsResult.error) {
-          console.error('Failed to load citation student documents:', studentDocsResult.error);
-        } else {
-          for (const document of studentDocsResult.data || []) {
-            studentDocumentById[document.id] = {
-              fileName: document.file_name,
-              fileType: document.file_type,
-            };
-          }
-        }
       }
+    }
+
+    const materialIds = Array.from(new Set(citationsSafe
+      .map((citation) => citation.material_id ?? chunkById[citation.chunk_id ?? '']?.materialId)
+      .filter((id): id is string => Boolean(id))));
+    const studentDocumentIds = Array.from(new Set(citationsSafe
+      .map((citation) => citation.student_document_id ?? chunkById[citation.chunk_id ?? '']?.studentDocumentId)
+      .filter((id): id is string => Boolean(id))));
+    const [materialsResult, studentDocsResult] = await Promise.all([
+      materialIds.length > 0
+        ? supabase.from('materials').select('id, file_name, file_type').in('id', materialIds)
+        : { data: null, error: null },
+      studentDocumentIds.length > 0
+        ? supabase.from('student_documents').select('id, file_name, file_type').in('id', studentDocumentIds)
+        : { data: null, error: null },
+    ]);
+    if (materialsResult.error) console.error('Failed to load citation materials:', materialsResult.error);
+    for (const material of materialsResult.data || []) {
+      materialById[material.id] = { fileName: material.file_name, fileType: material.file_type };
+    }
+    if (studentDocsResult.error) console.error('Failed to load citation student documents:', studentDocsResult.error);
+    for (const document of studentDocsResult.data || []) {
+      studentDocumentById[document.id] = { fileName: document.file_name, fileType: document.file_type };
     }
 
     const citationsByMessageId: Record<string, Citation[]> = {};
     for (const citation of citationsSafe) {
-      const chunk = chunkById[citation.chunk_id];
-      const material = chunk?.materialId ? materialById[chunk.materialId] : undefined;
-      const studentDocument = chunk?.studentDocumentId ? studentDocumentById[chunk.studentDocumentId] : undefined;
+      const chunk = chunkById[citation.chunk_id ?? ''];
+      const materialId = citation.material_id ?? chunk?.materialId ?? null;
+      const studentDocumentId = citation.student_document_id ?? chunk?.studentDocumentId ?? null;
+      const material = materialId ? materialById[materialId] : undefined;
+      const studentDocument = studentDocumentId ? studentDocumentById[studentDocumentId] : undefined;
 
       const normalizedCitation: Citation = {
         id: citation.id,
@@ -494,13 +498,15 @@ export function useStudentChat(routeConversationId: string | null = null) {
         excerpt: citation.excerpt || '',
         documentName: material?.fileName || studentDocument?.fileName || 'Unknown document',
         documentType: material?.fileType || studentDocument?.fileType || 'document',
-        pageNumber: chunk?.pageNumber ?? undefined,
-        startMs: chunk?.startMs ?? undefined,
-        endMs: chunk?.endMs ?? undefined,
+        pageNumber: citation.page_number ?? chunk?.pageNumber ?? undefined,
+        startMs: citation.start_ms ?? chunk?.startMs ?? undefined,
+        endMs: citation.end_ms ?? chunk?.endMs ?? undefined,
         relevanceScore: citation.relevance_score ?? 0,
         imageUrl: citation.image_url ?? null,
-        materialId: chunk?.materialId ?? null,
+        materialId,
+        studentDocumentId,
         blockIds: citation.block_ids ?? undefined,
+        evidenceSegments: parseVideoEvidenceSegments(citation.evidence_segments),
       };
 
       if (!citationsByMessageId[citation.message_id]) {
@@ -577,6 +583,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   useEffect(() => {
     conversationLoadRequestIdRef.current += 1;
+    sourceOpenRequestIdRef.current += 1;
     if (conversationRetryTimeoutRef.current !== null) {
       window.clearTimeout(conversationRetryTimeoutRef.current);
       conversationRetryTimeoutRef.current = null;
@@ -1007,7 +1014,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     // With the inline-chip navigation surface, opening the panel focuses the
     // first citation so the viewer + cited chunk surface together.
     focusCitation(message, 1);
-  }, [focusCitation]);
+  }, [focusCitation, setShowSidePanel]);
 
   const closeActiveVideoSource = useCallback(() => {
     setActiveVideoSource(null);
@@ -1018,22 +1025,27 @@ export function useStudentChat(routeConversationId: string | null = null) {
   }, []);
 
   const openCitationSource = useCallback(async (citation: Citation, citationKey: string) => {
+    const requestId = ++sourceOpenRequestIdRef.current;
     setOpeningCitationKey(citationKey);
 
     try {
       const resolved = await resolveCitationSource(citation);
+      if (requestId !== sourceOpenRequestIdRef.current) return;
 
-      // Videos without a stored file open in the sources panel as a transcript view
-      if (resolved.fileType === 'video' && !resolved.filePath) {
+      // The player resolves either Supabase Storage or R2 through signed-media.
+      if (resolved.fileType === 'video') {
         setShowSidePanel(true);
+        setActiveViewerSource(null);
         setActiveVideoSource({
           title: resolved.fileName,
           signedUrl: null,
+          filePath: resolved.filePath,
           materialId: resolved.materialId,
           startMs: citation.startMs ?? 0,
           endMs: citation.endMs,
           excerpt: citation.excerpt,
           linkedUrl: resolved.linkedUrl,
+          evidenceSegments: citation.evidenceSegments,
         });
         return;
       }
@@ -1045,22 +1057,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
       if (signedUrlError || !signedUrlData?.signedUrl) {
         throw new Error(signedUrlError?.message || 'Unable to generate source preview URL');
       }
+      if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const { signedUrl } = signedUrlData;
-
-      // Videos open in the sources panel with their transcript
-      if (resolved.fileType === 'video') {
-        setShowSidePanel(true);
-        setActiveVideoSource({
-          title: resolved.fileName,
-          signedUrl,
-          materialId: resolved.materialId,
-          startMs: citation.startMs ?? 0,
-          endMs: citation.endMs,
-          excerpt: citation.excerpt,
-        });
-        return;
-      }
 
       // PDFs/images render in-app; raw/binary files fall back to a new tab (the
       // "no new tab" rule was scoped to PDFs).
@@ -1081,12 +1080,14 @@ export function useStudentChat(routeConversationId: string | null = null) {
       const pageImage = kind === 'pdf' && resolved.materialId
         ? await loadPageImage(resolved.materialId, pageNumber)
         : null;
+      if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const viewerSource: ActiveViewerSource = {
         kind,
         documentName: resolved.fileName,
         pageNumber,
         signedUrl,
+        storage: { bucket: resolved.bucket, path: resolved.filePath },
         materialId: resolved.materialId,
         excerpt: citation.excerpt,
         pageImage,
@@ -1095,6 +1096,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       // PDFs render in the side-panel gallery, scrolled to the cited page.
       if (kind === 'pdf') {
+        setActiveVideoSource(null);
         setActiveViewerSource(viewerSource);
         setShowSidePanel(true);
         return;
@@ -1103,10 +1105,11 @@ export function useStudentChat(routeConversationId: string | null = null) {
       // Images and raw/binary files open directly in the clear-view dialog.
       setClearViewSource(viewerSource);
     } catch (error) {
+      if (requestId !== sourceOpenRequestIdRef.current) return;
       const message = error instanceof Error ? error.message : 'Failed to open source context';
       toast.error(message);
     } finally {
-      setOpeningCitationKey(null);
+      if (requestId === sourceOpenRequestIdRef.current) setOpeningCitationKey(null);
     }
   }, [setShowSidePanel]);
 

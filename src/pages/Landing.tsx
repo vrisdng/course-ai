@@ -214,7 +214,7 @@ export default function Landing() {
         <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
           <Link to="/" className="flex items-baseline gap-1">
             <img src="/logo.png" alt="" className="mr-2 h-6 w-6" />
-            <span className="text-lg font-semibold tracking-tight">EduChat</span>
+            <span className="text-lg font-semibold tracking-tight">CEEChat</span>
             <span className="mono-label mt-0 text-[0.6rem] leading-none">™</span>
           </Link>
           <div className="hidden items-center gap-8 md:flex">
@@ -473,7 +473,7 @@ export default function Landing() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:px-6 py-10 text-sm text-muted-foreground sm:flex-row">
           <div className="flex items-center gap-2">
             <img src="/logo.png" alt="" className="h-5 w-5" />
-            <span className="font-medium text-foreground">EduChat</span>
+            <span className="font-medium text-foreground">CEEChat</span>
           </div>
           <div className="flex flex-col items-center gap-1 sm:items-end">
             <span className="mono-label">Grounded course answers</span>

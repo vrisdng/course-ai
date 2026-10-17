@@ -1,6 +1,14 @@
+export interface VideoEvidenceSegment {
+  id: string;
+  segmentIndex: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
 export interface Citation {
   id: string;
-  chunkId: string;
+  chunkId: string | null;
   excerpt: string;
   documentName: string;
   documentType: string;
@@ -12,6 +20,8 @@ export interface Citation {
   materialId?: string | null;
   // Page blocks the answer cited within the chunk; absent = the whole chunk.
   blockIds?: string[];
+  studentDocumentId?: string | null;
+  evidenceSegments?: VideoEvidenceSegment[] | null;
 }
 
 export interface Message {

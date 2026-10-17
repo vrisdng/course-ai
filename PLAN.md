@@ -1,6 +1,6 @@
 
 
-# EduChat - AI Learning Assistant with RAG
+# CEEChat - AI Learning Assistant with RAG
 
 ## Overview
 A professional AI-powered chatbot that helps students learn by answering questions with properly cited references from course materials. Uses **RAG (Retrieval-Augmented Generation)** to ground all answers in actual course content, ensuring accuracy and proper citations.

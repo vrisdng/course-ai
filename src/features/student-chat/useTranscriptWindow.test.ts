@@ -46,7 +46,7 @@ describe('useTranscriptWindow', () => {
     const { result } = renderHook(() => useTranscriptWindow('m1', 40_000, 45_000));
     await waitFor(() => expect(result.current.segments).toHaveLength(2));
     expect(chain.eq).toHaveBeenCalledWith('material_id', 'm1');
-    expect(chain.gte).toHaveBeenCalledWith('start_ms', 10_000);
+    expect(chain.gte).toHaveBeenCalledWith('end_ms', 10_000);
     expect(chain.lte).toHaveBeenCalledWith('start_ms', 75_000);
     expect(result.current.isLoading).toBe(false);
   });
@@ -87,17 +87,12 @@ describe('useTranscriptWindow', () => {
     rerender({ materialId: 'm2' });
     expect(second.chain.then).toHaveBeenCalled();
 
-    first.resolveWith([{ start_ms: 1, end_ms: 2, text: 'stale' }]);
     second.resolveWith([{ start_ms: 3, end_ms: 4, text: 'fresh' }]);
+    first.resolveWith([{ start_ms: 1, end_ms: 2, text: 'stale' }]);
 
     await waitFor(() =>
       expect(result.current.segments).toEqual([{ start_ms: 3, end_ms: 4, text: 'fresh' }]),
     );
 
-    // A late resolution of the cancelled request must not mutate state.
-    first.resolveWith([{ start_ms: 1, end_ms: 2, text: 'stale-again' }]);
-    await waitFor(() =>
-      expect(result.current.segments).toEqual([{ start_ms: 3, end_ms: 4, text: 'fresh' }]),
-    );
   });
 });

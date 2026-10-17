@@ -2,26 +2,24 @@ import { ExternalLink, FileText, Loader2, PlayCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { StoredVideoPlayer } from '@/features/video-playback/StoredVideoPlayer';
 import { supabase } from '@/integrations/supabase/client';
 
-import { groupSegmentsIntoParagraphs } from './groupTranscriptSegments';
+import type { RawSegment } from './groupTranscriptSegments';
 import { formatCitationLocator, formatTimestamp } from './time';
+import type { VideoEvidenceSegment } from './types';
 
 export interface ActiveVideoSource {
   title: string;
   signedUrl: string | null;
+  filePath?: string | null;
   materialId: string | null;
   startMs: number;
   endMs?: number;
   excerpt?: string;
   linkedUrl?: string | null;
+  evidenceSegments?: VideoEvidenceSegment[] | null;
 }
 
 interface VideoSourceDialogProps {
@@ -29,161 +27,184 @@ interface VideoSourceDialogProps {
   onClose: () => void;
 }
 
-const CONTEXT_WINDOW_MS = 30_000; // 30s before and after the cited segment
+interface TranscriptRow extends RawSegment {
+  id: string;
+  segment_index: number;
+}
+
+const TRANSCRIPT_PAGE_SIZE = 500;
 
 export function VideoSourceDialog({ source, onClose }: VideoSourceDialogProps) {
   const highlightRef = useRef<HTMLDivElement | null>(null);
-  const [segments, setSegments] = useState<{ id: string; segment_index: number; start_ms: number; end_ms: number; text: string }[]>([]);
+  const seekIdRef = useRef(0);
+  const [seekRequest, setSeekRequest] = useState<{ ms: number; id: number } | null>(null);
+  const [segments, setSegments] = useState<TranscriptRow[]>([]);
   const [isLoadingSegments, setIsLoadingSegments] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const materialId = source?.materialId;
 
-  // Fetch transcript segments windowed around the cited segment
   useEffect(() => {
-    if (!source?.materialId || source.signedUrl) {
+    setSeekRequest(null);
+  }, [source?.materialId, source?.startMs, source?.endMs]);
+
+  useEffect(() => {
+    if (!materialId) {
       setSegments([]);
+      setIsLoadingSegments(false);
+      setLoadError(false);
       return;
     }
 
     let cancelled = false;
+    setSegments([]);
     setIsLoadingSegments(true);
+    setLoadError(false);
 
-    const windowStart = Math.max(0, source.startMs - CONTEXT_WINDOW_MS);
-    const windowEnd = (source.endMs ?? source.startMs) + CONTEXT_WINDOW_MS;
-
-    supabase
-      .from('material_transcript_segments')
-      .select('id, segment_index, start_ms, end_ms, text')
-      .eq('material_id', source.materialId)
-      .gte('start_ms', windowStart)
-      .lte('start_ms', windowEnd)
-      .order('segment_index', { ascending: true })
-      .then(({ data, error }) => {
+    const load = async () => {
+      const loaded: TranscriptRow[] = [];
+      for (let from = 0; !cancelled; from += TRANSCRIPT_PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('material_transcript_segments')
+          .select('id, segment_index, start_ms, end_ms, text')
+          .eq('material_id', materialId)
+          .order('segment_index', { ascending: true })
+          .range(from, from + TRANSCRIPT_PAGE_SIZE - 1);
         if (cancelled) return;
-        if (error) console.error('Failed to load transcript segments:', error);
-        setSegments(data || []);
-        setIsLoadingSegments(false);
-      });
+        if (error) {
+          console.error('Failed to load transcript segments:', error);
+          setLoadError(true);
+          break;
+        }
+        loaded.push(...(data ?? []));
+        setSegments([...loaded]);
+        if (!data || data.length < TRANSCRIPT_PAGE_SIZE) break;
+      }
+      if (!cancelled) setIsLoadingSegments(false);
+    };
+    void load();
 
     return () => { cancelled = true; };
-  }, [source?.materialId, source?.signedUrl, source?.startMs, source?.endMs]);
+  }, [materialId]);
 
-  // Scroll to highlighted segment after load
+  const citedEndMs = source?.endMs ?? source?.startMs ?? 0;
+  const evidence = source?.evidenceSegments?.length ? source.evidenceSegments : null;
+  const evidenceIds = new Set(evidence?.map((segment) => segment.id));
+  const visibleIds = new Set(segments.map((segment) => segment.id));
+  const missingEvidence = evidence?.filter((segment) => !visibleIds.has(segment.id)) ?? [];
+  const firstCitedIndex = segments.findIndex((segment) =>
+    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= (source?.startMs ?? 0)
+  );
+
   useEffect(() => {
-    if (!highlightRef.current || isLoadingSegments) return;
+    if (isLoadingSegments || !highlightRef.current) return;
     highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [segments, isLoadingSegments]);
+  }, [firstCitedIndex, isLoadingSegments, segments]);
+
+  const hasPlayback = Boolean(source?.signedUrl || source?.filePath);
+  const externalUrl = source?.linkedUrl ? (() => {
+    try {
+      const url = new URL(source.linkedUrl);
+      url.searchParams.set('t', String(Math.floor(source.startMs / 1000)));
+      return url.toString();
+    } catch {
+      return source.linkedUrl;
+    }
+  })() : null;
 
   return (
-    <Dialog open={Boolean(source)} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="max-h-[90vh] overflow-hidden p-0 sm:max-w-4xl">
+    <Dialog open={Boolean(source)} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="flex h-[90dvh] max-h-[90dvh] w-[96vw] max-w-6xl flex-col overflow-hidden p-0 sm:max-w-6xl">
         {source ? (
-          <div className="grid gap-0">
-            <DialogHeader className="border-b px-6 py-4">
+          <>
+            <DialogHeader className="shrink-0 border-b px-5 py-4">
               <DialogTitle className="flex items-center gap-2 text-base">
-                {source.signedUrl ? (
-                  <PlayCircle className="h-4 w-4 text-primary" />
-                ) : (
-                  <FileText className="h-4 w-4 text-primary" />
-                )}
+                {hasPlayback ? <PlayCircle className="h-4 w-4 text-primary" /> : <FileText className="h-4 w-4 text-primary" />}
                 {source.title}
               </DialogTitle>
               <DialogDescription>
-                Cited segment: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
+                Source interval: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 p-6">
-              {source.signedUrl ? (
-                /* Video playback mode */
-                <>
-                  <video
-                    src={source.signedUrl}
-                    controls
-                    onLoadedMetadata={(event) => {
-                      event.currentTarget.currentTime = Math.max(0, source.startMs / 1000);
-                    }}
-                    className="max-h-[60vh] w-full rounded-lg bg-black"
+            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,3fr)_minmax(18rem,2fr)]">
+              <div className="min-h-0 overflow-y-auto border-b p-4 md:border-b-0 md:border-r">
+                {hasPlayback ? (
+                  <StoredVideoPlayer
+                    materialId={source.materialId}
+                    filePath={source.filePath}
+                    initialUrl={source.signedUrl}
+                    startMs={evidence?.[0]?.startMs ?? source.startMs}
+                    seekRequest={seekRequest ?? undefined}
                   />
-                  <div className="flex justify-end">
-                    <Button asChild variant="outline">
-                      <a href={source.signedUrl} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="mr-2 h-4 w-4" />
-                        Open video in new tab
-                      </a>
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                /* Transcript-only mode */
-                <>
-                  {source.linkedUrl ? (
-                    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
-                      <span className="text-xs text-muted-foreground">Original video available externally.</span>
-                      <Button asChild variant="outline" size="sm">
-                        <a
-                          href={(() => {
-                            try {
-                              const url = new URL(source.linkedUrl);
-                              url.searchParams.set('t', String(Math.floor(source.startMs / 1000)));
-                              return url.toString();
-                            } catch {
-                              return source.linkedUrl;
-                            }
-                          })()}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <ExternalLink className="mr-2 h-3 w-3" />
-                          Go to original video
-                        </a>
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-center text-xs text-muted-foreground">
-                      The original video is not stored online. Contact your lecturer to access the original material.
-                    </div>
-                  )}
+                ) : externalUrl ? (
+                  <Button asChild variant="outline">
+                    <a href={externalUrl} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="mr-2 h-4 w-4" />Go to original video
+                    </a>
+                  </Button>
+                ) : (
+                  <p className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
+                    The original video is not stored online. Contact your lecturer to access it.
+                  </p>
+                )}
+              </div>
 
-                  <div className="max-h-[50vh] overflow-y-auto">
-                    {isLoadingSegments ? (
-                      <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Loading transcript...
-                      </div>
-                    ) : segments.length === 0 ? (
-                      <div className="py-6 text-center text-sm text-muted-foreground">
-                        No transcript segments available.
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {groupSegmentsIntoParagraphs(segments).map((para) => {
-                          const highlighted = source
-                            ? para.startMs <= (source.endMs ?? source.startMs) + 500 &&
-                              para.endMs >= source.startMs - 500
-                            : false;
-                          return (
-                            <div
-                              key={para.id}
-                              ref={highlighted ? highlightRef : null}
-                              className={
-                                highlighted
-                                  ? 'rounded-md border border-primary bg-primary/10 px-4 py-3 ring-1 ring-primary'
-                                  : 'rounded-md border border-border bg-muted/20 px-4 py-3'
-                              }
-                            >
-                              <span className="mr-2 text-xs font-medium text-primary">
-                                {formatTimestamp(para.startMs)}&ndash;{formatTimestamp(para.endMs)}
-                              </span>
-                              <span className="text-sm text-foreground">{para.text}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
+              <div className="min-h-0 overflow-y-auto p-4" aria-label="Video transcript">
+                <h3 className="mb-3 text-sm font-semibold">Transcription</h3>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {evidence ? 'Exact supporting segments' : 'Approximate citation interval'}
+                </p>
+                {!isLoadingSegments && missingEvidence.length > 0 ? (
+                  <div className="mb-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+                    <p className="font-medium">Evidence from an earlier transcript</p>
+                    {missingEvidence.map((segment) => (
+                      <p key={segment.id}>{formatTimestamp(segment.startMs)}–{formatTimestamp(segment.endMs)} {segment.text}</p>
+                    ))}
                   </div>
-                </>
-              )}
+                ) : null}
+                {loadError ? <p role="alert" className="mb-3 text-sm text-destructive">Unable to load transcript.</p> : null}
+                {isLoadingSegments && segments.length === 0 ? (
+                  <div className="flex items-center py-8 text-sm text-muted-foreground">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />Loading transcript...
+                  </div>
+                ) : segments.length === 0 && !loadError ? (
+                  <p className="py-6 text-sm text-muted-foreground">No transcript segments available.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {segments.map((segment, index) => {
+                      const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
+                      return (
+                        <div
+                          key={segment.id}
+                          ref={index === firstCitedIndex ? highlightRef : null}
+                          data-cited={cited}
+                          className={cited
+                            ? 'rounded-md border border-primary bg-primary/10 px-3 py-2 ring-1 ring-primary'
+                            : 'rounded-md border border-border bg-muted/20 px-3 py-2'}
+                        >
+                          {hasPlayback ? (
+                            <button
+                              type="button"
+                              aria-label={`Play from ${formatTimestamp(segment.start_ms)}`}
+                              className="mr-2 text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:underline"
+                              onClick={() => setSeekRequest({ ms: segment.start_ms, id: ++seekIdRef.current })}
+                            >
+                              {formatTimestamp(segment.start_ms)}–{formatTimestamp(segment.end_ms)}
+                            </button>
+                          ) : (
+                            <span className="mr-2 text-xs font-medium text-primary">
+                              {formatTimestamp(segment.start_ms)}–{formatTimestamp(segment.end_ms)}
+                            </span>
+                          )}
+                          <span className="text-sm leading-relaxed">{segment.text}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          </>
         ) : null}
       </DialogContent>
     </Dialog>

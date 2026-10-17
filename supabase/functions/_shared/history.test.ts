@@ -59,6 +59,24 @@ describe("buildConversationHistoryTurns", () => {
     expect(turns[turns.length - 1].content).toBe("message 19");
   });
 
+  it("applies custom turn, budget, and clip limits", () => {
+    const messages = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `message ${i} ${"x".repeat(50)}`,
+    }));
+    const turns = buildConversationHistoryTurns(messages, { turnLimit: 4, charBudget: 10_000, messageClip: 20 });
+    expect(turns).toHaveLength(4);
+    expect(turns[3].content.startsWith("message 9")).toBe(true);
+    expect(turns.every((t) => t.content.length <= 20 + "...".length)).toBe(true);
+
+    const budgeted = buildConversationHistoryTurns(messages, { turnLimit: 10, charBudget: 100, messageClip: 1000 });
+    expect(budgeted).toHaveLength(1);
+  });
+
+  it("returns no history when the turn limit is 0", () => {
+    expect(buildConversationHistoryTurns([{ role: "user", content: "hi" }], { turnLimit: 0, charBudget: 9000, messageClip: 850 })).toEqual([]);
+  });
+
   it("preserves chronological order after budgeting", () => {
     const messages = [
       { role: "user", content: "first" },

@@ -79,7 +79,10 @@ function canonicalToken(sourceNumber: number, blockIndexes: number[]): string {
 }
 
 // Rewrites every citation marker to a canonical <<cite:3>> or <<cite:3b,3c>>
-// (one token per source), dropping unknown sources and unknown block labels.
+// (one token per source), dropping unknown sources and unknown block labels. A
+// marker listing several sources (<<cite:2,3>>) becomes adjacent tokens. Bare
+// [n] / (n) are left as text: the model is told to use <<cite:N>>, and
+// converting them would also rewrite maths such as w^{(3)} or O(1).
 export function normalizeCitationTokens(
   content: string,
   maxSourceNumber: number,
@@ -89,7 +92,7 @@ export function normalizeCitationTokens(
     return content;
   }
 
-  let normalized = content.replace(RAW_CITE_TOKEN, (_, body: string) => {
+  return content.replace(RAW_CITE_TOKEN, (_, body: string) => {
     const bySource = new Map<number, Set<number> | null>();
     for (const item of body.split(",")) {
       const match = item.trim().toLowerCase().match(/^([1-9]\d*)([a-z]*)$/);
@@ -113,25 +116,6 @@ export function normalizeCitationTokens(
       .map(([sourceNumber, indexes]) => canonicalToken(sourceNumber, indexes ? [...indexes].sort((a, b) => a - b) : []))
       .join("");
   });
-
-  // Backward compatibility: convert explicit [n] and (n) markers only.
-  normalized = normalized.replace(/\[([1-9]\d*)\]/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  normalized = normalized.replace(/\(([1-9]\d*)\)/g, (match, rawNumber) => {
-    const citationNumber = Number(rawNumber);
-    if (citationNumber < 1 || citationNumber > maxSourceNumber) {
-      return match;
-    }
-    return `<<cite:${citationNumber}>>`;
-  });
-
-  return normalized;
 }
 
 function parseCanonicalToken(sourceNumber: number, blockPart: string | undefined): CitedRef {

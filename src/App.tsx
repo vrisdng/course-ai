@@ -30,7 +30,7 @@ const App = () => (
         <AlertDialog open>
           <AlertDialogContent className="[&>button]:hidden">
             <AlertDialogHeader>
-              <AlertDialogTitle>EduChat is under maintenance</AlertDialogTitle>
+              <AlertDialogTitle>CEEChat is under maintenance</AlertDialogTitle>
               <AlertDialogDescription>
                 The website will resume by 15th July. Thanks for your patience and understanding.
               </AlertDialogDescription>

@@ -5,6 +5,8 @@ import {
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import { useState } from 'react';
 
@@ -15,7 +17,7 @@ import {
   normalizeHeadings,
 } from './citations';
 import { CodeBlock } from './CodeBlock';
-import { processMath } from './processMath';
+import { normalizeMathDelimiters } from './mathDelimiters';
 import { resolveSignedMediaUrl } from './signedMedia';
 import type { Citation } from './types';
 
@@ -109,8 +111,8 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
     <>
       <div className="prose prose-sm max-w-none dark:prose-invert">
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeRaw]}
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeRaw, [rehypeKatex, { throwOnError: false }]]}
           urlTransform={(url) => (url.startsWith('citation:') ? url : defaultUrlTransform(url))}          components={{
             code: (props) => {
               const { className, children, node } = props as {
@@ -223,7 +225,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
         >
           {markdownWithCitationLinks(
             groupAdjacentCitations(
-              normalizeHeadings(processMath(content)),
+              normalizeHeadings(normalizeMathDelimiters(content)),
               citations,
             ),
             citations.length,

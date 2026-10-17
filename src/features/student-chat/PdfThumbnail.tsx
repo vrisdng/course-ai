@@ -4,6 +4,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { cn } from '@/lib/utils';
 
 import { type ActiveViewerSource } from './documentViewer';
+import { usePdfFile } from './usePdfFile';
 
 const workerUrl = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -25,9 +26,10 @@ interface PdfThumbnailProps {
 export function PdfThumbnail({ source, pageNumber, width, onClick, label, highlighted, preview }: PdfThumbnailProps) {
   const [pdfjsLoaded, setPdfjsLoaded] = useState(false);
 
+  const pdf = usePdfFile(source);
   const pdfjsFile = useMemo(
-    () => (source.signedUrl ? { url: source.signedUrl } : false),
-    [source.signedUrl],
+    () => (pdf.file ? { url: pdf.file } : false),
+    [pdf.file],
   );
 
   return (

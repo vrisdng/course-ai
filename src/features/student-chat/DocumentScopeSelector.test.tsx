@@ -59,4 +59,50 @@ describe('DocumentScopeSelector', () => {
     expect(screen.getByRole('button', { name: /Select Lecture\.pdf/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Select Recording\.mp4/ })).toBeInTheDocument();
   });
+
+  it('selects only materials in the active tab while keeping other selections', () => {
+    const cb = callbacks();
+    render(<DocumentScopeSelector documents={documents} selectedDocumentIds={[]} isLoading={false} {...cb} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /No documents selected/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Documents (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Videos (1)' }));
+    expect(screen.getByRole('button', { name: 'Deselect All' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Select Recording.mp4' })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'All (2)' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Lecture.pdf' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Recording.mp4' })).toBeChecked();
+  });
+
+  it('deselects only materials in the active tab while keeping other selections', () => {
+    const cb = callbacks();
+    render(<DocumentScopeSelector documents={documents} selectedDocumentIds={['d1', 'd2']} isLoading={false} {...cb} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /All materials selected/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Documents (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deselect All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Videos (1)' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Recording.mp4' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(cb.onApplySelection).toHaveBeenCalledWith(['d2']);
+    expect(cb.onClearSelection).not.toHaveBeenCalled();
+  });
+
+  it('deselects videos without clearing selected documents', () => {
+    const cb = callbacks();
+    render(<DocumentScopeSelector documents={documents} selectedDocumentIds={['d1', 'd2']} isLoading={false} {...cb} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /All materials selected/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Videos (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deselect All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Documents (1)' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Lecture.pdf' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(cb.onApplySelection).toHaveBeenCalledWith(['d1']);
+  });
 });

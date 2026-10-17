@@ -11,7 +11,7 @@ describe('MessageList', () => {
   it('renders suggestions and sends the selected prompt from the empty state', () => {
     const onSuggestionClick = vi.fn();
     render(<MessageList messages={[]} onSuggestionClick={onSuggestionClick} onOpenSources={vi.fn()} onCitationClick={vi.fn()} />);
-    expect(screen.getByText('Welcome to EduChat')).toBeInTheDocument();
+    expect(screen.getByText('Welcome to CEEChat')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'What are the key takeaways?' }));
     expect(onSuggestionClick).toHaveBeenCalledWith('What are the key takeaways?');
   });
