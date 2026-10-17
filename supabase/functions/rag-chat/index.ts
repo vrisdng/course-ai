@@ -1,13 +1,22 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { HttpError, createOpenAIEmbeddingService, generateChatText, generateChatTextStream } from "../_shared/llm.ts";
+import {
+  HttpError,
+  createOpenAIEmbeddingService,
+  generateAgentTextStream,
+  generateChatText,
+  generateChatTextStream,
+} from "../_shared/llm.ts";
+import {
+  SourceRegistry,
+  formatSourceBody,
+  runCourseSearch,
+  type NumberedSource,
+} from "../_shared/courseSearch.ts";
 import { MATCH_CHUNKS_FUNCTION } from "../_shared/embeddings.ts";
 import {
   buildCitationRewriteSourceContext,
-  clipText,
   extractCitedImageTokens,
-  formatLabelledBlocks,
-  formatTimestamp,
   IMAGE_MATERIAL_TYPES,
   rewriteImageTokens,
   sanitizeAndRemapCitations,
@@ -20,19 +29,17 @@ import {
   dedupeRetrievedChunksByBestScore,
   getRetrievalSettings,
   rerankRetrievedChunks,
+  spreadAcrossTimeline,
 } from "../_shared/retrieval.ts";
 import {
   buildConversationHistoryTurns,
-  buildHistoryContext,
   buildOpenAIConversationMessages,
   type ConversationHistoryTurn,
 } from "../_shared/history.ts";
 import {
-  buildSelectedDocumentEmptyAnswer,
   classifyQueryCategory,
   formatDocumentNameList,
   inferUnresolvedReason,
-  isLikelyAmbiguousQuestion,
   normalizeSelectedDocumentIds,
   type ChatModelTier,
   type ResolvedSelectedMaterial,
@@ -48,7 +55,13 @@ import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts"
 import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
 import { parseVideoEvidenceSelection, type VideoEvidenceCandidate, type VideoEvidenceSegment } from "../_shared/videoEvidence.ts";
 
-const CITATION_PIPELINE_VERSION = "2026-10-12-cite-blocks-video-evidence-v1";
+const CITATION_PIPELINE_VERSION = "2026-10-17-agentic-search-v1";
+
+// Agentic RAG: the model searches the course materials with this tool instead
+// of a search running before it.
+const COURSE_SEARCH_TOOL = "search_course_materials";
+// Model turns per answer: up to MAX_AGENT_STEPS - 1 searches, then the answer.
+const MAX_AGENT_STEPS = 5;
 
 // Bucket that image-typed course materials live in. Stable image citations store
 // "<bucket>/<file_path>" references so the embedded markdown stays valid across
@@ -153,65 +166,6 @@ async function generateModelTextStream(options: ChatStreamGenerationOptions): Pr
     signal: options.signal,
     onTextDelta: options.onTextDelta,
   });
-}
-
-async function rewriteQueryForRetrieval(options: {
-  modelConfig: ChatModelConfig;
-  apiKey: string;
-  studentQuestion: string;
-  historyContext: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  if (!isLikelyAmbiguousQuestion(options.studentQuestion, options.historyContext)) {
-    return options.studentQuestion;
-  }
-
-  const rewriteSystemPrompt = `You rewrite vague follow-up student questions into standalone retrieval queries.
-Rules:
-1. Keep the original intent unchanged.
-2. Resolve ambiguous references using the conversation context.
-3. Return one concise standalone query.
-4. Do not answer the question.
-5. Return plain text only.`;
-
-  const rewriteUserPrompt = `Conversation context:
-${options.historyContext}
-
-Student question:
-${options.studentQuestion}
-
-Standalone retrieval query:`;
-
-  try {
-    const rewritten = await generateModelText({
-      modelConfig: options.modelConfig,
-      apiKey: options.apiKey,
-      systemPrompt: rewriteSystemPrompt,
-      userPrompt: rewriteUserPrompt,
-      temperature: 0,
-      maxOutputTokens: 160,
-      signal: options.signal,
-    });
-
-    const cleaned = rewritten
-      .replace(/^["'`]+|["'`]+$/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!cleaned) {
-      return options.studentQuestion;
-    }
-
-    // Guardrail: avoid runaway rewrite output.
-    if (cleaned.length > 280) {
-      return options.studentQuestion;
-    }
-
-    return cleaned;
-  } catch (rewriteError) {
-    console.warn("Query rewrite failed, falling back to original question", rewriteError);
-    return options.studentQuestion;
-  }
 }
 
 async function retrieveChunkCandidates(options: {
@@ -818,7 +772,9 @@ serve(async (req: Request) => {
     // Source number → the blocks shown to the model for it (labels a, b, ...).
     const shownBlocksBySource = new Map<number, SourceBlock[]>();
     let selectedMaterials: ResolvedSelectedMaterial[] = [];
+    let selectedMaterialIds: string[] = [];
     let hasSelectedDocumentFilter = false;
+    let isSummaryQuery = false;
     // Maps 1-based source number -> stable image reference for image-typed
     // materials, used to embed citation images and attach them to citations.
     const imageSourceRefs: Map<number, SourceImage> = new Map();
@@ -838,211 +794,39 @@ Do NOT include any citation markers (<<cite:N>>) since there are no retrieved so
 
 Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}`;
     } else {
-      // ── RAG path: retrieve relevant chunks then answer ─────────────────
+      // ── Agentic RAG path: the model searches the course materials itself ──
       selectedMaterials = await resolveSelectedMaterials(
         supabaseClient,
         activeCourseId,
         selectedDocumentIds,
       );
-      const selectedMaterialIds = selectedMaterials.map((material) => material.id);
+      selectedMaterialIds = selectedMaterials.map((material) => material.id);
+      hasSelectedDocumentFilter = selectedMaterialIds.length > 0;
 
       throwIfAborted(requestAbortController.signal);
 
-      const originalEmbedding = await embeddingService.embedQuery(trimmedMessage, requestAbortController.signal);
+      console.log(`Processing agentic RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
-      console.log(`Processing RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
-
-      const historyContext = buildHistoryContext(historyTurns);
-
-      throwIfAborted(requestAbortController.signal);
-
-      const rewrittenQuery = chatSettings.queryRewriteEnabled
-        ? await rewriteQueryForRetrieval({
-          modelConfig: chatModelConfig,
-          apiKey: chatApiKey,
-          studentQuestion: trimmedMessage,
-          historyContext,
-          signal: requestAbortController.signal,
-        })
-        : trimmedMessage;
-
-      // Only embed the rewritten query if it differs from the original
-      const embeddings = [originalEmbedding];
-      const retrievalQueries = [trimmedMessage];
-      if (rewrittenQuery.trim() && rewrittenQuery.trim() !== trimmedMessage.trim()) {
-        retrievalQueries.push(rewrittenQuery.trim());
-        embeddings.push(await embeddingService.embedQuery(rewrittenQuery, requestAbortController.signal));
-      }
-
-      throwIfAborted(requestAbortController.signal);
-
-      // Detect broad summary/overview queries — needs wider retrieval with lower thresholds
-      const isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
-
-      const {
-        matchThreshold,
-        matchCount,
-        relevanceFloor,
-        finalCount,
-      } = getRetrievalSettings({
-        isSummaryQuery,
-        hasSelectedDocumentFilter: selectedMaterialIds.length > 0,
-      }, chatSettings);
-
-      const retrievedChunkGroups = await Promise.all(
-        embeddings.map((embedding) =>
-          retrieveChunkCandidates({
-            supabaseClient,
-            userId: user.id,
-            courseId: activeCourseId,
-            embedding,
-            threshold: matchThreshold,
-            count: matchCount,
-            selectedMaterialIds,
-          })
-        )
-      );
-
-      throwIfAborted(requestAbortController.signal);
-
-      const highRecallChunks = dedupeRetrievedChunksByBestScore(retrievedChunkGroups.flat());
-      let rerankedChunks = rerankRetrievedChunks(
-        highRecallChunks,
-        rewrittenQuery || trimmedMessage,
-        finalCount,
-        chatSettings.semanticWeight,
-      );
-
-      // For summary queries on video materials: spread chunks across the full timeline
-      // by dropping chunks whose time windows heavily overlap an already-selected chunk
-      if (isSummaryQuery) {
-        const spread: typeof rerankedChunks = [];
-        for (const chunk of rerankedChunks) {
-          if (typeof chunk.start_ms !== "number") {
-            spread.push(chunk);
-            continue;
-          }
-          const chunkStart = chunk.start_ms!;
-          const overlaps = spread.some(
-            (c) =>
-              typeof c.start_ms === "number" &&
-              c.start_ms !== null &&
-              Math.abs(c.start_ms - chunkStart) < chatSettings.videoSpreadWindowMs
-          );
-          if (!overlaps) spread.push(chunk);
-        }
-        rerankedChunks = spread;
-      }
-
-      retrievedChunks = rerankedChunks.filter(
-        (c) => c.relevance_score >= relevanceFloor
-      );
-
-      console.log(
-        `Retrieved ${highRecallChunks.length} high-recall chunks from ${retrievalQueries.length} query variant(s); reranked to ${rerankedChunks.length}; ${retrievedChunks.length} above relevance floor. Selected document filter count: ${selectedMaterialIds.length}.`
-      );
-
-      // Blocks behind PDF chunks, so the model can cite parts of a source.
-      const blocksByChunk = await loadSourceBlocks(retrievedChunks.map((c) => c.id), {
-        fetchChunkBlockIds: async (ids) => {
-          const { data, error } = await supabaseClient.from("chunks").select("id, block_ids").in("id", ids);
-          if (error) console.warn(`Could not load chunk blocks: ${error.message}`);
-          return (data ?? []) as { id: string; block_ids: string[] | null }[];
-        },
-        fetchBlocks: async (ids) => {
-          const { data, error } = await supabaseClient.from("page_blocks").select("id, text").in("id", ids);
-          if (error) console.warn(`Could not load page blocks: ${error.message}`);
-          return (data ?? []) as SourceBlock[];
-        },
-      });
-
-      // Resolve stable storage paths for image-typed sources so the model can
-      // embed them as markdown image citations. Only image uploads qualify.
-      const materialIdsByImage = Array.from(
-        new Set(retrievedChunks.map((c) => c.material_id).filter((id): id is string => Boolean(id))),
-      );
-      if (materialIdsByImage.length > 0) {
-        const { data: imageMaterials, error: imageMaterialsError } = await supabaseClient
-          .from("materials")
-          .select("id, file_type, file_path")
-          .in("id", materialIdsByImage);
-
-        if (!imageMaterialsError) {
-          for (const material of (imageMaterials || []) as {
-            id: string;
-            file_type: string | null;
-            file_path: string | null;
-          }[]) {
-            const type = (material.file_type ?? "").toLowerCase();
-            if (!IMAGE_MATERIAL_TYPES.has(type) || !material.file_path) continue;
-            const sourceNumber = retrievedChunks.findIndex(
-              (c) => c.material_id === material.id,
-            );
-            if (sourceNumber === -1) continue;
-            imageSourceRefs.set(sourceNumber + 1, {
-              path: `${IMAGE_STORAGE_BUCKET}/${material.file_path}`,
-              materialId: material.id,
-            });
-          }
-        }
-      }
-
-      hasSelectedDocumentFilter = selectedMaterials.length > 0;
-      let ragContext = "";
-      if (retrievedChunks.length > 0) {
-        ragContext = hasSelectedDocumentFilter
-          ? "\n\n## Relevant Selected Documents:\n\n"
-          : "\n\n## Relevant Course Materials:\n\n";
-        retrievedChunks.forEach((chunk, index) => {
-          const sourceName = chunk.material_name || chunk.document_name || "Unknown document";
-          const sourceType = chunk.material_type || chunk.document_type || "document";
-          const locator =
-            typeof chunk.start_ms === "number"
-              ? ` (${formatTimestamp(chunk.start_ms)}${
-                  typeof chunk.end_ms === "number" ? `-${formatTimestamp(chunk.end_ms)}` : ""
-                })`
-              : chunk.page_number
-                ? ` (Page ${chunk.page_number})`
-                : "";
-
-          ragContext += `### Source [${index + 1}]: ${sourceName}${locator} [${sourceType}]\n`;
-          const blocks = blocksByChunk.get(chunk.id);
-          if (blocks) {
-            const labelled = formatLabelledBlocks(index + 1, blocks.map((b) => b.text), chatSettings.sourceContextChars);
-            shownBlocksBySource.set(index + 1, blocks.slice(0, labelled.shownCount));
-            ragContext += `${labelled.text}\n\n`;
-          } else {
-            ragContext += `${clipText(chunk.chunk_text, chatSettings.sourceContextChars)}\n\n`;
-          }
-          const imageRef = imageSourceRefs.get(index + 1);
-          if (imageRef) {
-            ragContext += `\nImage reference token: img-source-${index + 1}\n`;
-          }
-        });
-      }
+      // Broad summary/overview questions search wider, with lower thresholds.
+      isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
 
       const retrievalScopeInstruction = hasSelectedDocumentFilter
-        ? `DOCUMENT SCOPE: The user selected a document filter. You may ground your answer ONLY in these documents: ${formatDocumentNameList(selectedMaterials)}. Do not use any outside course materials, prior assumptions, or unstated course context beyond those selected documents. If the selected documents do not contain enough evidence, say the answer is not available in the selected documents.`
-        : "DOCUMENT SCOPE: No document filter is active. You may use any retrieved material from the selected course.";
-      const retrievalContextHeading = hasSelectedDocumentFilter
-        ? "The following are relevant excerpts from the selected documents:"
-        : "The following are relevant excerpts from the course materials:";
-      const noResultsInstruction = hasSelectedDocumentFilter
-        ? "No relevant excerpts were found in the selected documents for this query. Tell the student the answer is not available in the selected documents."
-        : "No relevant course materials were found for this query.";
+        ? `DOCUMENT SCOPE: The user selected a document filter. Searches only return these documents: ${formatDocumentNameList(selectedMaterials)}. Ground your answer ONLY in them. Do not use any outside course materials, prior assumptions, or unstated course context. If they do not contain enough evidence, say the answer is not available in the selected documents.`
+        : "DOCUMENT SCOPE: No document filter is active. Searches cover all materials in the selected course.";
 
       const summaryInstruction = isSummaryQuery
-        ? "\nSUMMARY MODE: The student is asking for a broad summary or overview. Use ALL provided sources to give comprehensive coverage across the full material. Organise your response with clear ## sections for each major topic. Do not focus only on the most similar source — synthesise across all citations.\n"
+        ? "\nSUMMARY MODE: The student wants a broad summary or overview. Search several times to cover the different topics of the material, and organise your response with clear ## sections for each major topic, citing across all the sources you found.\n"
         : "";
 
       systemPrompt = `You are CEEChat, an AI learning assistant for university students.
 
-Answer questions using the provided course materials when relevant. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
+Answer questions using the course materials, which you find with the ${COURSE_SEARCH_TOOL} tool. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 ${summaryInstruction}
+SEARCHING: Before answering anything about the course or its subject, call ${COURSE_SEARCH_TOOL} with a short standalone query naming what you need (resolve "it", "that" and similar from the conversation). If the results don't answer the question, search again with different wording (the formal term, a synonym, a narrower or broader topic); you may search several times. Only skip searching for greetings or messages unrelated to studying. Results are labelled "Source [N]"; a source keeps its number for the rest of your answer.
 
 FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. ${FORMATTING_FORMATTING_EXTRA}. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
-CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support. Each marker holds exactly one source number: to cite several sources, write one marker per source, e.g. <<cite:1>><<cite:3>>, never <<cite:1,3>>. Never use [1] or (1) as citations. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that correspond to provided sources.
+CITATIONS: Cite sources inline using <<cite:1>>, <<cite:2>> etc. immediately after the claim they support, using the source numbers from your search results. Each marker holds exactly one source number: to cite several sources, write one marker per source, e.g. <<cite:1>><<cite:3>>, never <<cite:1,3>>. Never use [1] or (1) as citations. Do NOT add a "Sources" or "References" section at the end. Only use citation numbers that appeared in your search results.
 
 Examples:
 - "Virtual memory allows for larger address spaces <<cite:1>>."
@@ -1055,15 +839,101 @@ PARTS: Some sources are split into labelled parts such as [2a], [2b], [2c] (a he
 
 IMAGES: A source labelled with an "Image reference token" is a course image (diagram, chart, screenshot). To show it, place the exact Markdown image token on the same line right after the claim it supports, immediately followed by its citation marker, like this: ![<short caption>](img-source-<n>) <<cite:<n>>. Use the token verbatim and only for sources provided; never invent an image token.
 
-RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If the question is outside the scope of the course materials, say so and suggest the student search online. Do not force-fit unrelated material.
+RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If your searches find nothing relevant, say the course materials don't cover it and suggest the student search online. Do not force-fit unrelated material.
 
 Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}
 
-${retrievalScopeInstruction}
-
-${ragContext ? retrievalContextHeading : noResultsInstruction}
-${ragContext}`;
+${retrievalScopeInstruction}`;
     }
+
+    // One course search, as run by the search tool: embed the query, match
+    // chunks within the course and document filter, rerank with the course's
+    // settings, and keep the relevant ones.
+    const searchCourse = async (query: string): Promise<RetrievedChunk[]> => {
+      throwIfAborted(requestAbortController.signal);
+      const embedding = await embeddingService.embedQuery(query, requestAbortController.signal);
+      const { matchThreshold, matchCount, relevanceFloor, finalCount } = getRetrievalSettings(
+        { isSummaryQuery, hasSelectedDocumentFilter },
+        chatSettings,
+      );
+      const candidates = await retrieveChunkCandidates({
+        supabaseClient,
+        userId: user.id,
+        courseId: activeCourseId,
+        embedding,
+        threshold: matchThreshold,
+        count: matchCount,
+        selectedMaterialIds,
+      });
+      let ranked = rerankRetrievedChunks(
+        dedupeRetrievedChunksByBestScore(candidates),
+        query,
+        finalCount,
+        chatSettings.semanticWeight,
+      );
+      if (isSummaryQuery) ranked = spreadAcrossTimeline(ranked, chatSettings.videoSpreadWindowMs);
+      const relevant = ranked.filter((chunk) => chunk.relevance_score >= relevanceFloor);
+      console.log(`Search "${query.substring(0, 60)}": ${candidates.length} candidates, ${relevant.length} above relevance floor.`);
+      return relevant;
+    };
+
+    // Page blocks (PDF sources) and image references for sources the model is
+    // about to see for the first time.
+    const blocksBySource = new Map<number, SourceBlock[]>();
+    const prepareSources = async (sources: NumberedSource<RetrievedChunk>[]): Promise<void> => {
+      const blocksByChunk = await loadSourceBlocks(sources.map((source) => source.chunk.id), {
+        fetchChunkBlockIds: async (ids) => {
+          const { data, error } = await supabaseClient.from("chunks").select("id, block_ids").in("id", ids);
+          if (error) console.warn(`Could not load chunk blocks: ${error.message}`);
+          return (data ?? []) as { id: string; block_ids: string[] | null }[];
+        },
+        fetchBlocks: async (ids) => {
+          const { data, error } = await supabaseClient.from("page_blocks").select("id, text").in("id", ids);
+          if (error) console.warn(`Could not load page blocks: ${error.message}`);
+          return (data ?? []) as SourceBlock[];
+        },
+      });
+      for (const source of sources) {
+        const blocks = blocksByChunk.get(source.chunk.id);
+        if (blocks) blocksBySource.set(source.number, blocks);
+      }
+
+      // Image uploads get a stable storage path, so the model can embed them
+      // and the citation can carry the image.
+      const materialIds = Array.from(
+        new Set(sources.map((source) => source.chunk.material_id).filter((id): id is string => Boolean(id))),
+      );
+      if (materialIds.length === 0) return;
+      const { data: materials, error } = await supabaseClient
+        .from("materials")
+        .select("id, file_type, file_path")
+        .in("id", materialIds);
+      if (error) return;
+      for (const material of (materials || []) as { id: string; file_type: string | null; file_path: string | null }[]) {
+        if (!IMAGE_MATERIAL_TYPES.has((material.file_type ?? "").toLowerCase()) || !material.file_path) continue;
+        for (const source of sources.filter((s) => s.chunk.material_id === material.id)) {
+          imageSourceRefs.set(source.number, {
+            path: `${IMAGE_STORAGE_BUCKET}/${material.file_path}`,
+            materialId: material.id,
+          });
+        }
+      }
+    };
+
+    // The model-facing text of one source; records which blocks it was shown
+    // so block citations resolve to block ids afterwards.
+    const renderSourceBody = (source: NumberedSource<RetrievedChunk>): string => {
+      const blocks = blocksBySource.get(source.number);
+      const body = formatSourceBody({
+        number: source.number,
+        chunkText: source.chunk.chunk_text,
+        blockTexts: blocks?.map((block) => block.text),
+        maxChars: chatSettings.sourceContextChars,
+        hasImage: imageSourceRefs.has(source.number),
+      });
+      if (blocks) shownBlocksBySource.set(source.number, blocks.slice(0, body.shownBlockCount));
+      return body.text;
+    };
 
     let streamCancelled = false;
     const cancelStream = (reason?: unknown) => {
@@ -1097,83 +967,60 @@ ${ragContext}`;
           try {
             ensureStreamActive();
 
-            if (hasSelectedDocumentFilter && retrievedChunks.length === 0) {
-              const answer = buildSelectedDocumentEmptyAnswer(selectedMaterials);
+            const streamDelta = (delta: string) => {
+              ensureStreamActive();
+              sendEvent("token", { text: delta });
+            };
 
-              sendEvent("final", {
-                answer,
-                citations: [],
-                conversationId: activeConversationId,
-                meta: {
-                  chatModel: chatModelConfig.modelId,
-                  embeddingModel: embeddingService.model,
-                  citationPipelineVersion: CITATION_PIPELINE_VERSION,
+            let rawAnswer: string;
+            if (skipRag) {
+              rawAnswer = await generateModelTextStream({
+                modelConfig: chatModelConfig,
+                apiKey: chatApiKey,
+                systemPrompt,
+                userPrompt: trimmedMessage,
+                historyTurns,
+                temperature: chatSettings.answerTemperature,
+                maxOutputTokens: chatSettings.maxAnswerTokens,
+                signal: requestAbortController.signal,
+                onTextDelta: streamDelta,
+              });
+            } else {
+              // Every source the model sees gets one number for the whole
+              // answer, however many searches it runs.
+              const sources = new SourceRegistry<RetrievedChunk>();
+              rawAnswer = await generateAgentTextStream({
+                apiKey: chatApiKey,
+                model: chatModelConfig.modelId,
+                messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
+                maxSteps: MAX_AGENT_STEPS,
+                temperature: chatSettings.answerTemperature,
+                signal: requestAbortController.signal,
+                tool: {
+                  name: COURSE_SEARCH_TOOL,
+                  description: "Search this course's materials (lecture notes, slides, documents, video transcripts) for passages relevant to a query. Returns numbered sources to cite.",
+                  queryDescription: "What to look for, as a short standalone search query (resolve references like 'it' using the conversation).",
+                  execute: (query) =>
+                    runCourseSearch(query, {
+                      search: searchCourse,
+                      registry: sources,
+                      prepare: prepareSources,
+                      renderBody: renderSourceBody,
+                    }),
+                },
+                onTextDelta: streamDelta,
+                onReset: () => {
+                  ensureStreamActive();
+                  sendEvent("reset", {});
+                },
+                onToolCall: (query) => {
+                  ensureStreamActive();
+                  sendEvent("status", { message: `Searching course materials for "${query}"` });
                 },
               });
-
-              const { userMessageResult, assistantMessageResult } = await persistTurn(
-                supabaseClient,
-                activeConversationId,
-                trimmedMessage,
-                answer,
-              );
-
-              if (!userMessageResult.error && userMessageResult.data && !assistantMessageResult.error && assistantMessageResult.data) {
-                const queryCategory = classifyQueryCategory(trimmedMessage);
-                const unresolvedReason = inferUnresolvedReason({
-                  retrievedChunkCount: 0,
-                  citationCount: 0,
-                  answer,
-                });
-
-                await Promise.all([
-                  supabaseClient
-                    .from("conversations")
-                    .update({ updated_at: new Date().toISOString() })
-                    .eq("id", activeConversationId),
-                  insertQueryEvent(supabaseAdminClient, {
-                    user_id: user.id,
-                    conversation_id: activeConversationId,
-                    course_id: activeCourseId,
-                    academic_term_id: activeAcademicTermId,
-                    user_message_id: userMessageResult.data.id,
-                    assistant_message_id: assistantMessageResult.data.id,
-                    query_text: trimmedMessage,
-                    query_category: queryCategory,
-                    retrieved_chunk_count: 0,
-                    citation_count: 0,
-                    citation_hit: false,
-                    unresolved: unresolvedReason !== null,
-                    unresolved_reason: unresolvedReason,
-                    latency_ms: Date.now() - requestStartedAt,
-                  }),
-                ]);
-              } else {
-                if (userMessageResult.error) {
-                  console.error(`Failed to save user message: ${userMessageResult.error.message}`);
-                }
-                if (assistantMessageResult.error) {
-                  console.error(`Failed to save assistant message: ${assistantMessageResult.error.message}`);
-                }
-              }
-
-              return;
+              retrievedChunks = sources.list();
+              console.log(`Agent answered with ${retrievedChunks.length} distinct source(s) found.`);
             }
-
-            const rawAnswer = await generateModelTextStream({
-              modelConfig: chatModelConfig,
-              apiKey: chatApiKey,
-              systemPrompt,
-              userPrompt: trimmedMessage,
-              historyTurns,
-              temperature: chatSettings.answerTemperature,
-              maxOutputTokens: chatSettings.maxAnswerTokens,
-              signal: requestAbortController.signal,
-              onTextDelta: (delta) => {
-                ensureStreamActive();
-                sendEvent("token", { text: delta });
-              },
-            });
 
             ensureStreamActive();
 
