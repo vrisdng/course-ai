@@ -2,7 +2,9 @@
 // All edge functions call OpenAI through this module instead of raw fetch,
 // so provider/model changes happen in one place.
 import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
-import { embedMany, generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import { embedMany, generateText, streamText, tool } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import { z } from "https://esm.sh/zod@3.23.8";
+import { consumeAgentStream, type AgentStreamPart } from "./agentStream.ts";
 import {
   DEFAULT_EMBEDDING_CONFIG,
   createEmbeddingService,
@@ -11,6 +13,7 @@ import {
   type EmbeddingService,
 } from "./embeddings.ts";
 import {
+  buildAgentProviderOptions,
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
   buildPageImageMessages,
@@ -112,6 +115,62 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
       await options.onTextDelta(fallbackText);
     }
     return fallbackText;
+  } catch (error) {
+    wrapProviderError(error);
+  }
+}
+
+// A tool the agent calls with a single text query (e.g. course search).
+export interface AgentQueryTool {
+  name: string;
+  description: string;
+  queryDescription: string;
+  execute(query: string): Promise<string>;
+}
+
+export interface AgentStreamOptions {
+  apiKey: string;
+  model: string;
+  messages: ChatMessage[];
+  tool: AgentQueryTool;
+  // Model turns allowed in total: tool calls plus the final answer.
+  maxSteps: number;
+  temperature?: number;
+  reasoningEffort?: ReasoningEffort;
+  signal?: AbortSignal;
+  onTextDelta(delta: string): Promise<void> | void;
+  // Text already streamed belonged to a step that ended in a tool call.
+  onReset(): Promise<void> | void;
+  onToolCall(query: string): Promise<void> | void;
+}
+
+// Answers with tool use (agentic RAG). Runs on the Responses API, because Chat
+// Completions rejects function tools on these reasoning models.
+export async function generateAgentTextStream(options: AgentStreamOptions): Promise<string> {
+  try {
+    const openai = createOpenAI({ apiKey: options.apiKey });
+    const result = streamText({
+      model: openai.responses(options.model),
+      messages: options.messages,
+      temperature: options.temperature,
+      tools: {
+        [options.tool.name]: tool({
+          description: options.tool.description,
+          parameters: z.object({ query: z.string().describe(options.tool.queryDescription) }),
+          execute: ({ query }) => options.tool.execute(query),
+        }),
+      },
+      maxSteps: options.maxSteps,
+      providerOptions: buildAgentProviderOptions(options.reasoningEffort),
+      abortSignal: options.signal,
+    });
+
+    const text = await consumeAgentStream(result.fullStream as AsyncIterable<AgentStreamPart>, {
+      onTextDelta: options.onTextDelta,
+      onReset: options.onReset,
+      onToolCall: (_toolName, args) => options.onToolCall(String((args as { query?: unknown })?.query ?? "")),
+    });
+    return requireGeneratedText(text, options.model, await result.finishReason);
   } catch (error) {
     wrapProviderError(error);
   }
