@@ -33,7 +33,7 @@ import {
 import type { Box, PageLine } from "../_shared/highlights.ts";
 import {
   convertOfficeDocument,
-  createConverterClient,
+  createCloudConvertClient,
   isConvertibleOffice,
 } from "../_shared/officeConversion.ts";
 
@@ -791,17 +791,10 @@ async function runBlockStage(context: StageContext, state: BlockExtractionState,
 const CONVERTING_PROGRESS = 15;
 const SOURCE_SIGNED_URL_TTL_SECONDS = 600;
 
-interface OfficeConverterConfig {
-  url: string;
-  secret: string;
-}
-
-// Unset in an environment without the converter: DOCX/PPTX then keep the
-// XML text extraction below and are never shown as pages.
-function officeConverterConfig(): OfficeConverterConfig | null {
-  const url = Deno.env.get("OFFICE_CONVERTER_URL");
-  const secret = Deno.env.get("OFFICE_CONVERTER_SECRET");
-  return url && secret ? { url, secret } : null;
+// Unset in an environment without CloudConvert: DOCX/PPTX then keep the XML
+// text extraction below and are never shown as pages.
+function cloudConvertApiKey(): string | null {
+  return Deno.env.get("CLOUDCONVERT_API_KEY") || null;
 }
 
 // Converts the original to converted/<material_id>.pdf and records it on the
@@ -809,13 +802,13 @@ function officeConverterConfig(): OfficeConverterConfig | null {
 // the caller can fall back to extracting the original's XML text.
 async function tryConvertOfficeDocument(options: {
   adminClient: SupabaseClient;
-  converter: OfficeConverterConfig;
+  cloudConvertApiKey: string;
   materialId: string;
   bucketName: string;
   filePath: string;
   format: "docx" | "pptx";
 }): Promise<string | null> {
-  const { adminClient, converter, materialId, bucketName, filePath, format } = options;
+  const { adminClient, cloudConvertApiKey, materialId, bucketName, filePath, format } = options;
   await adminClient
     .from("materials")
     .update({ processing_status: "processing", processing_stage: "converting", processing_progress: CONVERTING_PROGRESS })
@@ -830,14 +823,13 @@ async function tryConvertOfficeDocument(options: {
         if (error || !data?.signedUrl) throw new Error(`Could not sign the original: ${error?.message ?? "no URL"}`);
         return data.signedUrl;
       },
-      createUploadUrl: async (path) => {
-        const { data, error } = await adminClient.storage
+      convertToPdf: createCloudConvertClient(cloudConvertApiKey),
+      uploadPdf: async (path, pdf) => {
+        const { error } = await adminClient.storage
           .from(bucketName)
-          .createSignedUploadUrl(path, { upsert: true });
-        if (error || !data?.signedUrl) throw new Error(`Could not sign the PDF upload: ${error?.message ?? "no URL"}`);
-        return data.signedUrl;
+          .upload(path, pdf, { contentType: "application/pdf", upsert: true });
+        if (error) throw new Error(`Could not store the converted PDF: ${error.message}`);
       },
-      callConverter: createConverterClient(converter.url, converter.secret),
     });
 
     const { error } = await adminClient.from("materials").update({ converted_pdf_path: pdfPath }).eq("id", materialId);
@@ -989,9 +981,9 @@ serve(async (req: Request) => {
     // DOCX/PPTX: convert to PDF, then continue as a PDF job
     // -----------------------------------------------------------------------
     const sourceExtension = filePath.split(".").pop()?.toLowerCase() || fileType;
-    const converter = officeConverterConfig();
+    const ccApiKey = cloudConvertApiKey();
     if (
-      converter &&
+      ccApiKey &&
       bucketName === "course-materials" &&
       isConvertibleOffice(sourceExtension) &&
       !payload.chunks &&
@@ -999,7 +991,7 @@ serve(async (req: Request) => {
     ) {
       const pdfPath = await tryConvertOfficeDocument({
         adminClient,
-        converter,
+        cloudConvertApiKey: ccApiKey,
         materialId: claimedMaterialId,
         bucketName,
         filePath,

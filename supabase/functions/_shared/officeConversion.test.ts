@@ -2,14 +2,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CLOUDCONVERT_SYNC_JOBS_URL,
   convertOfficeDocument,
   convertedPdfPath,
-  createConverterClient,
+  createCloudConvertClient,
   isConvertibleOffice,
   type OfficeConversionDeps,
 } from "./officeConversion.ts";
 
 const MATERIAL = "11111111-2222-3333-4444-555555555555";
+const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
 
 describe("isConvertibleOffice", () => {
   it("covers Word and PowerPoint documents only", () => {
@@ -31,53 +33,115 @@ describe("convertOfficeDocument", () => {
   function deps() {
     return {
       createDownloadUrl: vi.fn(async (path: string) => `https://storage.test/sign/${path}?token=d`),
-      createUploadUrl: vi.fn(async (path: string) => `https://storage.test/upload/${path}?token=u`),
-      callConverter: vi.fn(async () => ({ bytes: 1234, convertMs: 900 })),
+      convertToPdf: vi.fn(async () => PDF_BYTES),
+      uploadPdf: vi.fn(async () => {}),
     } satisfies OfficeConversionDeps;
   }
 
-  it("signs the original and the PDF destination, converts, and returns the PDF path", async () => {
+  it("signs the original, converts it, uploads the PDF and returns its path", async () => {
     const d = deps();
 
     const pdfPath = await convertOfficeDocument(MATERIAL, "course/abc-notes.docx", "docx", d);
 
     expect(pdfPath).toBe(`converted/${MATERIAL}.pdf`);
     expect(d.createDownloadUrl).toHaveBeenCalledWith("course/abc-notes.docx");
-    expect(d.createUploadUrl).toHaveBeenCalledWith(`converted/${MATERIAL}.pdf`);
-    expect(d.callConverter).toHaveBeenCalledWith({
-      sourceUrl: "https://storage.test/sign/course/abc-notes.docx?token=d",
-      uploadUrl: `https://storage.test/upload/converted/${MATERIAL}.pdf?token=u`,
-      format: "docx",
-    });
+    expect(d.convertToPdf).toHaveBeenCalledWith("https://storage.test/sign/course/abc-notes.docx?token=d", "docx");
+    expect(d.uploadPdf).toHaveBeenCalledWith(`converted/${MATERIAL}.pdf`, PDF_BYTES);
   });
 
-  it("propagates converter failures to the caller", async () => {
+  it("propagates conversion failures without uploading", async () => {
     const d = deps();
-    d.callConverter.mockRejectedValueOnce(new Error("Converter returned 422: LibreOffice produced no PDF"));
-    await expect(convertOfficeDocument(MATERIAL, "c/x.pptx", "pptx", d)).rejects.toThrow("LibreOffice produced no PDF");
+    d.convertToPdf.mockRejectedValueOnce(new Error("CloudConvert job failed: convert: bad file"));
+
+    await expect(convertOfficeDocument(MATERIAL, "c/x.pptx", "pptx", d)).rejects.toThrow("bad file");
+    expect(d.uploadPdf).not.toHaveBeenCalled();
   });
 });
 
-describe("createConverterClient", () => {
-  it("posts with the shared secret and returns the parsed body", async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ bytes: 10, convertMs: 5 })));
-    const call = createConverterClient("https://conv.test/convert", "s3cret", fetchImpl);
-    const body = { sourceUrl: "s", uploadUrl: "u", format: "pptx" as const };
+describe("createCloudConvertClient", () => {
+  const SOURCE = "https://ref.supabase.co/storage/v1/object/sign/course-materials/a.pptx?token=t";
+  const EXPORT_URL = "https://storage.cloudconvert.com/tasks/xyz/a.pdf";
 
-    await expect(call(body)).resolves.toEqual({ bytes: 10, convertMs: 5 });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://conv.test/convert",
-      expect.objectContaining({
-        method: "POST",
-        headers: { Authorization: "Bearer s3cret", "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }),
+  function job(overrides: Record<string, unknown> = {}) {
+    return {
+      data: {
+        id: "job-1",
+        status: "finished",
+        tasks: [
+          { name: "import", operation: "import/url", status: "finished", message: null, code: null },
+          { name: "convert", operation: "convert", status: "finished", message: null, code: null },
+          {
+            name: "export",
+            operation: "export/url",
+            status: "finished",
+            message: null,
+            code: null,
+            result: { files: [{ filename: "a.pdf", url: EXPORT_URL }] },
+          },
+        ],
+        ...overrides,
+      },
+    };
+  }
+
+  function fetchReturning(jobBody: unknown, jobStatus = 201, fileResponse = new Response(PDF_BYTES)) {
+    return vi.fn(async (input: string | URL | Request, _init?: RequestInit) =>
+      String(input) === EXPORT_URL ? fileResponse : new Response(JSON.stringify(jobBody), { status: jobStatus }),
     );
+  }
+
+  it("creates an import → convert → export job on the sync endpoint and returns the PDF bytes", async () => {
+    const fetchImpl = fetchReturning(job());
+    const convert = createCloudConvertClient("cc-key", fetchImpl);
+
+    const pdf = await convert(SOURCE, "pptx");
+
+    expect(pdf).toEqual(PDF_BYTES);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(CLOUDCONVERT_SYNC_JOBS_URL);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ Authorization: "Bearer cc-key", "Content-Type": "application/json" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      tasks: {
+        import: { operation: "import/url", url: SOURCE },
+        convert: { operation: "convert", input: "import", input_format: "pptx", output_format: "pdf" },
+        export: { operation: "export/url", input: "convert" },
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(EXPORT_URL, expect.anything());
   });
 
-  it("throws with the converter's error message", async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }));
-    const call = createConverterClient("https://conv.test/convert", "s3cret", fetchImpl);
-    await expect(call({ sourceUrl: "s", uploadUrl: "u", format: "docx" })).rejects.toThrow("Converter returned 401: Unauthorized");
+  it("names the failing task when the job ends in error", async () => {
+    const failed = job({
+      status: "error",
+      tasks: [
+        { name: "import", operation: "import/url", status: "finished", message: null, code: null },
+        { name: "convert", operation: "convert", status: "error", message: "Unsupported file", code: "INVALID_FILE" },
+      ],
+    });
+    const convert = createCloudConvertClient("cc-key", fetchReturning(failed));
+
+    await expect(convert(SOURCE, "docx")).rejects.toThrow("CloudConvert job failed: convert (INVALID_FILE): Unsupported file");
+  });
+
+  it("surfaces API errors such as a bad key or no credits", async () => {
+    const fetchImpl = fetchReturning({ message: "Unauthenticated.", code: "UNAUTHENTICATED" }, 401);
+    const convert = createCloudConvertClient("bad-key", fetchImpl);
+
+    await expect(convert(SOURCE, "docx")).rejects.toThrow("CloudConvert returned 401: Unauthenticated.");
+  });
+
+  it("fails when the finished job has no exported file", async () => {
+    const noFile = job();
+    noFile.data.tasks[2].result = { files: [] };
+    const convert = createCloudConvertClient("cc-key", fetchReturning(noFile));
+
+    await expect(convert(SOURCE, "docx")).rejects.toThrow("CloudConvert job finished without an exported file");
+  });
+
+  it("fails when the PDF download fails", async () => {
+    const convert = createCloudConvertClient("cc-key", fetchReturning(job(), 201, new Response("gone", { status: 404 })));
+
+    await expect(convert(SOURCE, "docx")).rejects.toThrow("Could not download the converted PDF: 404");
   });
 });
