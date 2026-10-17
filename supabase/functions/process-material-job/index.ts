@@ -32,6 +32,7 @@ import {
 } from "../_shared/blockExtraction.ts";
 import type { Box, PageLine } from "../_shared/highlights.ts";
 import {
+  cloudConvertImportMode,
   convertOfficeDocument,
   createCloudConvertClient,
   isConvertibleOffice,
@@ -823,7 +824,11 @@ async function tryConvertOfficeDocument(options: {
         if (error || !data?.signedUrl) throw new Error(`Could not sign the original: ${error?.message ?? "no URL"}`);
         return data.signedUrl;
       },
-      convertToPdf: createCloudConvertClient(cloudConvertApiKey),
+      convertToPdf: createCloudConvertClient(
+        cloudConvertApiKey,
+        fetch,
+        cloudConvertImportMode(Deno.env.get("SUPABASE_URL")!),
+      ),
       uploadPdf: async (path, pdf) => {
         const { error } = await adminClient.storage
           .from(bucketName)

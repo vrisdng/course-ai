@@ -2,7 +2,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CLOUDCONVERT_JOBS_URL,
   CLOUDCONVERT_SYNC_JOBS_URL,
+  cloudConvertImportMode,
   convertOfficeDocument,
   convertedPdfPath,
   createCloudConvertClient,
@@ -55,6 +57,19 @@ describe("convertOfficeDocument", () => {
 
     await expect(convertOfficeDocument(MATERIAL, "c/x.pptx", "pptx", d)).rejects.toThrow("bad file");
     expect(d.uploadPdf).not.toHaveBeenCalled();
+  });
+});
+
+describe("cloudConvertImportMode", () => {
+  it("lets CloudConvert fetch by URL from a hosted Supabase project", () => {
+    expect(cloudConvertImportMode("https://abcd.supabase.co")).toBe("url");
+  });
+
+  it("uploads the file itself from a local stack CloudConvert cannot reach", () => {
+    expect(cloudConvertImportMode("http://kong:8000")).toBe("upload");
+    expect(cloudConvertImportMode("http://127.0.0.1:54321")).toBe("upload");
+    expect(cloudConvertImportMode("http://localhost:54321")).toBe("upload");
+    expect(cloudConvertImportMode("http://host.docker.internal:54321")).toBe("upload");
   });
 });
 
@@ -143,5 +158,80 @@ describe("createCloudConvertClient", () => {
     const convert = createCloudConvertClient("cc-key", fetchReturning(job(), 201, new Response("gone", { status: 404 })));
 
     await expect(convert(SOURCE, "docx")).rejects.toThrow("Could not download the converted PDF: 404");
+  });
+
+  describe("upload mode", () => {
+    const UPLOAD_FORM_URL = "https://upload.cloudconvert.com/storage/abc";
+    const ORIGINAL = new Uint8Array([0x50, 0x4b, 0x03, 0x04]); // zip header
+
+    function uploadFetch(finalJob: unknown = job(), uploadStatus = 201) {
+      return vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === CLOUDCONVERT_JOBS_URL) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: "job-1",
+                status: "waiting",
+                tasks: [
+                  {
+                    name: "import",
+                    operation: "import/upload",
+                    status: "waiting",
+                    message: null,
+                    code: null,
+                    result: { form: { url: UPLOAD_FORM_URL, parameters: { expires: "1", signature: "sig" } } },
+                  },
+                ],
+              },
+            }),
+            { status: 201 },
+          );
+        }
+        if (url === SOURCE) return new Response(ORIGINAL);
+        if (url === UPLOAD_FORM_URL) return new Response(null, { status: uploadStatus });
+        if (url === `${CLOUDCONVERT_SYNC_JOBS_URL}/job-1`) return new Response(JSON.stringify(finalJob));
+        if (url === EXPORT_URL) return new Response(PDF_BYTES);
+        return new Response("unexpected", { status: 500 });
+      });
+    }
+
+    it("creates the job, uploads the original to the import form, waits, and returns the PDF", async () => {
+      const fetchImpl = uploadFetch();
+      const convert = createCloudConvertClient("cc-key", fetchImpl, "upload");
+
+      await expect(convert(SOURCE, "docx")).resolves.toEqual(PDF_BYTES);
+
+      const calls = fetchImpl.mock.calls.map(([url]) => String(url));
+      expect(calls).toEqual([CLOUDCONVERT_JOBS_URL, SOURCE, UPLOAD_FORM_URL, `${CLOUDCONVERT_SYNC_JOBS_URL}/job-1`, EXPORT_URL]);
+
+      const createBody = JSON.parse(fetchImpl.mock.calls[0][1]?.body as string);
+      expect(createBody.tasks.import).toEqual({ operation: "import/upload" });
+      expect(createBody.tasks.convert).toEqual({ operation: "convert", input: "import", input_format: "docx", output_format: "pdf" });
+
+      const form = fetchImpl.mock.calls[2][1]?.body as FormData;
+      expect(fetchImpl.mock.calls[2][1]?.method).toBe("POST");
+      expect(form.get("expires")).toBe("1");
+      expect(form.get("signature")).toBe("sig");
+      expect(form.get("file")).toBeInstanceOf(Blob);
+      expect([...form.keys()].at(-1)).toBe("file");
+      expect(fetchImpl.mock.calls[3][1]?.headers).toEqual({ Authorization: "Bearer cc-key" });
+    });
+
+    it("fails when the upload to CloudConvert is rejected", async () => {
+      const convert = createCloudConvertClient("cc-key", uploadFetch(job(), 403), "upload");
+
+      await expect(convert(SOURCE, "docx")).rejects.toThrow("CloudConvert upload failed: 403");
+    });
+
+    it("reports the failing task after waiting", async () => {
+      const failed = job({
+        status: "error",
+        tasks: [{ name: "convert", operation: "convert", status: "error", message: "Corrupt", code: "CONVERSION_FAILED" }],
+      });
+      const convert = createCloudConvertClient("cc-key", uploadFetch(failed), "upload");
+
+      await expect(convert(SOURCE, "pptx")).rejects.toThrow("convert (CONVERSION_FAILED): Corrupt");
+    });
   });
 });

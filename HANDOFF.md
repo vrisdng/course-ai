@@ -119,6 +119,7 @@ DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get p
 
 - **Flow:** on a fresh DOCX/PPTX job, `process-material-job` signs a download URL for the original and runs a CloudConvert job (import/url → convert → export/url) on the sync endpoint (`_shared/officeConversion.ts`). It downloads the PDF, stores it at `course-materials/converted/<material_id>.pdf`, records `materials.converted_pdf_path` and requeues the job with `filePath` set to the PDF. From there the PDF pipeline runs unchanged.
 - **Viewer:** `resolveCitationSource` previews converted materials through their PDF (`previewAsPdf`), so citations open as page images with the cited blocks highlighted. `materials.file_path` still points at the original.
+- **Local stack:** CloudConvert can't reach `kong:8000`, so when `SUPABASE_URL` is a local host the function downloads the original and uploads it to CloudConvert (`import/upload`) instead of passing a signed URL (`cloudConvertImportMode`).
 - **Fallback:** if `CLOUDCONVERT_API_KEY` is unset or conversion fails, the job falls through to the old XML extraction (logged as a warning).
 - **Trust boundary:** CloudConvert receives a 10-minute signed URL for the original and stores the files temporarily under its own retention policy. Conversions use CloudConvert credits; a failed or out-of-credit job falls back to XML extraction.
 - **History:** this replaced a self-hosted LibreOffice container (`services/office-converter`, removed 2026-10-17; see git history).
