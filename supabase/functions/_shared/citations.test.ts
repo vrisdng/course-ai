@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildCitationRewriteSourceContext,
   formatLabelledBlocks,
   clipText,
   extractCitedImageTokens,
@@ -203,19 +202,6 @@ describe("formatLabelledBlocks", () => {
       shownCount: 1,
     });
     expect(formatLabelledBlocks(1, ["z".repeat(80)], 40).text).toBe(`[1a] ${"z".repeat(40)}...`);
-  });
-});
-
-describe("buildCitationRewriteSourceContext", () => {
-  it("numbers sources sequentially with label and clipped text", () => {
-    const context = buildCitationRewriteSourceContext([
-      { material_name: "A", material_type: "pdf", chunk_text: "alpha", start_ms: null, end_ms: null, page_number: null },
-      { material_name: "B", material_type: "video", chunk_text: "beta", start_ms: 0, end_ms: 1000, page_number: null },
-    ]);
-    expect(context).toContain("Source 1: A (pdf)");
-    expect(context).toContain("Source 2: B (0:00-0:01) (video)");
-    expect(context).toContain("alpha");
-    expect(context).toContain("beta");
   });
 });
 

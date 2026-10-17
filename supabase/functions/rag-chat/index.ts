@@ -15,7 +15,6 @@ import {
 } from "../_shared/courseSearch.ts";
 import { MATCH_CHUNKS_FUNCTION } from "../_shared/embeddings.ts";
 import {
-  buildCitationRewriteSourceContext,
   extractCitedImageTokens,
   IMAGE_MATERIAL_TYPES,
   rewriteImageTokens,
@@ -55,7 +54,7 @@ import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts"
 import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
 import { parseVideoEvidenceSelection, type VideoEvidenceCandidate, type VideoEvidenceSegment } from "../_shared/videoEvidence.ts";
 
-const CITATION_PIPELINE_VERSION = "2026-10-17-agentic-search-v1";
+const CITATION_PIPELINE_VERSION = "2026-10-17-agentic-search-v2";
 
 // Agentic RAG: the model searches the course materials with this tool instead
 // of a search running before it.
@@ -268,22 +267,21 @@ async function persistTurn(
   return { userMessageResult, assistantMessageResult };
 }
 
-async function formatAnswerWithReliableCitations(options: {
-  modelConfig: ChatModelConfig;
-  apiKey: string;
-  question: string;
+// Resolves the answer's citation markers against the sources the model was
+// shown. An answer the model left uncited (general knowledge, "not covered")
+// stays uncited: no second pass adds citations to it.
+function resolveAnswerCitations(options: {
   rawAnswer: string;
   chunks: RetrievedChunk[];
-  signal?: AbortSignal;
   imageResolver?: (sourceNumber: number) => SourceImage | null;
   blockCountBySource?: BlockCountBySource;
-}): Promise<{
+}): {
   answer: string;
   citedChunks: RetrievedChunk[];
   // Parallel to citedChunks: which blocks of that source each citation names.
   citedRefs: CitedRef[];
   imageByFinalCite: Map<number, SourceImage>;
-}> {
+} {
   const cleanedAnswer = stripTrailingSourcesSection(options.rawAnswer.trim());
   if (options.chunks.length === 0) {
     return {
@@ -294,43 +292,7 @@ async function formatAnswerWithReliableCitations(options: {
     };
   }
 
-  let sanitized = sanitizeAndRemapCitations(cleanedAnswer, options.chunks.length, options.blockCountBySource);
-
-  if (sanitized.citedChunkNumbers.length === 0) {
-    const citationRewriteSystemPrompt = `You are a citation editor for a retrieval-augmented generation system.
-Your job is to add reliable inline citations to an existing draft answer.
-
-Rules:
-1. Keep the answer content the same; only add or adjust citation markers.
-2. Use ONLY citation markers in the format <<cite:n>>, exactly one source number per marker (<<cite:1>><<cite:3>>, never <<cite:1,3>>).
-3. Only use citation numbers that exist in the provided source list.
-4. Place citations immediately after the sentence or claim they support.
-5. Do NOT add a sources section.
-6. Preserve the original markdown structure and wording as much as possible.
-7. Do not add, remove, or rename headings.
-8. Return only the revised answer in markdown.`;
-
-    const citationRewriteUserPrompt = `Question:
-${options.question}
-
-Draft answer:
-${cleanedAnswer}
-
-Allowed sources:
-${buildCitationRewriteSourceContext(options.chunks)}`;
-
-    const rewrittenAnswer = await generateModelText({
-      modelConfig: options.modelConfig,
-      apiKey: options.apiKey,
-      systemPrompt: citationRewriteSystemPrompt,
-      userPrompt: citationRewriteUserPrompt,
-      temperature: 0.1,
-      maxOutputTokens: 1800,
-      signal: options.signal,
-    });
-
-    sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length, options.blockCountBySource);
-  }
+  const sanitized = sanitizeAndRemapCitations(cleanedAnswer, options.chunks.length, options.blockCountBySource);
 
   // Rewrite embedded image tokens (img-source-<n>) to stable storage paths and
   // remember which final citation number carries an image, so the caller can
@@ -839,7 +801,9 @@ PARTS: Some sources are split into labelled parts such as [2a], [2b], [2c] (a he
 
 IMAGES: A source labelled with an "Image reference token" is a course image (diagram, chart, screenshot). To show it, place the exact Markdown image token on the same line right after the claim it supports, immediately followed by its citation marker, like this: ![<short caption>](img-source-<n>) <<cite:<n>>. Use the token verbatim and only for sources provided; never invent an image token.
 
-RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. If your searches find nothing relevant, say the course materials don't cover it and suggest the student search online. Do not force-fit unrelated material.
+RELEVANCE: Before citing a source, verify it genuinely answers the question — not just that it shares keywords. Do not force-fit unrelated material.
+
+NOT IN THE MATERIALS: If your searches find nothing that answers the question, say so first, then answer from general knowledge without any citations, e.g. "I couldn't find this in your course materials, but based on general knowledge: ...". Never cite a source for a claim it doesn't support. If a document filter is active, follow DOCUMENT SCOPE instead and don't answer from general knowledge.
 
 Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}
 
@@ -1024,13 +988,9 @@ ${retrievalScopeInstruction}`;
 
             ensureStreamActive();
 
-            const { answer, citedChunks, citedRefs, imageByFinalCite } = await formatAnswerWithReliableCitations({
-              modelConfig: chatModelConfig,
-              apiKey: chatApiKey,
-              question: trimmedMessage,
+            const { answer, citedChunks, citedRefs, imageByFinalCite } = resolveAnswerCitations({
               rawAnswer,
               chunks: retrievedChunks,
-              signal: requestAbortController.signal,
               imageResolver: (sourceNumber) => imageSourceRefs.get(sourceNumber) ?? null,
               blockCountBySource: (sourceNumber) => shownBlocksBySource.get(sourceNumber)?.length ?? 0,
             });
