@@ -122,6 +122,22 @@ describe('SourcesPanel', () => {
     expect(screen.getByTestId('pdf-reader')).toBeInTheDocument();
   });
 
+  it('shows the rendered page image with the cited box instead of loading the PDF', () => {
+    const value = props({
+      showSidePanel: true,
+      activeViewerSource: source({
+        pageNumber: 2,
+        pageImage: { url: 'https://img.test/p2.webp', width: 1400, height: 788 },
+        highlightBoxes: [[0.1, 0.2, 0.6, 0.3]],
+      }),
+    });
+    render(<SourcesPanel {...value} />);
+
+    expect(screen.queryByTestId('pdf-thumb')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Lecture Notes, page 2' })).toHaveAttribute('src', 'https://img.test/p2.webp');
+    expect(screen.getByTestId('citation-highlight')).toBeInTheDocument();
+  });
+
   it('shows the destination path for an active source', () => {
     const value = props({ showSidePanel: true, activeViewerSource: source() });
     render(<SourcesPanel {...value} />);

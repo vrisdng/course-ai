@@ -113,6 +113,21 @@ Clicking a PDF citation shows the cited page as a pre-rendered image with exactl
 - **Image size:** ~1400px WebP q80, roughly 150–250 KB per text-heavy page.
 - **Cleanup still to do:** the deleted `pdf-page-thumbnail` function stays **deployed** until `supabase functions delete pdf-page-thumbnail`. `materials.thumbnail_path` is unused but kept, because `transcribe-video` still writes `null` to it.
 
+## Office documents → PDF (2026-10-08)
+
+DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get page images, blocks (with LaTeX maths) and block-level citations. Before this, their text came from the document XML: equations were dropped and page numbers were guessed.
+
+- **Flow:** on a fresh DOCX/PPTX job, `process-material-job` signs a download URL for the original and runs a CloudConvert job (import/url → convert → export/url) on the sync endpoint (`_shared/officeConversion.ts`). It downloads the PDF, stores it at `course-materials/converted/<material_id>.pdf`, records `materials.converted_pdf_path` and requeues the job with `filePath` set to the PDF. From there the PDF pipeline runs unchanged.
+- **Viewer:** `resolveCitationSource` previews converted materials through their PDF (`previewAsPdf`), so citations open as page images with the cited blocks highlighted. `materials.file_path` still points at the original.
+- **Local stack:** CloudConvert can't reach `kong:8000`, so when `SUPABASE_URL` is a local host the function downloads the original and uploads it to CloudConvert (`import/upload`) instead of passing a signed URL (`cloudConvertImportMode`).
+- **Fallback:** if `CLOUDCONVERT_API_KEY` is unset or conversion fails, the job falls through to the old XML extraction (logged as a warning).
+- **Trust boundary:** CloudConvert receives a 10-minute signed URL for the original and stores the files temporarily under its own retention policy. Conversions use CloudConvert credits; a failed or out-of-credit job falls back to XML extraction.
+- **History:** this replaced a self-hosted LibreOffice container (`services/office-converter`, removed 2026-10-17; see git history).
+- **Limits:**
+  - PowerPoint equations depend on the fallback picture PowerPoint saves with each one. Test decks made with pandoc have none, so their equations convert blank. This hasn't yet been verified on a PowerPoint-authored deck.
+  - Deleting a material doesn't remove `converted/` or `page-images/` objects.
+  - `.doc`/`.ppt` aren't converted yet; LibreOffice handles them too.
+
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 
 `rag-chat`'s `smart`/`pro` tiers and `generate-flashcards` previously called Gemini for plain text-in/text-out chat generation. Both now go through OpenAI only, via a new shared wrapper [supabase/functions/_shared/llm.ts](supabase/functions/_shared/llm.ts) built on the Vercel AI SDK (`ai` + `@ai-sdk/openai`, pulled in via `esm.sh` like every other npm dependency in these functions — no import map needed). `GEMINI_API_KEY` is no longer read for chat.

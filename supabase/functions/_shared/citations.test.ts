@@ -125,6 +125,33 @@ describe("normalizeCitationTokens with block labels", () => {
   });
 });
 
+describe("normalizeCitationTokens with block labels", () => {
+  const blocks = (source: number) => ({ 1: 2, 2: 3 } as Record<number, number>)[source] ?? 0;
+
+  it("keeps valid block labels, lowercased and sorted", () => {
+    expect(normalizeCitationTokens("See <<cite:2b>>.", 2, blocks)).toBe("See <<cite:2b>>.");
+    expect(normalizeCitationTokens("See <<cite: 2C, 2B >>.", 2, blocks)).toBe("See <<cite:2b,2c>>.");
+  });
+
+  it("falls back to the whole source for labels that don't exist", () => {
+    expect(normalizeCitationTokens("See <<cite:2z>>.", 2, blocks)).toBe("See <<cite:2>>.");
+    expect(normalizeCitationTokens("See <<cite:2b>>.", 2)).toBe("See <<cite:2>>.");
+  });
+
+  it("splits a token that names several sources into one token per source", () => {
+    expect(normalizeCitationTokens("See <<cite:1a,2b>>.", 2, blocks)).toBe("See <<cite:1a>><<cite:2b>>.");
+  });
+
+  it("lets a whole-source citation win over blocks of it in the same marker", () => {
+    expect(normalizeCitationTokens("See <<cite:2,2b>>.", 2, blocks)).toBe("See <<cite:2>>.");
+    expect(normalizeCitationTokens("See <<cite:2b,2>>.", 2, blocks)).toBe("See <<cite:2>>.");
+  });
+
+  it("drops references to sources that don't exist", () => {
+    expect(normalizeCitationTokens("See <<cite:9a>>.", 2, blocks)).toBe("See .");
+  });
+});
+
 describe("sanitizeAndRemapCitations", () => {
   it("remaps cited sources to a dense 1..n sequence in first-appearance order", () => {
     const result = sanitizeAndRemapCitations(
