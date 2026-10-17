@@ -48,8 +48,8 @@ describe('CourseChatSettingsPanel', () => {
   it('shows the stored values', () => {
     mockSettings({ ...DEFAULT_CHAT_SETTINGS, finalCount: 6, videoSpreadWindowMs: 30_000, courseInstructions: 'Use SI units.' });
     renderPanel();
-    expect(screen.getByLabelText('Sources sent to the model')).toHaveValue(6);
-    expect(screen.getByLabelText('Video summary spread window')).toHaveValue(30);
+    expect(screen.getByRole('spinbutton', { name: 'Sources sent to the model' })).toHaveValue(6);
+    expect(screen.getByRole('spinbutton', { name: 'Video summary spread window' })).toHaveValue(30);
     expect(screen.getByLabelText('Course instructions')).toHaveValue('Use SI units.');
   });
 
@@ -58,8 +58,8 @@ describe('CourseChatSettingsPanel', () => {
     const saveButton = screen.getByRole('button', { name: 'Save changes' });
     expect(saveButton).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('Sources sent to the model'), { target: { value: '7' } });
-    fireEvent.change(screen.getByLabelText('Video summary spread window'), { target: { value: '45' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Sources sent to the model' }), { target: { value: '7' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Video summary spread window' }), { target: { value: '45' } });
     fireEvent.click(screen.getByLabelText('Rewrite follow-up questions before searching'));
     expect(saveButton).toBeEnabled();
     fireEvent.click(saveButton);
@@ -71,7 +71,7 @@ describe('CourseChatSettingsPanel', () => {
 
   it('blocks saving an out-of-range value and says why', () => {
     renderPanel();
-    fireEvent.change(screen.getByLabelText('Sources sent to the model'), { target: { value: '99' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Sources sent to the model' }), { target: { value: '99' } });
     expect(screen.getByText('Must be between 1 and 30.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
   });
@@ -88,9 +88,38 @@ describe('CourseChatSettingsPanel', () => {
     mockSettings({ ...DEFAULT_CHAT_SETTINGS, finalCount: 6 });
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
-    expect(screen.getByLabelText('Sources sent to the model')).toHaveValue(DEFAULT_CHAT_SETTINGS.finalCount);
+    expect(screen.getByRole('spinbutton', { name: 'Sources sent to the model' })).toHaveValue(DEFAULT_CHAT_SETTINGS.finalCount);
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
-    expect(screen.getByLabelText('Sources sent to the model')).toHaveValue(6);
+    expect(screen.getByRole('spinbutton', { name: 'Sources sent to the model' })).toHaveValue(6);
+  });
+
+  it('gives every numeric setting a slider that tracks the typed value', () => {
+    mockSettings({ ...DEFAULT_CHAT_SETTINGS, finalCount: 6, videoSpreadWindowMs: 30_000 });
+    renderPanel();
+
+    const sources = screen.getByRole('slider', { name: 'Sources sent to the model' });
+    expect(sources).toHaveAttribute('aria-valuenow', '6');
+    expect(sources).toHaveAttribute('aria-valuemin', '1');
+    expect(sources).toHaveAttribute('aria-valuemax', '30');
+    // Shown in seconds, like the number box.
+    expect(screen.getByRole('slider', { name: 'Video summary spread window' })).toHaveAttribute('aria-valuenow', '30');
+    expect(screen.getAllByRole('slider')).toHaveLength(screen.getAllByRole('spinbutton').length);
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Sources sent to the model' }), { target: { value: '12' } });
+    expect(sources).toHaveAttribute('aria-valuenow', '12');
+  });
+
+  it('updates the value and enables saving when a slider moves', () => {
+    renderPanel();
+    const slider = screen.getByRole('slider', { name: 'Similarity threshold' });
+
+    fireEvent.keyDown(slider, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('spinbutton', { name: 'Similarity threshold' })).toHaveValue(0.21);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    // Snapped to the step, not 0.21000000000000002.
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ matchThreshold: 0.21 }));
   });
 
   it('shows load errors and the empty state', () => {

@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import type { Course } from '@/features/materials/types';
 import {
@@ -16,6 +17,8 @@ import {
   DEFAULT_CHAT_SETTINGS,
   MODEL_TIER_LABELS,
   fromDisplayValue,
+  sliderRange,
+  snapToStep,
   toDisplayValue,
   validateChatSettings,
   type ChatModelTier,
@@ -184,28 +187,49 @@ interface NumericFieldProps {
   onChange: (value: number) => void;
 }
 
+// A slider for quick adjustment, with a number box beside it for an exact
+// value. Both edit the same setting; the box also shows invalid input.
 function NumericField({ field, value, error, onChange }: NumericFieldProps) {
   const id = `chat-settings-${field.key}`;
-  const range = CHAT_SETTING_RANGES[field.key];
+  const labelId = `${id}-label`;
+  const range = sliderRange(field);
   const unit = field.unit ? ` ${field.unit}` : '';
+  const displayValue = Number.isFinite(value) ? toDisplayValue(field, value) : null;
+  // An empty or out-of-range box leaves the thumb at the nearest end.
+  const sliderValue = Math.min(range.max, Math.max(range.min, displayValue ?? range.min));
 
   return (
-    <div className="space-y-1">
-      <Label htmlFor={id}>{field.label}</Label>
-      <Input
-        id={id}
-        type="number"
-        inputMode="decimal"
-        step={field.step}
-        min={toDisplayValue(field, range.min)}
-        max={toDisplayValue(field, range.max)}
-        value={Number.isFinite(value) ? toDisplayValue(field, value) : ''}
-        onChange={(event) => {
-          const raw = event.target.value;
-          onChange(raw === '' ? Number.NaN : fromDisplayValue(field, Number(raw)));
-        }}
-        aria-invalid={Boolean(error)}
-      />
+    <div className="space-y-2">
+      <Label id={labelId} htmlFor={id}>{field.label}</Label>
+      <div className="flex items-center gap-3">
+        <Slider
+          min={range.min}
+          max={range.max}
+          step={range.step}
+          value={[sliderValue]}
+          onValueChange={([next]) => onChange(fromDisplayValue(field, snapToStep(field, next)))}
+          aria-labelledby={labelId}
+          className="flex-1"
+        />
+        <div className="flex shrink-0 items-center gap-1">
+          <Input
+            id={id}
+            type="number"
+            inputMode="decimal"
+            step={field.step}
+            min={range.min}
+            max={range.max}
+            value={displayValue ?? ''}
+            onChange={(event) => {
+              const raw = event.target.value;
+              onChange(raw === '' ? Number.NaN : fromDisplayValue(field, Number(raw)));
+            }}
+            aria-invalid={Boolean(error)}
+            className="h-8 w-24 text-right"
+          />
+          {field.unit ? <span className="text-xs text-muted-foreground">{field.unit}</span> : null}
+        </div>
+      </div>
       <p className="text-xs text-muted-foreground">
         {field.description} Default {toDisplayValue(field, DEFAULT_CHAT_SETTINGS[field.key])}{unit}.
       </p>
