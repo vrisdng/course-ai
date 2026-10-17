@@ -717,6 +717,32 @@ export function useStudentChat(routeConversationId: string | null = null) {
             return;
           }
 
+          if (event.event === 'status') {
+            const status = typeof parsed === 'object' && parsed && 'message' in parsed
+              ? String((parsed as { message?: unknown }).message || '')
+              : '';
+            if (!status || finalPayload || activeRequestIdRef.current !== requestId) {
+              return;
+            }
+            setMessages((prev) =>
+              prev.map((message) => (message.id === assistantMessageId ? { ...message, status } : message)),
+            );
+            return;
+          }
+
+          // Text streamed so far preceded a search and isn't part of the answer.
+          if (event.event === 'reset') {
+            if (finalPayload || activeRequestIdRef.current !== requestId) {
+              return;
+            }
+            pendingContent = '';
+            if (rafHandle) {
+              cancelAnimationFrame(rafHandle);
+            }
+            flushTokens();
+            return;
+          }
+
           if (event.event === 'final') {
             if (typeof parsed === 'object' && parsed) {
               finalPayload = parsed as RagChatFinalPayload;
@@ -793,7 +819,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
       setMessages((prev) =>
         prev.map((message) =>
           message.id === assistantMessageId
-            ? { ...message, content: answer, citations }
+            ? { ...message, content: answer, citations, status: undefined }
             : message
         )
       );

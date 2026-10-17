@@ -5,6 +5,7 @@ import {
   getRetrievalSettings,
   lexicalOverlapScore,
   rerankRetrievedChunks,
+  spreadAcrossTimeline,
   tokenizeForLexicalScore,
 } from "./retrieval.ts";
 import { resolveChatSettings } from "./chatSettings.ts";
@@ -158,5 +159,24 @@ describe("rerankRetrievedChunks", () => {
     const chunks = [{ id: "a", chunk_text: "text", relevance_score: 5 }];
     const result = rerankRetrievedChunks(chunks, "text", 1);
     expect(result[0].relevance_score).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("spreadAcrossTimeline", () => {
+  const at = (id: string, startMs: number | null) => ({ id, start_ms: startMs });
+
+  it("drops video chunks that start within the window of an already-kept one", () => {
+    const kept = spreadAcrossTimeline([at("a", 0), at("b", 30_000), at("c", 70_000), at("d", 100_000)], 60_000);
+    expect(kept.map((c) => c.id)).toEqual(["a", "c"]);
+  });
+
+  it("keeps chunks without timestamps (documents) untouched", () => {
+    const kept = spreadAcrossTimeline([at("doc1", null), at("a", 0), at("doc2", null), at("b", 10_000)], 60_000);
+    expect(kept.map((c) => c.id)).toEqual(["doc1", "a", "doc2"]);
+  });
+
+  it("keeps everything when the window is zero", () => {
+    const kept = spreadAcrossTimeline([at("a", 0), at("b", 0)], 0);
+    expect(kept.map((c) => c.id)).toEqual(["a", "b"]);
   });
 });

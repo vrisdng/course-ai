@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildAgentProviderOptions,
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
   buildPageImageMessages,
@@ -16,6 +17,16 @@ describe("buildOpenAIProviderOptions", () => {
     expect(buildOpenAIProviderOptions("medium")).toEqual({
       openai: { reasoningEffort: "medium" },
     });
+  });
+});
+
+describe("buildAgentProviderOptions", () => {
+  it("never stores agent turns on OpenAI's side", () => {
+    expect(buildAgentProviderOptions()).toEqual({ openai: { store: false } });
+  });
+
+  it("adds reasoning effort only when requested", () => {
+    expect(buildAgentProviderOptions("low")).toEqual({ openai: { store: false, reasoningEffort: "low" } });
   });
 });
 
