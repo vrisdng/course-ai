@@ -123,6 +123,7 @@ Clicking a PDF citation shows the cited page as a pre-rendered image with exactl
 - **Streaming:** `rag-chat` sends SSE `status` ("Searching course materials for …") when a search starts, and `reset` when text was streamed before a search; that text isn't part of the answer. The student chat shows the status in place of "Thinking..." and clears its text on `reset`.
 - **Settings with no effect now:** `queryRewriteEnabled` (`course_chat_settings.query_rewrite_enabled`): the up-front query rewrite is gone because the model writes its own search queries. `maxAnswerTokens` was already not applied (AI SDK v4 reads `maxTokens`, `buildGenerationOptions` passes `maxOutputTokens`) and the agent path doesn't pass it either. A settings editor should hide or relabel the rewrite toggle.
 - **Removed:** the shortcut answer when a document filter returned nothing. With a filter, the prompt tells the model to say the answer isn't in the selected documents.
+- **Not in the materials:** when searches find nothing relevant, the model says so and answers from general knowledge without citations (not with a document filter, where DOCUMENT SCOPE applies). The old second citation pass, which added citations to any uncited answer, is removed so these answers stay uncited.
 - `skipRag` (no-materials mode) is unchanged and never searches.
 - **Cost and latency:** every course answer now takes at least two model turns (search, then answer); greetings answer directly. Locally, a two-part question ran two searches and finished in about 12 s.
 
