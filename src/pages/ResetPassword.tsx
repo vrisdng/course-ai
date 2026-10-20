@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { StudentNameSetup } from '@/features/students/StudentNameSetup';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -52,7 +53,10 @@ function readAuthErrorFromLocation(location: { hash: string; search: string }): 
 export default function ResetPassword() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, profile, isLoading: authLoading } = useAuth();
+  const { user, profile, isLoading: authLoading, signOut } = useAuth();
+  const mustChangePassword = user?.app_metadata?.must_change_password === true;
+  const [setupStep, setSetupStep] = useState<'password' | 'profile' | 'name'>('password');
+  const needsName = setupStep === 'name' || (user?.app_metadata?.must_change_password === false && profile?.role === 'student' && !profile.full_name?.trim());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -80,11 +84,17 @@ export default function ResetPassword() {
   });
 
   useEffect(() => {
+    if (needsName && setupStep !== 'name') setSetupStep('name');
+  }, [needsName, setupStep]);
+
+  useEffect(() => {
     if (!successMessage) return;
-    const destination = profile?.role === 'admin' ? '/admin-dashboard' : '/chat';
+    const from = (location.state as { from?: string } | null)?.from;
+    const destination = typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/reset-password') && !from.startsWith('/auth')
+      ? from : profile?.role === 'admin' ? '/admin-dashboard' : '/chat';
     const handle = window.setTimeout(() => navigate(destination, { replace: true }), REDIRECT_DELAY_MS);
     return () => window.clearTimeout(handle);
-  }, [successMessage, profile, navigate]);
+  }, [successMessage, profile, navigate, location.state]);
 
   const handleVerifyCode = async (data: VerifyCodeFormData) => {
     setIsSubmitting(true);
@@ -111,16 +121,40 @@ export default function ResetPassword() {
   };
 
   const handleUpdatePassword = async (data: NewPasswordFormData) => {
+    if (mustChangePassword && data.password === 'iLoveStudying8!') {
+      setError('Choose a password different from the initial password.');
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const { error: updateError } = await supabase.auth.updateUser({ password: data.password });
-      if (updateError) {
-        setError(updateError.message);
-      } else {
-        setSuccessMessage('Password updated. Redirecting you now...');
+      if (setupStep === 'password') {
+        const { error: updateError } = await supabase.auth.updateUser({ password: data.password });
+        if (updateError) {
+          setError(updateError.message);
+          return;
+        }
+        if (mustChangePassword) setSetupStep('profile');
       }
+      if (mustChangePassword || setupStep === 'profile') {
+        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshed.session || refreshed.session.user.app_metadata?.must_change_password === true) {
+          setError('Account setup is still pending. Sign out and sign in with your new password, then try again.');
+          return;
+        }
+        const { data: accountProfile, error: profileError } = await supabase.from('profiles')
+          .select('full_name').eq('user_id', user.id).single();
+        if (profileError || !accountProfile) {
+          setError('Password updated, but your profile could not be loaded. Try finishing account setup again.');
+          return;
+        }
+        if (!accountProfile.full_name?.trim()) {
+          setSetupStep('name');
+          return;
+        }
+      }
+      setSuccessMessage('Password updated. Redirecting you now...');
     } catch {
       setError('An unexpected error occurred. Please try again.');
     } finally {
@@ -148,11 +182,13 @@ export default function ResetPassword() {
       </Link>
 
       <Card className="w-full max-w-md">
-        {hasSession ? (
+        {hasSession && needsName ? (
+          <StudentNameSetup successMessage={successMessage} onComplete={() => setSuccessMessage('Name saved. Redirecting you now...')} />
+        ) : hasSession ? (
           <form onSubmit={passwordForm.handleSubmit(handleUpdatePassword)}>
             <CardHeader>
               <CardTitle>Choose a new password</CardTitle>
-              <CardDescription>Enter and confirm the new password for your account.</CardDescription>
+              <CardDescription>{mustChangePassword ? 'You must replace your initial password before using CEEChat. No email code is needed.' : 'Enter and confirm the new password for your account.'}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {error && (
@@ -177,6 +213,7 @@ export default function ResetPassword() {
                     id="reset-password"
                     type="password"
                     autoComplete="new-password"
+                    readOnly={setupStep === 'profile'}
                     placeholder="••••••••"
                     className="pl-10"
                     {...passwordForm.register('password')}
@@ -195,6 +232,7 @@ export default function ResetPassword() {
                     id="reset-confirm-password"
                     type="password"
                     autoComplete="new-password"
+                    readOnly={setupStep === 'profile'}
                     placeholder="••••••••"
                     className="pl-10"
                     {...passwordForm.register('confirmPassword')}
@@ -205,7 +243,7 @@ export default function ResetPassword() {
                 )}
               </div>
             </CardContent>
-            <CardFooter>
+            <CardFooter className="flex flex-col gap-2">
               <Button type="submit" className="w-full" disabled={isSubmitting || Boolean(successMessage)}>
                 {isSubmitting ? (
                   <>
@@ -213,9 +251,10 @@ export default function ResetPassword() {
                     Updating...
                   </>
                 ) : (
-                  'Update Password'
+                  setupStep === 'profile' ? 'Finish account setup' : 'Update Password'
                 )}
               </Button>
+              {(mustChangePassword || setupStep === 'profile') && <Button type="button" variant="ghost" disabled={isSubmitting} onClick={() => void signOut()}>Sign out</Button>}
             </CardFooter>
           </form>
         ) : (

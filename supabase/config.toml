@@ -1,5 +1,8 @@
 project_id = "ksthojmoifnunsatmday"
 
+[functions.import-course-students]
+verify_jwt = false
+
 [functions.rag-chat]
 verify_jwt = false
 

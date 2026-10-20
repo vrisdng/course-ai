@@ -1439,6 +1439,13 @@ export type Database = {
           transcript_id: string
         }[]
       }
+      find_student_import_profile: {
+        Args: { p_email: string }
+        Returns: {
+          role: Database["public"]["Enums"]["user_role"]
+          user_id: string
+        }[]
+      }
       get_active_academic_term_id: { Args: never; Returns: string }
       get_course_active_student_count:
         | {
@@ -1716,6 +1723,7 @@ export type Database = {
         Args: { check_org_id: string }
         Returns: boolean
       }
+      password_setup_complete: { Args: never; Returns: boolean }
       publish_video_transcript: {
         Args: {
           p_duration_ms: number
@@ -1729,6 +1737,7 @@ export type Database = {
         Args: { p_material_id: string; p_transcript_id: string }
         Returns: undefined
       }
+      require_password_setup: { Args: never; Returns: undefined }
       retry_failed_video_transcription: {
         Args: { p_material_id: string }
         Returns: boolean

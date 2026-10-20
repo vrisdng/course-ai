@@ -67,6 +67,17 @@ describe('AuthProvider', () => {
     expect(result.current.isStudent).toBe(true);
   });
 
+  it('keeps imported users signed in without querying app data until password setup completes', async () => {
+    const pendingSession = { ...session, user: { ...user, app_metadata: { must_change_password: true } } };
+    getSession.mockResolvedValueOnce({ data: { session: pendingSession } });
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.user?.app_metadata.must_change_password).toBe(true);
+    expect(from).not.toHaveBeenCalled();
+    act(() => mocks.state.authListener?.('USER_UPDATED', { ...session, user: { ...user, app_metadata: { must_change_password: false } } }));
+    await waitFor(() => expect(result.current.profile?.id).toBe('profile-1'));
+  });
+
   it('responds to sign-in/sign-out events and clears local state on explicit sign out', async () => {
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));

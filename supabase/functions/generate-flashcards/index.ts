@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { generateChatText } from "../_shared/llm.ts";
 import { corsHeaders } from "../_shared/cors.ts";
+import { passwordSetupResponse } from "../_shared/passwordSetup.ts";
 
 const CHAT_MODEL = "gpt-5.6-luna";
 const MAX_FLASHCARDS = 10;
@@ -110,6 +111,9 @@ serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const setupResponse = passwordSetupResponse(user);
+    if (setupResponse) return setupResponse;
 
     const body = (await req.json()) as FlashcardRequest;
     const { messageId, conversationId, courseId, chunkIds } = body;
