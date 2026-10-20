@@ -28,6 +28,7 @@ Email + password only — no OAuth/social login, no magic-link-only flow. Passwo
 - Session handling relies entirely on the Supabase JS client's default token refresh — no custom session TTL logic in this app.
 - Password reset: "Forgot password?" on the sign-in tab emails a one-time numeric code (length set by the project's OTP setting; currently 8) (no link — mail-security scanners consume single-use links). The user enters the code at `/reset-password`, then sets a new password. ⏱ Codes are single-use and expire after 1 hour (project OTP expiry). ⏱ The built-in Supabase mailer sends at most 2 emails/hour project-wide until custom SMTP is configured.
 - Post-login redirect: admins → `/admin-dashboard`, students → `/chat` (or back to wherever `ProtectedRoute` redirected them from).
+- Imported students sign in with their email and initial password `iLoveStudying8!`, then must choose a different password before accessing the app. This signed-in change requires no recovery email. Database and API guards enforce setup; refreshing or editing user metadata cannot skip it. Existing accounts keep their passwords when imported into another course.
 
 ## Student chat (RAG)
 
@@ -100,7 +101,9 @@ Admins manage courses and academic terms (e.g. "Semester 2 AY25/26").
 
 ### Course invites & enrollment
 
-Two ways to get a student into a course, both admin-only to create, both on the same `course_invites` table:
+The course's **Enrolled Students** page also has an **Import students** action at the top right. Upload an email-only CSV/text file or paste emails separated by commas/newlines; an `email` header is optional. Preview validation catches invalid entries and removes duplicates. Import creates confirmed student accounts and enrolls them directly into this course, reporting per-email results. Re-import is safe: existing students are enrolled without resetting credentials, and existing non-student accounts are skipped. No onboarding emails are sent.
+
+Two invitation-based enrollment options remain available, both admin-only to create, both on the same `course_invites` table:
 
 1. **Per-email invites** — up to 200 per request; checks each address for existing enrollment/invite/validity before creating.
 2. **Course-join codes** — a single reusable 8-character code (unambiguous charset, no `0/O/1/I`) shared course-wide.

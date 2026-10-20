@@ -10,6 +10,7 @@ import {
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { PasswordChangeGate } from "@/components/auth/PasswordChangeGate";
 
 // Pages
 import Landing from "./pages/Landing";
@@ -39,6 +40,7 @@ const App = () => (
         </AlertDialog>
       )}
       <BrowserRouter>
+        <PasswordChangeGate>
         <Routes>
           {/* Public routes */}
           <Route path="/" element={<Landing />} />
@@ -93,6 +95,7 @@ const App = () => (
           {/* Catch-all */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </PasswordChangeGate>
       </BrowserRouter>
     </TooltipProvider>
   </AuthProvider>

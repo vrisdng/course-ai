@@ -105,6 +105,14 @@ supabase functions serve rag-chat --env-file .env
 
 **Reminder**: `reap-stale-jobs` is meant to run on a schedule (stale-job cleanup, 5-minute staleness threshold, 5-attempt retry cap — see [GET_STARTED.md](GET_STARTED.md)'s dynamic-behavior table). No `pg_cron` schedule was found checked into migrations — confirm whether this is wired up via the Supabase dashboard's cron scheduler before assuming stuck jobs self-heal in whatever environment you're working in.
 
+### Student import and required password setup
+
+Apply `20261020140000_require_imported_student_password_change.sql` before deploying `import-course-students`, `redeem-course-invite`, and `generate-flashcards`, then release the frontend normally. The importer fails closed if the migration's guard RPC is absent. Inspect hosted migration history before applying migrations; do not replay historical migrations against an existing database with incomplete migration records.
+
+The migration adds a password-update trigger, restrictive RLS policies for existing app tables and Storage objects, and the Data API pre-request hook `public.require_password_setup` to cover RPCs. It refuses to overwrite a different pre-request hook; compose any existing hook explicitly. New tables exposed through Realtime or Storage should also enforce `public.password_setup_complete()` in restrictive policies.
+
+New accounts have confirmed emails and the shared initial password, with server-owned `must_change_password` metadata. Changing the password clears that marker atomically; no recovery email is required. Ordinary forgot-password recovery still depends on SMTP limits. SQL assertions for the migration are in `supabase/tests/student_password_setup.sql` and must run in an isolated database.
+
 ### Stored video rollout
 
 Apply the three video migrations in timestamp order, then regenerate `src/integrations/supabase/types.ts`. Before the scheduling migration, create Vault secrets named `project_url` and `service_role_key`; use the project's current secret API key, not the legacy service-role JWT. Deploy `video-upload-session`, `transcribe-video`, `signed-media`, `assemblyai-video-webhook`, and `reconcile-video-transcriptions`.

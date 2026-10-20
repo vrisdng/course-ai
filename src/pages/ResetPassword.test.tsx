@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ authState: {} as Record<string, unknown>, updateUser: vi.fn(), verifyOtp: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authState: {} as Record<string, unknown>, updateUser: vi.fn(), verifyOtp: vi.fn(), refreshSession: vi.fn() }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => mocks.authState }));
-vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { updateUser: mocks.updateUser, verifyOtp: mocks.verifyOtp } } }));
+vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { updateUser: mocks.updateUser, verifyOtp: mocks.verifyOtp, refreshSession: mocks.refreshSession } } }));
 import ResetPassword from './ResetPassword';
 
 type Entry = string | { pathname: string; hash?: string; state?: unknown };
@@ -93,6 +93,29 @@ describe('ResetPassword', () => {
   });
 
   describe('new password (session present)', () => {
+    it('requires imported users to replace the initial password without sending a recovery email', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false };
+      mocks.refreshSession.mockResolvedValue({ data: { session: { user: { app_metadata: { must_change_password: false } } } }, error: null });
+      renderPage();
+      fillPasswords('iLoveStudying8!');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByText('Choose a password different from the initial password.')).toBeInTheDocument();
+      expect(mocks.updateUser).not.toHaveBeenCalled();
+      fillPasswords('MyOwnPassword9!');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByText('chat destination')).toBeInTheDocument();
+      expect(mocks.updateUser).toHaveBeenCalledWith({ password: 'MyOwnPassword9!' });
+      expect(mocks.refreshSession).toHaveBeenCalledOnce();
+      expect(mocks.verifyOtp).not.toHaveBeenCalled();
+    });
+    it('does not unlock if the server still reports a pending password change', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false };
+      mocks.refreshSession.mockResolvedValue({ data: { session: { user: { app_metadata: { must_change_password: true } } } }, error: null });
+      renderPage(); fillPasswords('MyOwnPassword9!');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByText(/Account setup is still pending/)).toBeInTheDocument();
+      expect(screen.queryByText('chat destination')).not.toBeInTheDocument();
+    });
     it('validates password length and confirmation before calling Supabase', async () => {
       renderPage();
       fillPasswords('short', 'different');

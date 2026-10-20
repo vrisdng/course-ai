@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
+import { passwordSetupResponse } from "../_shared/passwordSetup.ts";
 
 interface RedeemInviteRequest {
   inviteCode: string;
@@ -39,6 +40,9 @@ serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const setupResponse = passwordSetupResponse(user);
+    if (setupResponse) return setupResponse;
 
     const body = (await req.json()) as RedeemInviteRequest;
     const inviteCode = body.inviteCode?.trim();

@@ -11,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { supabase } from '@/integrations/supabase/client';
+import { ImportStudentsDialog } from '@/features/students/ImportStudentsDialog';
 
 interface RosterEntry {
   enrollmentId: string;
@@ -173,11 +174,14 @@ export default function CourseStudents() {
         </Button>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1.5">
             <CardTitle>Enrolled Students</CardTitle>
             <CardDescription>
               {courseName ? `Students enrolled in ${courseName}.` : 'Manage students enrolled in this course.'}
             </CardDescription>
+            </div>
+            {courseId && <ImportStudentsDialog courseId={courseId} courseName={courseName} onImported={() => void fetchRoster()} />}
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

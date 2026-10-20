@@ -1716,6 +1716,7 @@ export type Database = {
         Args: { check_org_id: string }
         Returns: boolean
       }
+      password_setup_complete: { Args: never; Returns: boolean }
       publish_video_transcript: {
         Args: {
           p_duration_ms: number
@@ -1729,6 +1730,7 @@ export type Database = {
         Args: { p_material_id: string; p_transcript_id: string }
         Returns: undefined
       }
+      require_password_setup: { Args: never; Returns: undefined }
       retry_failed_video_transcription: {
         Args: { p_material_id: string }
         Returns: boolean

@@ -52,7 +52,8 @@ function readAuthErrorFromLocation(location: { hash: string; search: string }): 
 export default function ResetPassword() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, profile, isLoading: authLoading } = useAuth();
+  const { user, profile, isLoading: authLoading, signOut } = useAuth();
+  const mustChangePassword = user?.app_metadata?.must_change_password === true;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -81,10 +82,12 @@ export default function ResetPassword() {
 
   useEffect(() => {
     if (!successMessage) return;
-    const destination = profile?.role === 'admin' ? '/admin-dashboard' : '/chat';
+    const from = (location.state as { from?: string } | null)?.from;
+    const destination = typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/reset-password') && !from.startsWith('/auth')
+      ? from : profile?.role === 'admin' ? '/admin-dashboard' : '/chat';
     const handle = window.setTimeout(() => navigate(destination, { replace: true }), REDIRECT_DELAY_MS);
     return () => window.clearTimeout(handle);
-  }, [successMessage, profile, navigate]);
+  }, [successMessage, profile, navigate, location.state]);
 
   const handleVerifyCode = async (data: VerifyCodeFormData) => {
     setIsSubmitting(true);
@@ -111,6 +114,10 @@ export default function ResetPassword() {
   };
 
   const handleUpdatePassword = async (data: NewPasswordFormData) => {
+    if (mustChangePassword && data.password === 'iLoveStudying8!') {
+      setError('Choose a password different from the initial password.');
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
 
@@ -119,6 +126,13 @@ export default function ResetPassword() {
       if (updateError) {
         setError(updateError.message);
       } else {
+        if (mustChangePassword) {
+          const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+          if (refreshError || !refreshed.session || refreshed.session.user.app_metadata?.must_change_password === true) {
+            setError('Account setup is still pending. Sign out and sign in with your new password, then try again.');
+            return;
+          }
+        }
         setSuccessMessage('Password updated. Redirecting you now...');
       }
     } catch {
@@ -152,7 +166,7 @@ export default function ResetPassword() {
           <form onSubmit={passwordForm.handleSubmit(handleUpdatePassword)}>
             <CardHeader>
               <CardTitle>Choose a new password</CardTitle>
-              <CardDescription>Enter and confirm the new password for your account.</CardDescription>
+              <CardDescription>{mustChangePassword ? 'You must replace your initial password before using CEEChat. No email code is needed.' : 'Enter and confirm the new password for your account.'}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {error && (
@@ -205,7 +219,7 @@ export default function ResetPassword() {
                 )}
               </div>
             </CardContent>
-            <CardFooter>
+            <CardFooter className="flex flex-col gap-2">
               <Button type="submit" className="w-full" disabled={isSubmitting || Boolean(successMessage)}>
                 {isSubmitting ? (
                   <>
@@ -216,6 +230,7 @@ export default function ResetPassword() {
                   'Update Password'
                 )}
               </Button>
+              {mustChangePassword && <Button type="button" variant="ghost" disabled={isSubmitting} onClick={() => void signOut()}>Sign out</Button>}
             </CardFooter>
           </form>
         ) : (

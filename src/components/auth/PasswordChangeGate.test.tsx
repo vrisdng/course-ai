@@ -1,0 +1,43 @@
+import { render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const state = vi.hoisted(() => ({ auth: {} as Record<string, unknown> }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => state.auth }));
+import { PasswordChangeGate } from './PasswordChangeGate';
+
+function Setup() {
+  const location = useLocation();
+  return <div>setup:{location.state?.from}</div>;
+}
+function page(path: string) {
+  return render(<MemoryRouter initialEntries={[path]}><PasswordChangeGate><Routes>
+    <Route path="/reset-password" element={<Setup />} />
+    <Route path="*" element={<div>normal access</div>} />
+  </Routes></PasswordChangeGate></MemoryRouter>);
+}
+describe('PasswordChangeGate', () => {
+  beforeEach(() => { state.auth = { user: null, isLoading: false }; });
+  it('blocks all normal pages and preserves invite parameters', () => {
+    state.auth.user = { app_metadata: { must_change_password: true } };
+    page('/?invite=abc&email=student%40example.test');
+    expect(screen.getByText('setup:/?invite=abc&email=student%40example.test')).toBeInTheDocument();
+    expect(screen.queryByText('normal access')).not.toBeInTheDocument();
+  });
+  it('allows setup itself and users who do not need setup', () => {
+    state.auth.user = { app_metadata: { must_change_password: true } };
+    const first = page('/reset-password');
+    expect(screen.getByText('setup:')).toBeInTheDocument(); first.unmount();
+    state.auth.user = { app_metadata: {} };
+    page('/chat'); expect(screen.getByText('normal access')).toBeInTheDocument();
+  });
+  it('defers invite redemption until setup when signing in from an invite', () => {
+    state.auth.user = { app_metadata: { must_change_password: true } };
+    page('/auth?invite=abc&email=student%40example.test');
+    expect(screen.getByText('setup:/?invite=abc&email=student%40example.test')).toBeInTheDocument();
+  });
+  it('does not mount normal pages before authentication has loaded', () => {
+    state.auth.isLoading = true;
+    page('/chat'); expect(screen.queryByText('normal access')).not.toBeInTheDocument();
+  });
+});
