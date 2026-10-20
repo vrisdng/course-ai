@@ -187,18 +187,6 @@ export function formatLabelledBlocks(sourceNumber: number, texts: string[], maxC
   return { text: lines.join("\n"), shownCount: lines.length };
 }
 
-export function buildCitationRewriteSourceContext(chunks: CitationSourceChunk[]): string {
-  return chunks
-    .map((chunk, index) => {
-      const sourceType = chunk.material_type || chunk.document_type || "document";
-      return [
-        `Source ${index + 1}: ${sourceLabel(chunk)} (${sourceType})`,
-        clipText(chunk.chunk_text, 900),
-      ].join("\n");
-    })
-    .join("\n\n");
-}
-
 // Image file types that can be rendered inline in chat as citation images.
 export const IMAGE_MATERIAL_TYPES = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 
