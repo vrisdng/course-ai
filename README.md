@@ -95,6 +95,8 @@ supabase secrets set RENDER_SERVICE_URL=https://<production-domain>/api/render-p
 
 Without the two `RENDER_SERVICE_*` secrets, ingestion skips PDF page images and citations fall back to rendering the PDF in the browser.
 
+DOCX/PPTX uploads are converted to PDF first by [CloudConvert](https://cloudconvert.com/api/v2). Set the `CLOUDCONVERT_API_KEY` Supabase secret (an API key with the `task.read` and `task.write` scopes). Without it, DOCX/PPTX keep the plain-text extraction.
+
 Run a function locally against your local `.env` for faster iteration:
 
 ```sh
