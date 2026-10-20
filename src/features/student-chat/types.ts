@@ -29,6 +29,8 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
+  // While answering: what the assistant is doing (e.g. which search is running).
+  status?: string;
 }
 
 export interface Conversation {

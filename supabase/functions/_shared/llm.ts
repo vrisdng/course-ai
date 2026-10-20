@@ -2,7 +2,14 @@
 // All edge functions call OpenAI through this module instead of raw fetch,
 // so provider/model changes happen in one place.
 import { createOpenAI } from "https://esm.sh/@ai-sdk/openai@1.3.24?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
-import { embedMany, generateText, streamText } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import { embedMany, generateText, streamText, tool } from "https://esm.sh/ai@4.3.19?deps=zod@3.23.8,zod-to-json-schema@3.23.5";
+import { z } from "https://esm.sh/zod@3.23.8";
+import {
+  consumeAgentStream,
+  limitToolCalls,
+  needsAnswerOnlyTurn,
+  type AgentStreamPart,
+} from "./agentStream.ts";
 import {
   DEFAULT_EMBEDDING_CONFIG,
   createEmbeddingService,
@@ -11,6 +18,7 @@ import {
   type EmbeddingService,
 } from "./embeddings.ts";
 import {
+  buildAgentProviderOptions,
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
   buildPageImageMessages,
@@ -112,6 +120,87 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
       await options.onTextDelta(fallbackText);
     }
     return fallbackText;
+  } catch (error) {
+    wrapProviderError(error);
+  }
+}
+
+// A tool the agent calls with a single text query (e.g. course search).
+export interface AgentQueryTool {
+  name: string;
+  description: string;
+  queryDescription: string;
+  execute(query: string): Promise<string>;
+}
+
+export interface AgentStreamOptions {
+  apiKey: string;
+  model: string;
+  messages: ChatMessage[];
+  tool: AgentQueryTool;
+  // Model turns allowed for searching and answering. If the last one is spent
+  // on a tool call, one more answer-only turn (tools off) follows.
+  maxSteps: number;
+  // Times the tool really runs per answer (default maxSteps - 1). Calls past
+  // this get a "limit reached" reply instead.
+  maxToolCalls?: number;
+  temperature?: number;
+  reasoningEffort?: ReasoningEffort;
+  signal?: AbortSignal;
+  onTextDelta(delta: string): Promise<void> | void;
+  // Text already streamed belonged to a step that ended in a tool call.
+  onReset(): Promise<void> | void;
+  onToolCall(query: string): Promise<void> | void;
+}
+
+// Answers with tool use (agentic RAG). Runs on the Responses API, because Chat
+// Completions rejects function tools on these reasoning models.
+export async function generateAgentTextStream(options: AgentStreamOptions): Promise<string> {
+  try {
+    const openai = createOpenAI({ apiKey: options.apiKey });
+    const model = openai.responses(options.model);
+    const runTool = limitToolCalls(
+      (query) => options.tool.execute(query),
+      options.maxToolCalls ?? Math.max(0, options.maxSteps - 1),
+    );
+    const tools = {
+      [options.tool.name]: tool({
+        description: options.tool.description,
+        parameters: z.object({ query: z.string().describe(options.tool.queryDescription) }),
+        execute: ({ query }) => runTool(query),
+      }),
+    };
+    const shared = {
+      model,
+      temperature: options.temperature,
+      tools,
+      providerOptions: buildAgentProviderOptions(options.reasoningEffort),
+      abortSignal: options.signal,
+    };
+
+    const result = streamText({ ...shared, messages: options.messages, maxSteps: options.maxSteps });
+    const text = await consumeAgentStream(result.fullStream as AsyncIterable<AgentStreamPart>, {
+      onTextDelta: options.onTextDelta,
+      onReset: options.onReset,
+      onToolCall: (_toolName, args) => options.onToolCall(String((args as { query?: unknown })?.query ?? "")),
+    });
+    if (!needsAnswerOnlyTurn(text)) return text;
+
+    // The steps ran out on a search. Answer from what was found, tools off.
+    const { messages: stepMessages } = await result.response;
+    console.warn(`Agent for ${options.model} used its ${options.maxSteps} steps without answering; running an answer-only turn`);
+    const answerTurn = streamText({
+      ...shared,
+      messages: [...options.messages, ...stepMessages],
+      toolChoice: "none",
+      maxSteps: 1,
+    });
+    let answer = "";
+    for await (const delta of answerTurn.textStream) {
+      answer += delta;
+      await options.onTextDelta(delta);
+    }
+    return requireGeneratedText(answer.trim(), options.model, await answerTurn.finishReason);
   } catch (error) {
     wrapProviderError(error);
   }

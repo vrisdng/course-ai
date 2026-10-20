@@ -21,7 +21,7 @@ RAG-based course companion: students chat over course materials with cited answe
 
 **Backend** (`supabase/`) — 13 Deno Edge Functions in `supabase/functions/`, 30 SQL migrations in `supabase/migrations/` (applied in filename/timestamp order; several reverse earlier ones — grep before assuming a table/column doesn't exist).
 - `supabase/functions/_shared/` — the real backend library: `llm.ts` (OpenAI wrapper — **all** LLM calls route through here), `retrieval.ts`, `citations.ts`, `chunking.ts`, `query.ts`, `history.ts`, `cors.ts`, `sse.ts`, `email.ts`. Reuse these; don't reimplement retrieval/citation/CORS logic per function.
-- Core RAG path: `src/features/student-chat/useStudentChat.ts` → `supabase/functions/rag-chat/index.ts` (embeds query with Gemini, retrieves from `pgvector`, reranks, streams a cited answer over SSE via OpenAI).
+- Core RAG path: `src/features/student-chat/useStudentChat.ts` → `supabase/functions/rag-chat/index.ts`. Retrieval is agentic: the model calls a course-search tool (`_shared/courseSearch.ts`; each search embeds with OpenAI, matches in `pgvector`, reranks) as often as it needs, then streams a cited answer over SSE (`llm.ts#generateAgentTextStream`, OpenAI Responses API).
 - Material ingestion path: `upload-video`/`ingest-material` → `parse-document`/`transcribe-video` → `process-material-job` (chunk + embed). `reap-stale-jobs` cleans up stalled jobs (meant to run on a schedule — verify it's wired; see README §5).
 
 ## Conventions
