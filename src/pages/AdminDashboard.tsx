@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { CoursesOverviewTab } from '@/components/lecturer/CoursesOverviewTab';
 import { EnrollmentCodeDialog } from '@/components/lecturer/EnrollmentCodeDialog';
 import { MaterialsTab } from '@/components/lecturer/MaterialsTab';
+import { CourseChatSettingsPanel } from '@/features/chat-settings/CourseChatSettingsPanel';
 import { SystemMaintenancePanel, type JobRecoveryResult } from '@/components/lecturer/SystemMaintenancePanel';
 import { supabase } from '@/integrations/supabase/client';
 import { formatTimestamp } from '@/features/student-chat/time';
@@ -16,7 +17,7 @@ export type { Course, AcademicTerm, Material, TranscriptSegment } from '@/featur
 export const formatClock = formatTimestamp;
 
 export default function AdminDashboard() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
 
   const [courses, setCourses] = useState<Course[]>([]);
   const [academicTerms, setAcademicTerms] = useState<AcademicTerm[]>([]);
@@ -371,6 +372,14 @@ export default function AdminDashboard() {
             </TabsTrigger>
             {profile?.role === 'admin' && (
               <TabsTrigger
+                value="chat-settings"
+                className="-mb-px shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-4"
+              >
+                Chat Settings
+              </TabsTrigger>
+            )}
+            {profile?.role === 'admin' && (
+              <TabsTrigger
                 value="maintenance"
                 className="-mb-px shrink-0 rounded-none border-b-2 border-transparent px-3 py-2.5 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-4"
               >
@@ -417,6 +426,12 @@ export default function AdminDashboard() {
               isLoadingTerms={isLoadingTerms}
             />
           </TabsContent>
+
+          {profile?.role === 'admin' && (
+            <TabsContent value="chat-settings" className="mt-0 space-y-5">
+              <CourseChatSettingsPanel courses={courses} isLoadingCourses={isLoadingCourses} userId={user?.id} />
+            </TabsContent>
+          )}
 
           <TabsContent value="maintenance" className="mt-0 space-y-5">
             <SystemMaintenancePanel

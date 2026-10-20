@@ -152,6 +152,46 @@ describe('useStudentChat', () => {
     expect(result.current.isLoading).toBe(false);
   });
 
+  it('shows search status, discards text from before a search, and clears the status on the final answer', async () => {
+    const result = await setupWithCourse();
+    const fetchMock = vi.mocked(fetch);
+    const searching = 'Searching course materials for "tombstones"';
+
+    fetchMock.mockResolvedValueOnce(
+      streamResponse(
+        sseEvent('token', { text: 'Let me look that up. ' }) +
+          sseEvent('reset', {}) +
+          sseEvent('status', { message: searching }) +
+          sseEvent('token', { text: 'Tombstones mark deleted slots.' }),
+      ),
+    );
+    act(() => result.current.setInput('Why tombstones?'));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+    await waitFor(() => {
+      const assistant = result.current.messages.find((m) => m.role === 'assistant');
+      expect(assistant?.content).toBe('Tombstones mark deleted slots.');
+      expect(assistant?.status).toBe(searching);
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      streamResponse(
+        sseEvent('status', { message: searching }) +
+          sseEvent('final', { answer: 'Final answer', citations: [], conversationId: 'conv-1' }),
+      ),
+    );
+    act(() => result.current.setInput('Again?'));
+    await act(async () => {
+      await result.current.handleSend();
+    });
+    await waitFor(() => {
+      const assistant = [...result.current.messages].reverse().find((m) => m.role === 'assistant');
+      expect(assistant?.content).toBe('Final answer');
+      expect(assistant?.status).toBeUndefined();
+    });
+  });
+
   it('sends the current model tier and course id in the request body', async () => {
     const result = await setupWithCourse();
     const fetchMock = vi.mocked(fetch);

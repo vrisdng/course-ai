@@ -41,7 +41,7 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 | Smart | `gpt-5.6-terra` | OpenAI |
 | Pro | `gpt-5.6-sol` | OpenAI |
 
-**Retrieval**: query is embedded with OpenAI `text-embedding-3-large` (3072 dims, via the shared embedding service in `_shared/embeddings.ts`), matched against course material chunks with a high-recall first pass (top 18, similarity ≥ 0.20), then reranked down to a final 10 results (relevance floor 0.20, relaxed to 0.15 for broad "summary" queries). Retrieval is automatically scoped to:
+**Retrieval** is agentic: the answer model searches the course materials itself with a `search_course_materials` tool, deciding what to search and searching again with different wording when results miss (up to 4 searches per answer; greetings don't search). The student sees "Searching course materials for …" while it runs. Each search embeds the model's query with OpenAI `text-embedding-3-large` (3072 dims, via the shared embedding service in `_shared/embeddings.ts`), matches course material chunks with a high-recall first pass (by default top 18, similarity ≥ 0.20), then reranks down to 10 results (relevance floor 0.20, relaxed to 0.15 for broad "summary" queries). These numbers are per-course settings. Every search is automatically scoped to:
 - the course(s) the student is asking about,
 - ⏱ **the currently active academic term** — switching the active term instantly changes what the assistant can see, app-wide (see [Academic terms](#academic-terms--course-management)),
 - the student's chosen document scope (see below).

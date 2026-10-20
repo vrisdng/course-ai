@@ -22,6 +22,12 @@ describe('MessageList', () => {
     rerender(<MessageList messages={[{ id: 'a1', role: 'assistant', content: '' }]} {...callbacks} />);
     expect(screen.getByText('Thinking...')).toBeInTheDocument();
   });
+  it('shows what is being searched in place of thinking', () => {
+    const callbacks = { onSuggestionClick: vi.fn(), onOpenSources: vi.fn(), onCitationClick: vi.fn() };
+    render(<MessageList messages={[{ id: 'a1', role: 'assistant', content: '', status: 'Searching course materials for "tombstones"' }]} {...callbacks} />);
+    expect(screen.getByText('Searching course materials for "tombstones"')).toBeInTheDocument();
+    expect(screen.queryByText('Thinking...')).not.toBeInTheDocument();
+  });
   it('renders markdown, safe external links, source counts, and clickable citations', () => {
     const onCitationClick = vi.fn(); const onOpenSources = vi.fn();
     const message: Message = { id: 'a1', role: 'assistant', content: '## Answer\nSee <<cite:1>> and [reference](https://example.test).', citations: [citation('pdf', 'Notes.pdf')] };

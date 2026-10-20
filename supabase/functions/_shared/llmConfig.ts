@@ -10,6 +10,14 @@ export function buildOpenAIProviderOptions(reasoningEffort?: ReasoningEffort):
   return { openai: { reasoningEffort } };
 }
 
+// Provider options for a tool-using (agent) turn on the Responses API. Turns
+// are never stored on OpenAI's side.
+export function buildAgentProviderOptions(reasoningEffort?: ReasoningEffort): {
+  openai: { store: false; reasoningEffort?: ReasoningEffort };
+} {
+  return { openai: { store: false, ...(reasoningEffort ? { reasoningEffort } : {}) } };
+}
+
 export function requireGeneratedText(
   text: string,
   model: string,

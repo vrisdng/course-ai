@@ -31,4 +31,14 @@ describe('ChatComposer', () => {
     expect(screen.getByRole('button', { name: /GPT-5.6 Terra/i })).toBeInTheDocument();
     expect(screen.getByText(/CEEChat uses RAG/)).toBeInTheDocument();
   });
+  it('only offers the models the course allows', async () => {
+    const value = props();
+    render(<ChatComposer {...value} input="ask" selectedModel="smart" onModelChange={vi.fn()} modelOptions={['smart', 'pro']} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: /GPT-5.6 Terra/i }), { key: 'Enter' });
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining('Terra'),
+      expect.stringContaining('Sol'),
+    ]);
+  });
 });
