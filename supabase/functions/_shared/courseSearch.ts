@@ -27,9 +27,15 @@ export interface NumberedSource<T extends SearchableChunk = SearchableChunk> {
   isNew: boolean;
 }
 
-// Upper bound on distinct sources in one answer, so repeated searches can't
-// grow the context without limit.
+// Default upper bound on distinct sources in one answer, so repeated searches
+// can't grow the context without limit.
 export const MAX_SOURCES_PER_ANSWER = 24;
+
+// A source limit that never drops a later search's results: room for every
+// allowed search to return a full set of new sources.
+export function sourceLimitForSearches(maxSearches: number, resultsPerSearch: number): number {
+  return Math.max(1, maxSearches * resultsPerSearch);
+}
 
 export class SourceRegistry<T extends SearchableChunk = SearchableChunk> {
   private readonly numbers = new Map<string, number>();
@@ -111,16 +117,24 @@ export async function runCourseSearch<T extends SearchableChunk>(query: string, 
   if (!trimmed) {
     return "Empty search query. Search again with the words to look for.";
   }
-  const sources = deps.registry.add(await deps.search(trimmed));
+  const found = await deps.search(trimmed);
+  const sources = deps.registry.add(found);
+  // Matches the registry had no room for (search results are unique by id).
+  const leftOut = found.length - sources.length;
   if (sources.length === 0) {
+    if (leftOut > 0) {
+      return `This answer already holds the most sources it can, so the ${leftOut} match(es) for "${trimmed}" can't be shown. Answer from the sources you already have.`;
+    }
     return `No course material matched "${trimmed}". Try different wording, or tell the student the materials don't cover it.`;
   }
   const fresh = sources.filter((source) => source.isNew);
   if (fresh.length > 0) await deps.prepare(fresh);
-  return sources
+  const text = sources
     .map((source) => {
       const type = source.chunk.material_type || source.chunk.document_type || "document";
       return `Source [${source.number}]: ${sourceLabel(source.chunk)} [${type}]\n${deps.renderBody(source)}`;
     })
     .join("\n\n");
+  if (leftOut === 0) return text;
+  return `${text}\n\n(${leftOut} more matches were left out: this answer already holds the most sources it can.)`;
 }

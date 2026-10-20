@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { consumeAgentStream, type AgentStreamPart } from "./agentStream.ts";
+import {
+  SEARCH_LIMIT_REACHED_MESSAGE,
+  consumeAgentStream,
+  limitToolCalls,
+  needsAnswerOnlyTurn,
+  type AgentStreamPart,
+} from "./agentStream.ts";
 
 async function* parts(...items: AgentStreamPart[]): AsyncIterable<AgentStreamPart> {
   for (const item of items) yield item;
@@ -59,5 +65,38 @@ describe("consumeAgentStream", () => {
 
   it("throws a stream error", async () => {
     await expect(consumeAgentStream(parts({ type: "error", error: new Error("boom") }), handlers())).rejects.toThrow("boom");
+  });
+});
+
+describe("limitToolCalls", () => {
+  it("runs calls up to the limit, then answers with the limit message without running", async () => {
+    const execute = vi.fn(async (query: string) => `results for ${query}`);
+    const limited = limitToolCalls(execute, 2);
+
+    expect(await limited("a")).toBe("results for a");
+    expect(await limited("b")).toBe("results for b");
+    expect(await limited("c")).toBe(SEARCH_LIMIT_REACHED_MESSAGE);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts calls that start in parallel", async () => {
+    const execute = vi.fn(async (query: string) => query);
+    const limited = limitToolCalls(execute, 1);
+
+    const results = await Promise.all([limited("a"), limited("b")]);
+
+    expect(results).toEqual(["a", SEARCH_LIMIT_REACHED_MESSAGE]);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("needsAnswerOnlyTurn", () => {
+  it("is true when the agent stopped without writing an answer", () => {
+    expect(needsAnswerOnlyTurn("")).toBe(true);
+    expect(needsAnswerOnlyTurn("   ")).toBe(true);
+  });
+
+  it("is false once the agent has answered", () => {
+    expect(needsAnswerOnlyTurn("Hashing maps keys to buckets.")).toBe(false);
   });
 });

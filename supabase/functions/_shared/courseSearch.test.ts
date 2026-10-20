@@ -5,6 +5,7 @@ import {
   SourceRegistry,
   formatSourceBody,
   runCourseSearch,
+  sourceLimitForSearches,
   type CourseSearchDeps,
   type NumberedSource,
   type SearchableChunk,
@@ -129,5 +130,38 @@ describe("runCourseSearch", () => {
     const prepared = (d.prepare.mock.calls[0] as unknown as [NumberedSource[]])[0];
     expect(prepared.map((s) => [s.number, s.chunk.id])).toEqual([[2, "b"]]);
     expect(d.renderBody).toHaveBeenCalledTimes(2);
+  });
+
+  it("says the source limit is full instead of reporting no match", async () => {
+    const registry = new SourceRegistry(1);
+    registry.add([chunk("a")]);
+    const d = deps([chunk("b"), chunk("c")], registry);
+
+    const text = await runCourseSearch("hashing", d);
+
+    expect(text).toMatch(/already holds the most sources it can/);
+    expect(text).not.toMatch(/No course material matched/);
+    expect(d.prepare).not.toHaveBeenCalled();
+  });
+
+  it("notes how many matches were left out when the limit fills mid-search", async () => {
+    const registry = new SourceRegistry(2);
+    registry.add([chunk("a")]);
+    const d = deps([chunk("b"), chunk("c"), chunk("d")], registry);
+
+    const text = await runCourseSearch("hashing", d);
+
+    expect(text).toMatch(/^Source \[2\]: /);
+    expect(text).toMatch(/2 more matches were left out/);
+  });
+});
+
+describe("sourceLimitForSearches", () => {
+  it("leaves room for every search to return a full set of new sources", () => {
+    expect(sourceLimitForSearches(4, 10)).toBe(40);
+  });
+
+  it("never goes below one source", () => {
+    expect(sourceLimitForSearches(0, 10)).toBe(1);
   });
 });

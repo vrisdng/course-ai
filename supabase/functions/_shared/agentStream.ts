@@ -41,3 +41,28 @@ export async function consumeAgentStream(
   }
   return text.trim();
 }
+
+// What the tool tells the model once it has used its searches for this answer.
+export const SEARCH_LIMIT_REACHED_MESSAGE =
+  "Search limit reached for this answer. Answer now from the sources you already have, or tell the student the materials don't cover it.";
+
+// Caps how many times a tool really runs in one answer. Step limits alone
+// don't cap it: one step can hold several parallel calls.
+export function limitToolCalls(
+  execute: (query: string) => Promise<string>,
+  maxCalls: number,
+  limitMessage = SEARCH_LIMIT_REACHED_MESSAGE,
+): (query: string) => Promise<string> {
+  let calls = 0;
+  return (query) => {
+    if (calls >= maxCalls) return Promise.resolve(limitMessage);
+    calls += 1;
+    return execute(query);
+  };
+}
+
+// The agent can spend its last allowed step on a tool call and stop with no
+// answer. The caller then runs one more turn with tools turned off.
+export function needsAnswerOnlyTurn(answer: string): boolean {
+  return answer.trim().length === 0;
+}

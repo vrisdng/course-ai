@@ -11,6 +11,7 @@ import {
   SourceRegistry,
   formatSourceBody,
   runCourseSearch,
+  sourceLimitForSearches,
   type NumberedSource,
 } from "../_shared/courseSearch.ts";
 import { MATCH_CHUNKS_FUNCTION } from "../_shared/embeddings.ts";
@@ -60,8 +61,9 @@ const CITATION_PIPELINE_VERSION = "2026-10-17-agentic-search-v1";
 // Agentic RAG: the model searches the course materials with this tool instead
 // of a search running before it.
 const COURSE_SEARCH_TOOL = "search_course_materials";
-// Model turns per answer: up to MAX_AGENT_STEPS - 1 searches, then the answer.
+// Model turns per answer: up to MAX_AGENT_SEARCHES searches, then the answer.
 const MAX_AGENT_STEPS = 5;
+const MAX_AGENT_SEARCHES = MAX_AGENT_STEPS - 1;
 
 // Bucket that image-typed course materials live in. Stable image citations store
 // "<bucket>/<file_path>" references so the embedded markdown stays valid across
@@ -988,12 +990,16 @@ ${retrievalScopeInstruction}`;
             } else {
               // Every source the model sees gets one number for the whole
               // answer, however many searches it runs.
-              const sources = new SourceRegistry<RetrievedChunk>();
+              // Sized so no allowed search ever has its results dropped.
+              const sources = new SourceRegistry<RetrievedChunk>(
+                sourceLimitForSearches(MAX_AGENT_SEARCHES, chatSettings.finalCount),
+              );
               rawAnswer = await generateAgentTextStream({
                 apiKey: chatApiKey,
                 model: chatModelConfig.modelId,
                 messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
                 maxSteps: MAX_AGENT_STEPS,
+                maxToolCalls: MAX_AGENT_SEARCHES,
                 temperature: chatSettings.answerTemperature,
                 signal: requestAbortController.signal,
                 tool: {
