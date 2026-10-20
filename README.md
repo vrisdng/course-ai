@@ -109,6 +109,8 @@ supabase functions serve rag-chat --env-file .env
 
 Apply `20261020140000_require_imported_student_password_change.sql` before deploying `import-course-students`, `redeem-course-invite`, and `generate-flashcards`, then release the frontend normally. The importer fails closed if the migration's guard RPC is absent. Inspect hosted migration history before applying migrations; do not replay historical migrations against an existing database with incomplete migration records.
 
+Also apply `20261020143000_student_import_auth_lookup.sql` before deploying `import-course-students`. This server-only lookup resolves accounts by Auth email and reads profiles by user ID, so edited or stale profile emails cannot redirect enrollment. Its regression assertions are in `supabase/tests/student_import_lookup.sql` and must run in an isolated database.
+
 The migration adds a password-update trigger, restrictive RLS policies for existing app tables and Storage objects, and the Data API pre-request hook `public.require_password_setup` to cover RPCs. It refuses to overwrite a different pre-request hook; compose any existing hook explicitly. New tables exposed through Realtime or Storage should also enforce `public.password_setup_complete()` in restrictive policies.
 
 New accounts have confirmed emails and the shared initial password, with server-owned `must_change_password` metadata. Changing the password clears that marker atomically; no recovery email is required. Ordinary forgot-password recovery still depends on SMTP limits. SQL assertions for the migration are in `supabase/tests/student_password_setup.sql` and must run in an isolated database.

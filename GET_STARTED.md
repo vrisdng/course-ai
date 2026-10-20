@@ -28,7 +28,7 @@ Email + password only — no OAuth/social login, no magic-link-only flow. Passwo
 - Session handling relies entirely on the Supabase JS client's default token refresh — no custom session TTL logic in this app.
 - Password reset: "Forgot password?" on the sign-in tab emails a one-time numeric code (length set by the project's OTP setting; currently 8) (no link — mail-security scanners consume single-use links). The user enters the code at `/reset-password`, then sets a new password. ⏱ Codes are single-use and expire after 1 hour (project OTP expiry). ⏱ The built-in Supabase mailer sends at most 2 emails/hour project-wide until custom SMTP is configured.
 - Post-login redirect: admins → `/admin-dashboard`, students → `/chat` (or back to wherever `ProtectedRoute` redirected them from).
-- Imported students sign in with their email and initial password `iLoveStudying8!`, then must choose a different password before accessing the app. This signed-in change requires no recovery email. Database and API guards enforce setup; refreshing or editing user metadata cannot skip it. Existing accounts keep their passwords when imported into another course.
+- Imported students sign in with their email and initial password `iLoveStudying8!`, then must choose a different password. Students without a profile name are then asked to enter their name before opening the app; refreshing resumes unfinished name setup. This signed-in password change requires no recovery email. Database and API guards enforce the password change; name collection is enforced by the app's route gate. Existing accounts keep their names and passwords when imported into another course.
 
 ## Student chat (RAG)
 

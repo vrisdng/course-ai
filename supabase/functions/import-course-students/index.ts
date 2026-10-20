@@ -23,8 +23,7 @@ serve(async (req: Request) => {
       return Boolean(data);
     },
     async findProfile(email) {
-      const { data, error } = await admin.from('profiles').select('user_id, role')
-        .ilike('email', email.replace(/[\\%_]/g, '\\$&')).maybeSingle();
+      const { data, error } = await admin.rpc('find_student_import_profile', { p_email: email }).maybeSingle();
       if (error) throw error;
       return data ? { userId: data.user_id, role: data.role } : null;
     },

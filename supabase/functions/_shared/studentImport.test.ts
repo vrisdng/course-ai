@@ -74,4 +74,22 @@ describe('student import', () => {
     const response = await handleStudentImport(request(body), store);
     expect((await response.json()).results[0].status).toBe('enrolled');
   });
+  it('reuses one account across courses without resetting its password', async () => {
+    const secondCourseId = '8ab379d4-ec0d-46a7-b13b-c7bcad969aa1';
+    vi.mocked(store.findProfile).mockResolvedValueOnce(null).mockResolvedValue(student);
+    const first = await handleStudentImport(request(body), store);
+    const second = await handleStudentImport(request({ ...body, courseId: secondCourseId }), store);
+    expect((await first.json()).results[0].status).toBe('created');
+    expect((await second.json()).results[0].status).toBe('enrolled');
+    expect(store.createStudent).toHaveBeenCalledTimes(1);
+    expect(store.enroll).toHaveBeenNthCalledWith(1, student.userId, body.courseId);
+    expect(store.enroll).toHaveBeenNthCalledWith(2, student.userId, secondCourseId);
+  });
+  it('does not create or enroll an account if the trusted lookup fails', async () => {
+    vi.mocked(store.findProfile).mockRejectedValue(new Error('Lookup unavailable'));
+    const response = await handleStudentImport(request(body), store);
+    expect((await response.json()).results[0].status).toBe('failed');
+    expect(store.createStudent).not.toHaveBeenCalled();
+    expect(store.enroll).not.toHaveBeenCalled();
+  });
 });

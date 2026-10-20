@@ -40,4 +40,20 @@ describe('PasswordChangeGate', () => {
     state.auth.isLoading = true;
     page('/chat'); expect(screen.queryByText('normal access')).not.toBeInTheDocument();
   });
+  it('resumes name setup after the imported student has changed their password', () => {
+    state.auth.user = { app_metadata: { must_change_password: false } };
+    state.auth.profile = { role: 'student', full_name: '  ' };
+    page('/chat');
+    expect(screen.getByText('setup:/chat')).toBeInTheDocument();
+    expect(screen.queryByText('normal access')).not.toBeInTheDocument();
+  });
+  it('allows imported students with names and ordinary existing accounts', () => {
+    state.auth.user = { app_metadata: { must_change_password: false } };
+    state.auth.profile = { role: 'student', full_name: 'Ngọc Mai' };
+    const first = page('/chat');
+    expect(screen.getByText('normal access')).toBeInTheDocument(); first.unmount();
+    state.auth.user = { app_metadata: {} };
+    state.auth.profile = { role: 'student', full_name: '' };
+    page('/chat'); expect(screen.getByText('normal access')).toBeInTheDocument();
+  });
 });

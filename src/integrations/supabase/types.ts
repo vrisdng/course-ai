@@ -1439,6 +1439,13 @@ export type Database = {
           transcript_id: string
         }[]
       }
+      find_student_import_profile: {
+        Args: { p_email: string }
+        Returns: {
+          role: Database["public"]["Enums"]["user_role"]
+          user_id: string
+        }[]
+      }
       get_active_academic_term_id: { Args: never; Returns: string }
       get_course_active_student_count:
         | {

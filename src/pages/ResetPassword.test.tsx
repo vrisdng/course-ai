@@ -2,9 +2,19 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ authState: {} as Record<string, unknown>, updateUser: vi.fn(), verifyOtp: vi.fn(), refreshSession: vi.fn() }));
+const mocks = vi.hoisted(() => {
+  const readProfile = vi.fn();
+  const saveProfile = vi.fn();
+  const saveEq = vi.fn(() => ({ select: vi.fn(() => ({ single: saveProfile })) }));
+  const updateProfile = vi.fn(() => ({ eq: saveEq }));
+  const from = vi.fn(() => ({
+    select: vi.fn(() => ({ eq: vi.fn(() => ({ single: readProfile })) })), update: updateProfile,
+  }));
+  return { authState: {} as Record<string, unknown>, updateUser: vi.fn(), verifyOtp: vi.fn(), refreshSession: vi.fn(),
+    refreshProfile: vi.fn(), readProfile, saveProfile, saveEq, updateProfile, from };
+});
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => mocks.authState }));
-vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { updateUser: mocks.updateUser, verifyOtp: mocks.verifyOtp, refreshSession: mocks.refreshSession } } }));
+vi.mock('@/integrations/supabase/client', () => ({ supabase: { auth: { updateUser: mocks.updateUser, verifyOtp: mocks.verifyOtp, refreshSession: mocks.refreshSession }, from: mocks.from } }));
 import ResetPassword from './ResetPassword';
 
 type Entry = string | { pathname: string; hash?: string; state?: unknown };
@@ -28,6 +38,10 @@ describe('ResetPassword', () => {
     mocks.authState = { user: { id: 'u1' }, profile: { role: 'student' }, isLoading: false };
     mocks.updateUser.mockResolvedValue({ error: null });
     mocks.verifyOtp.mockResolvedValue({ error: null });
+    mocks.readProfile.mockResolvedValue({ data: { full_name: 'Existing Student' }, error: null });
+    mocks.saveProfile.mockResolvedValue({ data: { user_id: 'u1' }, error: null });
+    mocks.refreshProfile.mockResolvedValue(undefined);
+    mocks.refreshSession.mockResolvedValue({ data: { session: { user: { app_metadata: { must_change_password: false } } } }, error: null });
   });
 
   it('shows a loading state while the session is being established', () => {
@@ -93,6 +107,65 @@ describe('ResetPassword', () => {
   });
 
   describe('new password (session present)', () => {
+    it('asks an imported student for their name after password setup, before entering the app', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false, refreshProfile: mocks.refreshProfile };
+      mocks.readProfile.mockResolvedValue({ data: { full_name: '' }, error: null });
+      renderPage(); fillPasswords('MyOwnPassword9!');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByLabelText('Full name')).toBeInTheDocument();
+      expect(screen.queryByText('chat destination')).not.toBeInTheDocument();
+      expect(mocks.readProfile.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.refreshSession.mock.invocationCallOrder[0]);
+      fireEvent.change(screen.getByLabelText('Full name'), { target: { value: '  Ngọc Mai  ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+      expect(await screen.findByText('chat destination')).toBeInTheDocument();
+      expect(mocks.updateProfile).toHaveBeenCalledWith({ full_name: 'Ngọc Mai' });
+      expect(mocks.saveEq).toHaveBeenCalledWith('user_id', 'u1');
+      expect(mocks.refreshProfile).toHaveBeenCalledOnce();
+      expect(mocks.updateUser).toHaveBeenCalledOnce();
+    });
+    it('resumes unfinished name setup without changing the password again', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: false } },
+        profile: { role: 'student', full_name: '' }, isLoading: false, refreshProfile: mocks.refreshProfile };
+      mocks.refreshProfile.mockImplementationOnce(async () => { mocks.authState.profile = { role: 'student', full_name: 'Ada Lovelace' }; });
+      renderPage();
+      fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Ada Lovelace' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+      expect(await screen.findByText('Name saved. Redirecting you now...')).toBeInTheDocument();
+      expect(screen.getByLabelText('Full name')).toBeInTheDocument();
+      expect(await screen.findByText('chat destination')).toBeInTheDocument();
+      expect(mocks.updateUser).not.toHaveBeenCalled();
+      expect(mocks.refreshSession).not.toHaveBeenCalled();
+    });
+    it('validates names and keeps the name form available when saving fails', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: false } },
+        profile: { role: 'student', full_name: null }, isLoading: false, refreshProfile: mocks.refreshProfile };
+      mocks.saveProfile.mockResolvedValueOnce({ data: null, error: { message: 'Could not save your name' } });
+      renderPage();
+      fireEvent.change(screen.getByLabelText('Full name'), { target: { value: '   ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+      expect(await screen.findByText('Enter your name')).toBeInTheDocument();
+      expect(mocks.updateProfile).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'A'.repeat(201) } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+      expect(await screen.findByText('Name must be 200 characters or fewer')).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText('Full name'), { target: { value: '李' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+      expect(await screen.findByText('Could not save your name')).toBeInTheDocument();
+      expect(screen.queryByText('chat destination')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+      expect(await screen.findByText('chat destination')).toBeInTheDocument();
+      expect(mocks.updateUser).not.toHaveBeenCalled();
+    });
+    it('retries a failed profile read without submitting the new password twice', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false };
+      mocks.readProfile.mockResolvedValueOnce({ data: null, error: { message: 'Offline' } });
+      renderPage(); fillPasswords('MyOwnPassword9!');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByText(/Password updated, but your profile could not be loaded/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Finish account setup' }));
+      expect(await screen.findByText('chat destination')).toBeInTheDocument();
+      expect(mocks.updateUser).toHaveBeenCalledOnce();
+    });
     it('requires imported users to replace the initial password without sending a recovery email', async () => {
       mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false };
       mocks.refreshSession.mockResolvedValue({ data: { session: { user: { app_metadata: { must_change_password: false } } } }, error: null });
@@ -107,6 +180,7 @@ describe('ResetPassword', () => {
       expect(mocks.updateUser).toHaveBeenCalledWith({ password: 'MyOwnPassword9!' });
       expect(mocks.refreshSession).toHaveBeenCalledOnce();
       expect(mocks.verifyOtp).not.toHaveBeenCalled();
+      expect(mocks.updateProfile).not.toHaveBeenCalled();
     });
     it('does not unlock if the server still reports a pending password change', async () => {
       mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false };

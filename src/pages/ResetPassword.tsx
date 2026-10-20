@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { StudentNameSetup } from '@/features/students/StudentNameSetup';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -54,6 +55,8 @@ export default function ResetPassword() {
   const location = useLocation();
   const { user, profile, isLoading: authLoading, signOut } = useAuth();
   const mustChangePassword = user?.app_metadata?.must_change_password === true;
+  const [setupStep, setSetupStep] = useState<'password' | 'profile' | 'name'>('password');
+  const needsName = setupStep === 'name' || (user?.app_metadata?.must_change_password === false && profile?.role === 'student' && !profile.full_name?.trim());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -79,6 +82,10 @@ export default function ResetPassword() {
     resolver: zodResolver(newPasswordSchema),
     defaultValues: { password: '', confirmPassword: '' },
   });
+
+  useEffect(() => {
+    if (needsName && setupStep !== 'name') setSetupStep('name');
+  }, [needsName, setupStep]);
 
   useEffect(() => {
     if (!successMessage) return;
@@ -122,19 +129,32 @@ export default function ResetPassword() {
     setError(null);
 
     try {
-      const { error: updateError } = await supabase.auth.updateUser({ password: data.password });
-      if (updateError) {
-        setError(updateError.message);
-      } else {
-        if (mustChangePassword) {
-          const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-          if (refreshError || !refreshed.session || refreshed.session.user.app_metadata?.must_change_password === true) {
-            setError('Account setup is still pending. Sign out and sign in with your new password, then try again.');
-            return;
-          }
+      if (setupStep === 'password') {
+        const { error: updateError } = await supabase.auth.updateUser({ password: data.password });
+        if (updateError) {
+          setError(updateError.message);
+          return;
         }
-        setSuccessMessage('Password updated. Redirecting you now...');
+        if (mustChangePassword) setSetupStep('profile');
       }
+      if (mustChangePassword || setupStep === 'profile') {
+        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshed.session || refreshed.session.user.app_metadata?.must_change_password === true) {
+          setError('Account setup is still pending. Sign out and sign in with your new password, then try again.');
+          return;
+        }
+        const { data: accountProfile, error: profileError } = await supabase.from('profiles')
+          .select('full_name').eq('user_id', user.id).single();
+        if (profileError || !accountProfile) {
+          setError('Password updated, but your profile could not be loaded. Try finishing account setup again.');
+          return;
+        }
+        if (!accountProfile.full_name?.trim()) {
+          setSetupStep('name');
+          return;
+        }
+      }
+      setSuccessMessage('Password updated. Redirecting you now...');
     } catch {
       setError('An unexpected error occurred. Please try again.');
     } finally {
@@ -162,7 +182,9 @@ export default function ResetPassword() {
       </Link>
 
       <Card className="w-full max-w-md">
-        {hasSession ? (
+        {hasSession && needsName ? (
+          <StudentNameSetup successMessage={successMessage} onComplete={() => setSuccessMessage('Name saved. Redirecting you now...')} />
+        ) : hasSession ? (
           <form onSubmit={passwordForm.handleSubmit(handleUpdatePassword)}>
             <CardHeader>
               <CardTitle>Choose a new password</CardTitle>
@@ -191,6 +213,7 @@ export default function ResetPassword() {
                     id="reset-password"
                     type="password"
                     autoComplete="new-password"
+                    readOnly={setupStep === 'profile'}
                     placeholder="••••••••"
                     className="pl-10"
                     {...passwordForm.register('password')}
@@ -209,6 +232,7 @@ export default function ResetPassword() {
                     id="reset-confirm-password"
                     type="password"
                     autoComplete="new-password"
+                    readOnly={setupStep === 'profile'}
                     placeholder="••••••••"
                     className="pl-10"
                     {...passwordForm.register('confirmPassword')}
@@ -227,10 +251,10 @@ export default function ResetPassword() {
                     Updating...
                   </>
                 ) : (
-                  'Update Password'
+                  setupStep === 'profile' ? 'Finish account setup' : 'Update Password'
                 )}
               </Button>
-              {mustChangePassword && <Button type="button" variant="ghost" disabled={isSubmitting} onClick={() => void signOut()}>Sign out</Button>}
+              {(mustChangePassword || setupStep === 'profile') && <Button type="button" variant="ghost" disabled={isSubmitting} onClick={() => void signOut()}>Sign out</Button>}
             </CardFooter>
           </form>
         ) : (
