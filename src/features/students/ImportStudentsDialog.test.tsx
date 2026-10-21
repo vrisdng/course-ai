@@ -12,7 +12,7 @@ describe('ImportStudentsDialog', () => {
       { email: 'ada@example.test', status: 'created' },
       { email: 'grace@example.test', status: 'failed', error: 'Retry enrollment' },
     ] }, error: null });
-    render(<ImportStudentsDialog courseId="c1" courseName="Algorithms" onImported={onImported} />);
+    render(<ImportStudentsDialog courseId="c1" onImported={onImported} />);
     fireEvent.click(screen.getByRole('button', { name: 'Import students' }));
     fireEvent.change(screen.getByLabelText('Student emails'), { target: { value: 'invalid,ada@example.test' } });
     expect(screen.getByRole('button', { name: 'Import 1 student' })).toBeDisabled();
@@ -29,7 +29,7 @@ describe('ImportStudentsDialog', () => {
     const onImported = vi.fn();
     mocks.invoke.mockResolvedValueOnce({ data: { results: [{ email: 's0@example.test', status: 'created' }] }, error: null })
       .mockResolvedValueOnce({ data: null, error: { message: 'Network unavailable' } });
-    render(<ImportStudentsDialog courseId="c1" courseName="Algorithms" onImported={onImported} />);
+    render(<ImportStudentsDialog courseId="c1" onImported={onImported} />);
     fireEvent.click(screen.getByRole('button', { name: 'Import students' }));
     fireEvent.change(screen.getByLabelText('Student emails'), { target: { value: Array.from({ length: 21 }, (_, n) => `s${n}@example.test`).join(',') } });
     fireEvent.click(screen.getByRole('button', { name: 'Import 21 students' }));
@@ -38,7 +38,7 @@ describe('ImportStudentsDialog', () => {
     expect(onImported).toHaveBeenCalledOnce();
   });
   it('reads an uploaded email-only CSV into the preview', async () => {
-    render(<ImportStudentsDialog courseId="c1" courseName="Algorithms" onImported={vi.fn()} />);
+    render(<ImportStudentsDialog courseId="c1" onImported={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Import students' }));
     const file = new File(['email\nada@example.test'], 'students.csv', { type: 'text/csv' });
     Object.defineProperty(file, 'text', { value: () => Promise.resolve('email\nada@example.test') });

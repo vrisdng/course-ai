@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -9,13 +9,13 @@ import { supabase } from '@/integrations/supabase/client';
 import { parseStudentEmails } from './parseStudentEmails';
 
 interface ImportResult { email: string; status: string; error?: string }
-interface ImportStudentsDialogProps { courseId: string; courseName: string; onImported: () => void }
+interface ImportStudentsDialogProps { courseId: string; onImported: () => void }
 const STATUS_LABELS: Record<string, string> = {
   created: 'Created and enrolled', enrolled: 'Existing student enrolled', already_enrolled: 'Already enrolled',
   skipped_non_student: 'Skipped: non-student account', failed: 'Failed',
 };
 
-export function ImportStudentsDialog({ courseId, courseName, onImported }: ImportStudentsDialogProps) {
+export function ImportStudentsDialog({ courseId, onImported }: ImportStudentsDialogProps) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -48,10 +48,9 @@ export function ImportStudentsDialog({ courseId, courseName, onImported }: Impor
 
   return <Dialog open={open} onOpenChange={(next) => { if (!busy) setOpen(next); }}>
     <DialogTrigger asChild><Button className="gap-2"><Upload className="h-4 w-4" />Import students</Button></DialogTrigger>
-    <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
+    <DialogContent aria-describedby={undefined} className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>Import students</DialogTitle>
-        <DialogDescription>Add students to {courseName || 'this course'}. New accounts start with iLoveStudying8! and must choose a new password after signing in. Existing passwords stay unchanged.</DialogDescription>
       </DialogHeader>
       <div className="space-y-2">
         <Label htmlFor="student-csv">CSV or text file</Label>

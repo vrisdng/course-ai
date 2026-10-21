@@ -181,7 +181,7 @@ export default function CourseStudents() {
               {courseName ? `Students enrolled in ${courseName}.` : 'Manage students enrolled in this course.'}
             </CardDescription>
             </div>
-            {courseId && <ImportStudentsDialog courseId={courseId} courseName={courseName} onImported={() => void fetchRoster()} />}
+            {courseId && <ImportStudentsDialog courseId={courseId} onImported={() => void fetchRoster()} />}
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
