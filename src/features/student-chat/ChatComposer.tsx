@@ -45,7 +45,7 @@ export function ChatComposer({
   modelOptions,
 }: ChatComposerProps) {
   const selectedModelOption = CHAT_MODEL_OPTIONS.find((modelOption) => modelOption.value === selectedModel);
-  const selectedModelLabel = selectedModelOption?.label ?? 'GPT-5.6 Luna';
+  const selectedModelLabel = selectedModelOption?.label ?? CHAT_MODEL_OPTIONS[0].label;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {

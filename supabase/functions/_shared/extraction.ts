@@ -121,6 +121,7 @@ export function nextExtractionRange(options: {
 // ~21 KB/page slide decks take ~40 s per 16 pages; a ~60 KB/page deck ran
 // past 100 s on a 16-page range. Each call must finish well inside the Edge
 // Runtime wall clock (150 s on the free plan) including claim + download.
+// Not yet re-measured on gpt-6-luna; timeouts still shrink the range.
 export const MIN_PAGES_PER_CALL = 2;
 
 export function initialPagesPerCall(options: { fileBytes: number; totalPages: number }): number {

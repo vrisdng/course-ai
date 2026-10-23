@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
 import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
+import { CHAT_TIER_MODELS } from '../../../supabase/functions/_shared/models.ts';
 
 import { getCitationKey } from './citations';
 import {
@@ -59,9 +60,9 @@ interface AccessibleCourse {
 export type ChatModelTier = 'fast' | 'smart' | 'pro';
 
 export const CHAT_MODEL_OPTIONS: { value: ChatModelTier; label: string; description: string }[] = [
-  { value: 'fast', label: 'GPT-5.6 Luna', description: 'Fastest speed' },
-  { value: 'smart', label: 'GPT-5.6 Terra', description: 'Balance between speed and quality' },
-  { value: 'pro', label: 'GPT-5.6 Sol', description: 'Best quality answers' },
+  { value: 'fast', label: CHAT_TIER_MODELS.fast.name, description: 'Fastest speed' },
+  { value: 'smart', label: CHAT_TIER_MODELS.smart.name, description: 'Balance between speed and quality' },
+  { value: 'pro', label: CHAT_TIER_MODELS.pro.name, description: 'Best quality answers' },
 ];
 
 interface ResolvedCitationSource {

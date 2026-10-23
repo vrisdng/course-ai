@@ -1,10 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { generateChatText } from "../_shared/llm.ts";
+import { TASK_MODELS } from "../_shared/models.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { passwordSetupResponse } from "../_shared/passwordSetup.ts";
 
-const CHAT_MODEL = "gpt-5.6-luna";
 const MAX_FLASHCARDS = 10;
 
 interface FlashcardRequest {
@@ -43,7 +43,7 @@ Return format (JSON array only):
 
   const rawText = await generateChatText({
     apiKey: openAiApiKey,
-    model: CHAT_MODEL,
+    model: TASK_MODELS.flashcards.id,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },

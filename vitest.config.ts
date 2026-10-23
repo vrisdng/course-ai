@@ -34,6 +34,13 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      // Edge functions import these from esm.sh; tests load the same pinned
+      // versions from node_modules so _shared/llm.ts runs the real SDK.
+      { find: /^https:\/\/esm\.sh\/ai@4\.3\.19(\?.*)?$/, replacement: "ai" },
+      { find: /^https:\/\/esm\.sh\/@ai-sdk\/openai@1\.3\.24(\?.*)?$/, replacement: "@ai-sdk/openai" },
+      { find: /^https:\/\/esm\.sh\/zod@3\.23\.8(\?.*)?$/, replacement: "zod" },
+    ],
   },
 });

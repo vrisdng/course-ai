@@ -9,7 +9,8 @@ import type { PageImageInput } from "./llmConfig.ts";
 
 // Page images cost far more input than a PDF's text; measured with
 // gpt-5.6-luna, 2 dense pages took ~20 s, so 6 stays well inside the OCR call
-// timeout. A timeout halves the batch for the retry.
+// timeout (not yet re-measured on gpt-6-luna). A timeout halves the batch for
+// the retry.
 export const BLOCK_PAGES_PER_CALL = 6;
 
 export interface BlockExtractionState {

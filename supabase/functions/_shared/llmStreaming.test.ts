@@ -76,6 +76,6 @@ describe("streaming wrapper usage", () => {
     const onUsage = vi.fn();
     expect(await generateChatText({ apiKey: "test", model: "test", messages: [], onUsage })).toBe("repair");
     expect(onUsage).toHaveBeenCalledWith({ promptTokens: 12, completionTokens: 3 });
-    expect(sdk.createOpenAI).toHaveBeenCalledWith({ apiKey: "test", compatibility: "strict" });
+    expect(sdk.createOpenAI).toHaveBeenCalledWith({ apiKey: "test", compatibility: "strict", fetch: expect.any(Function) });
   });
 });

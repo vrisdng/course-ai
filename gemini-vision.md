@@ -11,7 +11,7 @@ Reference documentation for how this project uses the Google Gemini API for docu
 | Purpose | Endpoint | Model |
 |---------|----------|-------|
 | **Text extraction (Vision)** — legacy `.doc` only | `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent` | `gemini-3.8-flash` |
-| **Text extraction** — PDF + images | OpenAI chat completions via `_shared/llm.ts` | `gpt-5.6-luna` |
+| **Text extraction** — PDF + images | OpenAI chat completions via `_shared/llm.ts` | `gpt-6-luna` (was `gpt-5.6-luna` until 2026-10-23; timings below were measured on that) |
 | **Embeddings** | `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent` | `gemini-embedding-001` |
 
 Both are called from the `process-material-job` edge function (queued by `parse-document`) using the `GEMINI_API_KEY` secret. The pure helpers (prompt, base64, page-range planning, retry) live in `supabase/functions/_shared/extraction.ts` and are unit tested.
