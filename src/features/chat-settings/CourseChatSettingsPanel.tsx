@@ -16,11 +16,14 @@ import {
   CHAT_SETTING_RANGES,
   DEFAULT_CHAT_SETTINGS,
   MODEL_TIER_LABELS,
+  VIDEO_SHARE_START_PERCENT,
+  VIDEO_SHARE_STEP,
   fromDisplayValue,
   sliderRange,
   snapToStep,
   toDisplayValue,
   validateChatSettings,
+  videoShareExample,
   type ChatModelTier,
   type ChatSettings,
   type NumericFieldSpec,
@@ -124,6 +127,14 @@ export function CourseChatSettingsPanel({ courses, isLoadingCourses, userId }: C
                         </p>
                       </div>
                     </div>
+                  ) : null}
+                  {group.title === 'Retrieval' ? (
+                    <VideoShareField
+                      value={draft.videoSharePercent}
+                      finalCount={draft.finalCount}
+                      error={errors.videoSharePercent}
+                      onChange={(videoSharePercent) => update({ videoSharePercent })}
+                    />
                   ) : null}
                   {group.title === 'Answer' ? (
                     <ModelTierFields
@@ -233,6 +244,98 @@ function NumericField({ field, value, error, onChange }: NumericFieldProps) {
       <p className="text-xs text-muted-foreground">
         {field.description} Default {toDisplayValue(field, DEFAULT_CHAT_SETTINGS[field.key])}{unit}.
       </p>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+    </div>
+  );
+}
+
+interface VideoShareFieldProps {
+  value: number | null;
+  finalCount: number;
+  error: string | undefined;
+  onChange: (value: number | null) => void;
+}
+
+// The video/document balance: off (null) ranks by relevance alone; on, a
+// 0-100 target share of each search's source text that comes from video.
+function VideoShareField({ value, finalCount, error, onChange }: VideoShareFieldProps) {
+  const enabled = value !== null;
+  const id = 'chat-settings-videoSharePercent';
+  const labelId = `${id}-label`;
+  const helpId = `${id}-help`;
+  const range = CHAT_SETTING_RANGES.videoSharePercent;
+  const sliderValue = Math.min(range.max, Math.max(range.min, value !== null && Number.isFinite(value) ? value : range.min));
+
+  return (
+    <div className="space-y-3 rounded-md border border-border p-4 md:col-span-2">
+      <div className="flex items-start gap-3">
+        <Checkbox
+          id="chat-settings-video-balance"
+          checked={enabled}
+          onCheckedChange={(checked) => onChange(checked === true ? VIDEO_SHARE_START_PERCENT : null)}
+          aria-describedby={helpId}
+        />
+        <div className="space-y-1">
+          <Label htmlFor="chat-settings-video-balance">Balance video and document sources</Label>
+          <p id={helpId} className="text-xs text-muted-foreground">
+            Sets how much of the course text the assistant reads on each search comes from video transcripts rather than
+            documents (PDFs, slides, notes). It shapes what the assistant reads, not the exact share of words in its answer.
+          </p>
+        </div>
+      </div>
+
+      {enabled ? (
+        <div className="space-y-2">
+          <Label id={labelId} htmlFor={id}>Video share of source text</Label>
+          <div className="flex items-center gap-3">
+            <Slider
+              min={range.min}
+              max={range.max}
+              step={VIDEO_SHARE_STEP}
+              value={[sliderValue]}
+              onValueChange={([next]) => onChange(next)}
+              aria-labelledby={labelId}
+              className="flex-1"
+            />
+            <div className="flex shrink-0 items-center gap-1">
+              <Input
+                id={id}
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={range.min}
+                max={range.max}
+                value={Number.isFinite(value) ? value : ''}
+                onChange={(event) => onChange(event.target.value === '' ? Number.NaN : Number(event.target.value))}
+                aria-invalid={Boolean(error)}
+                aria-describedby={helpId}
+                className="h-8 w-24 text-right"
+              />
+              <span className="text-xs text-muted-foreground">%</span>
+            </div>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground" aria-hidden="true">
+            <span>0% · documents first</span>
+            <span>100% · video first</span>
+          </div>
+        </div>
+      ) : null}
+
+      <p className="text-xs text-muted-foreground">{videoShareExample(value, finalCount)}</p>
+      {enabled ? (
+        <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          <li>Only passages that pass the relevance floor count. Unrelated passages are never added just to reach the target.</li>
+          <li>
+            If one type runs short of relevant passages, the other fills the space: 0% still uses video when no relevant document
+            passage is found, and 100% still uses documents when no relevant video passage is found.
+          </li>
+          <li>Measured by length (up to the characters-per-source limit), so a long transcript passage counts for more than a short slide.</li>
+          <li>
+            Applies to each search separately; the assistant may search several times for one answer. When on, each search looks
+            at twice as many candidates so the less common type gets a fair look.
+          </li>
+        </ul>
+      ) : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );

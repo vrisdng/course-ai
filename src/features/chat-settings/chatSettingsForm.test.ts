@@ -9,6 +9,7 @@ import {
   snapToStep,
   toSettingsRow,
   validateChatSettings,
+  videoShareExample,
 } from './chatSettingsForm';
 
 describe('toSettingsRow', () => {
@@ -20,9 +21,16 @@ describe('toSettingsRow', () => {
       allowedModelTiers: ['smart' as const, 'pro' as const],
       defaultModelTier: 'pro' as const,
       queryRewriteEnabled: false,
+      videoSharePercent: 40,
       courseInstructions: 'Use SI units.',
     };
     expect(resolveChatSettings(toSettingsRow(settings))).toEqual(settings);
+  });
+
+  it('writes the video share, and null when the balance is off', () => {
+    expect(toSettingsRow({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 0 }).video_share_percent).toBe(0);
+    expect(toSettingsRow({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 100 }).video_share_percent).toBe(100);
+    expect(toSettingsRow(DEFAULT_CHAT_SETTINGS).video_share_percent).toBeNull();
   });
 
   it('writes snake_case column names', () => {
@@ -63,6 +71,19 @@ describe('validateChatSettings', () => {
     ).toBeDefined();
   });
 
+  it('accepts the video share off or anywhere from 0 to 100', () => {
+    for (const videoSharePercent of [null, 0, 50, 100]) {
+      expect(validateChatSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent })).toEqual({});
+    }
+  });
+
+  it('flags a video share outside 0-100, fractional, or empty', () => {
+    expect(validateChatSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 101 }).videoSharePercent).toMatch(/between 0 and 100/);
+    expect(validateChatSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: -1 }).videoSharePercent).toMatch(/between 0 and 100/);
+    expect(validateChatSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 12.5 }).videoSharePercent).toMatch(/whole number/);
+    expect(validateChatSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: Number.NaN }).videoSharePercent).toMatch(/Enter a number/);
+  });
+
   it('caps course instructions', () => {
     const courseInstructions = 'x'.repeat(CHAT_SETTING_RANGES.courseInstructionsMaxChars + 1);
     expect(validateChatSettings({ ...DEFAULT_CHAT_SETTINGS, courseInstructions }).courseInstructions).toBeDefined();
@@ -72,7 +93,10 @@ describe('validateChatSettings', () => {
 describe('CHAT_SETTING_FIELD_GROUPS', () => {
   it('lists every numeric setting exactly once', () => {
     const keys = CHAT_SETTING_FIELD_GROUPS.flatMap((group) => group.fields.map((field) => field.key));
-    const numericKeys = Object.keys(CHAT_SETTING_RANGES).filter((key) => key !== 'courseInstructionsMaxChars');
+    // The video share is optional (null = off), so it has its own control.
+    const numericKeys = Object.keys(CHAT_SETTING_RANGES).filter(
+      (key) => key !== 'courseInstructionsMaxChars' && key !== 'videoSharePercent',
+    );
     expect([...keys].sort()).toEqual([...numericKeys].sort());
   });
 });
@@ -102,5 +126,20 @@ describe('snapToStep', () => {
   it('stays within the range', () => {
     expect(snapToStep(field('finalCount'), 31)).toBe(30);
     expect(snapToStep(field('matchThreshold'), -0.2)).toBe(0);
+  });
+});
+
+describe('videoShareExample', () => {
+  it('explains the off state', () => {
+    expect(videoShareExample(null, 10)).toBe('Off: each search keeps the most relevant passages, whatever their type.');
+  });
+
+  it('turns the share into an example split of the sources per search', () => {
+    expect(videoShareExample(30, 10)).toBe(
+      'Example: with 10 sources per search and passages of similar length, about 3 would come from video and 7 from documents, when both have enough relevant passages.',
+    );
+    expect(videoShareExample(0, 10)).toContain('about 0 would come from video and 10 from documents');
+    expect(videoShareExample(100, 6)).toContain('about 6 would come from video and 0 from documents');
+    expect(videoShareExample(50, 1)).toContain('with 1 source per search');
   });
 });
