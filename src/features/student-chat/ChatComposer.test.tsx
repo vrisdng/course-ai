@@ -28,17 +28,22 @@ describe('ChatComposer', () => {
   it('shows the selected model and respects global disabled state', () => {
     const value = props(); const onModelChange = vi.fn();
     render(<ChatComposer {...value} input="ask" selectedModel="smart" onModelChange={onModelChange} />);
-    expect(screen.getByRole('button', { name: /GPT-5.6 Terra/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /GPT-6.1 Sol/i })).toBeInTheDocument();
     expect(screen.getByText(/CEEChat uses RAG/)).toBeInTheDocument();
+  });
+  it('names the fast model when no model is selected yet', () => {
+    const value = props();
+    render(<ChatComposer {...value} input="ask" onModelChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /GPT-6 Luna/i })).toBeInTheDocument();
   });
   it('only offers the models the course allows', async () => {
     const value = props();
     render(<ChatComposer {...value} input="ask" selectedModel="smart" onModelChange={vi.fn()} modelOptions={['smart', 'pro']} />);
-    fireEvent.keyDown(screen.getByRole('button', { name: /GPT-5.6 Terra/i }), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByRole('button', { name: /GPT-6.1 Sol/i }), { key: 'Enter' });
     const items = await screen.findAllByRole('menuitem');
     expect(items.map((item) => item.textContent)).toEqual([
-      expect.stringContaining('Terra'),
-      expect.stringContaining('Sol'),
+      expect.stringContaining('GPT-6.1 Sol'),
+      expect.stringContaining('GPT-6 Astra'),
     ]);
   });
 });

@@ -38,9 +38,11 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 
 | Tier | Model | Provider |
 |---|---|---|
-| Fast | `gpt-5.6-luna` | OpenAI |
-| Smart | `gpt-5.6-terra` | OpenAI |
-| Pro | `gpt-5.6-sol` | OpenAI |
+| Fast | `gpt-6-luna` | OpenAI |
+| Smart | `gpt-6.1-sol` | OpenAI |
+| Pro | `gpt-6-astra` | OpenAI |
+
+Models are set in one place, [`_shared/models.ts`](supabase/functions/_shared/models.ts) (tiers plus OCR, flashcards, analytics chat and video-evidence selection).
 
 **Retrieval** is agentic: the answer model searches the course materials itself with a `search_course_materials` tool, deciding what to search and searching again with different wording when results miss (up to 4 searches per answer; greetings don't search). The student sees "Searching course materials for …" while it runs. Each search embeds the model's query with OpenAI `text-embedding-3-large` (3072 dims, via the shared embedding service in `_shared/embeddings.ts`), matches course material chunks with a high-recall first pass (by default top 18, similarity ≥ 0.20), then reranks down to 10 results (relevance floor 0.20, relaxed to 0.15 for broad "summary" queries). These numbers are per-course settings. Every search is automatically scoped to:
 - the course(s) the student is asking about,
@@ -57,7 +59,7 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 
 **Custom instructions**: students can set free-text personal instructions in Settings, which are injected into the system prompt on every one of their chat requests (RAG and non-RAG paths alike) for persistent, cross-conversation personalization.
 
-**Flashcard generation**: from any assistant answer, generate 3–10 flashcards (`gpt-5.6-luna`) sized to the amount of context available (grows with cited-source length, capped at 10). Built from the answer plus up to 6 cited source chunks. No retry on rate-limit — a 429 surfaces directly as an error toast.
+**Flashcard generation**: from any assistant answer, generate 3–10 flashcards (`gpt-6-luna`) sized to the amount of context available (grows with cited-source length, capped at 10). Built from the answer plus up to 6 cited source chunks. No retry on rate-limit — a 429 surfaces directly as an error toast.
 
 ## Materials
 
@@ -67,7 +69,7 @@ Admins upload course materials in two pipelines, both async and job-tracked.
 
 - ⏱ **15 MB** size limit (Gemini inline-vision constraint).
 - Supported: `pdf, png, jpg, jpeg, webp, gif, doc, docx, pptx`. Not supported: legacy `.ppt`, `.xls`/`.xlsx`.
-- `docx`/`pptx` are parsed directly from their XML (no AI call); `pdf`/images are OCR'd by OpenAI (`gpt-5.6-luna`, file/image sent inline via the shared `_shared/llm.ts` wrapper); legacy `.doc` still goes through Gemini Vision.
+- `docx`/`pptx` are parsed directly from their XML (no AI call); `pdf`/images are OCR'd by OpenAI (`gpt-6-luna`, file/image sent inline via the shared `_shared/llm.ts` wrapper); legacy `.doc` still goes through Gemini Vision.
 - Upload enqueues a `material_processing_jobs` row and fires the worker; extraction happens off the upload request.
 - ⏱ Runs under Supabase's edge limits (**150 s** wall clock on the free plan, 2 s CPU). PDFs over 16 pages are OCR'd in **16-page ranges** with progress saved to the job after each range, so long decks span several worker runs instead of timing out. `429`/`5xx` responses are retried with exponential backoff (3 retries); each OCR call has a 90 s timeout.
 - Extracted text is chunked (⏱ 1200 chars/chunk, 200-char overlap, ~1000-char step) and embedded, ⏱ up to 3 retry attempts per embedding call.
@@ -129,7 +131,7 @@ Students and admins can update their profile and set **custom instructions** (se
 
 - **Frontend**: React 18, Vite, TypeScript, React Router, TanStack Query, Tailwind CSS, shadcn/ui (Radix primitives).
 - **Backend**: Supabase — Postgres with pgvector, Row Level Security, Edge Functions (Deno).
-- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat; `gpt-5.6-luna` for flashcards), OpenAI `text-embedding-3-large` for embeddings, Gemini (`gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-5.6-luna`, AssemblyAI (video transcription).
+- **AI/ML**: OpenAI (`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra` for chat; `gpt-6-luna` for flashcards and analytics chat), OpenAI `text-embedding-3-large` for embeddings, Gemini (`gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-6-luna`, AssemblyAI (video transcription).
 
 ## Local development
 

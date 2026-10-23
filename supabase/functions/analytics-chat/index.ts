@@ -2,11 +2,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { HttpError, generateChatTextStream } from "../_shared/llm.ts";
+import { TASK_MODELS } from "../_shared/models.ts";
 import { buildOpenAIConversationMessages, type ConversationHistoryTurn } from "../_shared/history.ts";
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 import { buildAnalyticsSystemPrompt } from "../_shared/analyticsPrompt.ts";
 
-const CHAT_MODEL = "gpt-5.6-luna";
 const HISTORY_LIMIT = 10;
 const DEFAULT_DATA_WINDOW_DAYS = 30;
 
@@ -300,7 +300,7 @@ serve(async (req: Request) => {
 
             const { text: answer } = await generateChatTextStream({
               apiKey: openAiApiKey,
-              model: CHAT_MODEL,
+              model: TASK_MODELS.analyticsChat.id,
               messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
               temperature: 0.3,
               maxOutputTokens: 2000,

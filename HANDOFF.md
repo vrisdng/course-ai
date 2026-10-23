@@ -91,7 +91,7 @@ Clicking a PDF citation shows the cited page as a pre-rendered image with exactl
 
 **Ingestion flow for a PDF** (renderer configured), all in one `process-material-job` job via the usual requeue:
 1. **Page images** (`payload.pageRender`, `_shared/pageImages.ts`): 20 pages per run. The job signs a download URL for the PDF and an upload URL per page, then POSTs them to `api/render-pdf-pages.ts` (Vercel, Node). That renders with pdf.js + `@napi-rs/canvas`, uploads `course-materials/page-images/<material_id>/page-<n>.webp`, and returns each page's text lines with boxes. These go into `material_pages`.
-2. **Blocks** (`payload.blockExtraction`, `_shared/blockExtraction.ts` + `blocks.ts`): 6 page images per OCR call (`gpt-5.6-luna`, `llm.ts#generatePageImagesText`). Each call returns blocks: `{type, box (0-1000 grid), text}`, with maths in LaTeX and figures described. Text blocks' boxes are snapped onto the page's real text lines. Figures and equations are shifted by the offset measured on the snapped blocks. Results go into `page_blocks`.
+2. **Blocks** (`payload.blockExtraction`, `_shared/blockExtraction.ts` + `blocks.ts`): 6 page images per OCR call (`gpt-6-luna`, `llm.ts#generatePageImagesText`; batch size was measured on `gpt-5.6-luna`). Each call returns blocks: `{type, box (0-1000 grid), text}`, with maths in LaTeX and figures described. Text blocks' boxes are snapped onto the page's real text lines. Figures and equations are shifted by the offset measured on the snapped blocks. Results go into `page_blocks`.
 3. **Chunks** are packed from whole blocks (`chunkBlocks`, max 1200 chars, no paragraph split, headings kept with the next block). Each chunk stores `chunks.block_ids` and `chunks.highlight_box` (the union). Then the existing embedding stage runs.
 
 **Why images, not the PDF:** with the PDF file as input, the model's boxes were unusable (median overlap 0 with the true text; 4/21 box centres inside). With rendered images they're within about a line, and snapping makes text exact.
@@ -139,6 +139,16 @@ DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get p
 - **Removed:** the shortcut answer when a document filter returned nothing. With a filter, the prompt tells the model to say the answer isn't in the selected documents.
 - `skipRag` (no-materials mode) is unchanged and never searches.
 - **Cost and latency:** every course answer now takes at least two model turns (search, then answer); greetings answer directly. Locally, a two-part question ran two searches and finished in about 12 s.
+
+## GPT-6 models (2026-10-23)
+
+Every GPT model ID lives in [`_shared/models.ts`](supabase/functions/_shared/models.ts): `fast` → `gpt-6-luna`, `smart` → `gpt-6.1-sol`, `pro` → `gpt-6-astra`, and `gpt-6-luna` for OCR/page blocks, flashcards, analytics chat and video-evidence selection. Course settings store tier names, not model IDs, so saved settings carry over. Embeddings are unchanged (`text-embedding-3-large`, 3072 dims).
+
+- **Landmine — the pinned AI SDK doesn't know these IDs.** `@ai-sdk/openai@1.3.24` (the last v1 release) treats only `o*`/`gpt-5*` IDs as reasoning models. For any other ID it sends `temperature` (AI SDK v4 defaults it to 0), `max_tokens` and `system` messages, and on the Responses API it drops `reasoning.effort`. OpenAI rejects `temperature` on GPT-6 models unless reasoning effort is `none`. `llm.ts` therefore gives `createOpenAI` a fetch from `llmConfig.ts#createReasoningRequestFetch`, which rewrites request bodies for registry models only: `developer` messages, no `temperature`/`top_p`/`logprobs`/`top_logprobs` (unless effort is `none`), `max_tokens` → `max_completion_tokens`, and the reasoning effort on both APIs. **Add any new model to `OPENAI_MODELS`**; an unlisted ID goes out exactly as the SDK builds it. `llm.test.ts` runs the real SDK against a stubbed fetch to pin these bodies. The adapter can go once the SDK is upgraded to a version that knows these models (a v4 → v5+ migration).
+- **Reasoning effort:** no call sets one, so every call uses the model default (`medium`), as with GPT-5.6. Astra and 6.1 Sol reject `none`; `minimal` is sent as `low` (OpenAI's migration guidance), and an unsupported effort throws before the request.
+- **Settings with no effect (unchanged by this switch):** `answerTemperature` never reaches these models (it didn't reach GPT-5.6 either; the SDK stripped it). `maxAnswerTokens` is still not applied (see the agentic RAG notes above).
+- **Cost:** `pro` moved from GPT-5.6 Sol to GPT-6 Astra, OpenAI's highest-priced text model. Courses can turn the Pro tier off in chat settings.
+- **Not yet re-measured on GPT-6 Luna:** OCR pages per call (`extraction.ts`) and block batch size (`blockExtraction.ts`); timeouts still shrink the batch.
 
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 

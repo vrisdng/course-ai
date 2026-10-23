@@ -118,4 +118,9 @@ describe("resolveRequestedModelTier", () => {
     expect(resolveRequestedModelTier(undefined, settings)).toBe("smart");
     expect(resolveRequestedModelTier("turbo", settings)).toBe("smart");
   });
+
+  it("treats a raw model ID from an old client as no request, not as a model to call", () => {
+    expect(resolveRequestedModelTier("gpt-5.6-luna", settings)).toBe("smart");
+    expect(resolveRequestedModelTier("gpt-6-astra", settings)).toBe("smart");
+  });
 });

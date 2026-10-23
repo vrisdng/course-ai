@@ -18,6 +18,7 @@ import {
 import { countPdfPages } from "../_shared/pdfPages.ts";
 import { createOpenAIEmbeddingService, generateDocumentText, generatePageImagesText } from "../_shared/llm.ts";
 import { EMBEDDING_COLUMN } from "../_shared/embeddings.ts";
+import { TASK_MODELS } from "../_shared/models.ts";
 import {
   createRendererClient,
   pageImagePath,
@@ -97,7 +98,7 @@ const EMBEDDING_PROGRESS_END = 95;
 // OCR for PDFs and images goes through OpenAI via the shared llm.ts wrapper
 // (file/image parts inline). Gemini Vision is kept only for legacy .doc,
 // which OpenAI does not accept as a file input.
-const OCR_MODEL = "gpt-5.6-luna";
+const OCR_MODEL = TASK_MODELS.documentOcr.id;
 const OCR_MAX_OUTPUT_TOKENS = 32_000;
 const GEMINI_VISION_MODEL = "gemini-3.8-flash";
 const GEMINI_GENERATE_URL =

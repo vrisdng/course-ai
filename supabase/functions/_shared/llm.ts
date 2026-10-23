@@ -22,6 +22,7 @@ import {
   buildDocumentExtractionMessages,
   buildOpenAIProviderOptions,
   buildPageImageMessages,
+  createReasoningRequestFetch,
   requireGeneratedText,
   type DocumentInput,
   type PageImageInput,
@@ -64,14 +65,20 @@ export interface ChatStreamOptions extends ChatTextOptions {
   onTextDelta?: (delta: string) => Promise<void> | void;
 }
 
-function toOpenAiModel(apiKey: string, model: string) {
-  return createOpenAI({ apiKey, compatibility: "strict" })(model);
+// Requests for the models in models.ts are adapted to their documented
+// reasoning-model shape on the way out (llmConfig.ts#adaptReasoningRequestBody).
+function createOpenAIClient(apiKey: string, reasoningEffort?: ReasoningEffort) {
+  return createOpenAI({ apiKey, compatibility: "strict", fetch: createReasoningRequestFetch({ reasoningEffort }) });
+}
+
+function toOpenAiModel(apiKey: string, model: string, reasoningEffort?: ReasoningEffort) {
+  return createOpenAIClient(apiKey, reasoningEffort)(model);
 }
 
 function buildGenerationOptions(options: ChatTextOptions) {
   const providerOptions = buildOpenAIProviderOptions(options.reasoningEffort);
   return {
-    model: toOpenAiModel(options.apiKey, options.model),
+    model: toOpenAiModel(options.apiKey, options.model, options.reasoningEffort),
     messages: options.messages,
     temperature: options.temperature ?? 0.4,
     maxOutputTokens: options.maxOutputTokens ?? 2000,
@@ -182,8 +189,7 @@ export async function generateAgentTextStream(options: AgentStreamOptions): Prom
     options.onUsage?.(normalized);
   };
   try {
-    const openai = createOpenAI({ apiKey: options.apiKey });
-    const model = openai.responses(options.model);
+    const model = createOpenAIClient(options.apiKey, options.reasoningEffort).responses(options.model);
     const runTool = limitToolCalls(
       (query) => options.tool.execute(query),
       options.maxToolCalls ?? Math.max(0, options.maxSteps - 1),
