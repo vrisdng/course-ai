@@ -7,8 +7,8 @@ import { SourcesPanel } from './SourcesPanel';
 const viewport = vi.hoisted(() => ({ isMobile: false }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => viewport.isMobile }));
 vi.mock('./VideoSourceDialog', () => ({
-  VideoSourceDialog: ({ source, onClose }: { source: { title: string } | null; onClose: () => void }) =>
-    source ? <div role="dialog" aria-label="Video with transcription"><span>{source.title}</span><button onClick={onClose}>Close video</button></div> : null,
+  VideoSourceDialog: ({ source, open, onClose }: { source: { title: string } | null; open: boolean; onClose: () => void }) =>
+    open && source ? <div role="dialog" aria-label="Video with transcription"><span>{source.title}</span><button onClick={onClose}>Close video</button></div> : null,
 }));
 
 vi.mock('./PdfReader', () => ({

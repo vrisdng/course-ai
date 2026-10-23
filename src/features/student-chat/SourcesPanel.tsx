@@ -224,7 +224,8 @@ export function SourcesPanel({
       </Dialog>
 
       <VideoSourceDialog
-        source={videoDialogOpen ? activeVideoSource ?? null : null}
+        source={activeVideoSource ?? null}
+        open={videoDialogOpen && Boolean(activeVideoSource)}
         onClose={() => setVideoDialogOpen(false)}
       />
     </>

@@ -15,9 +15,10 @@ interface StoredVideoPlayerProps {
   seekMs?: number;
   seekRequest?: { ms: number; id: number };
   showOpenLink?: boolean;
+  active?: boolean;
 }
 
-export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, seekMs, seekRequest, showOpenLink = false }: StoredVideoPlayerProps) {
+export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, seekMs, seekRequest, showOpenLink = false, active = true }: StoredVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const renewalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
@@ -75,6 +76,12 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
       if (renewalTimerRef.current) clearTimeout(renewalTimerRef.current);
     };
   }, [filePath, initialUrl, materialId, startMs, renewUrl]);
+
+  useEffect(() => {
+    if (active) return;
+    resumePlayingRef.current = false;
+    videoRef.current?.pause();
+  }, [active]);
 
   useEffect(() => {
     if (seekMs === undefined) return;
