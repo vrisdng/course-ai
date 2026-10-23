@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "perf:citations:report": "node scripts/citation-perf-report.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1147.0",

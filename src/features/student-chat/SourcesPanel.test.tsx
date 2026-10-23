@@ -6,7 +6,6 @@ import { SourcesPanel } from './SourcesPanel';
 
 const viewport = vi.hoisted(() => ({ isMobile: false }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => viewport.isMobile }));
-vi.mock('./signedMedia', () => ({ resolveSignedMediaUrl: vi.fn().mockResolvedValue('https://r2.test/video.mp4') }));
 vi.mock('./VideoSourceDialog', () => ({
   VideoSourceDialog: ({ source, onClose }: { source: { title: string } | null; onClose: () => void }) =>
     source ? <div role="dialog" aria-label="Video with transcription"><span>{source.title}</span><button onClick={onClose}>Close video</button></div> : null,

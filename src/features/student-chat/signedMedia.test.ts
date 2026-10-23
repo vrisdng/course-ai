@@ -10,7 +10,7 @@ vi.mock('@/integrations/supabase/client', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
 
-import { invalidateSignedMediaCache, resolveSignedMediaUrl } from './signedMedia';
+import { invalidateSignedMediaCache, prefetchSignedMediaUrl, resolveSignedMediaUrl } from './signedMedia';
 
 const OK_JSON = (extra: Record<string, unknown> = {}) =>
   ({ ok: true, json: async () => ({ signedUrl: 'https://cdn.test/x.png', expiresIn: 600, ...extra }) }) as Response;
@@ -92,5 +92,28 @@ describe('resolveSignedMediaUrl', () => {
 
     expect(await resolveSignedMediaUrl(null)).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('shares one request between a prefetch and a dialog open', async () => {
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'token' } }, error: null });
+    const fetchMock = vi.fn().mockResolvedValue(OK_JSON());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = prefetchSignedMediaUrl('mat-1');
+    const second = resolveSignedMediaUrl('mat-1');
+    await Promise.all([first, second]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps prefetch failures out of the UI', async () => {
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'token' } }, error: null });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 } as Response));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await prefetchSignedMediaUrl('mat-1');
+
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });
