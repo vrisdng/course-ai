@@ -1,6 +1,7 @@
 import { S3Client, UploadPartCommand } from '@aws-sdk/client-s3';
 
 import { supabase } from '@/integrations/supabase/client';
+import { UploadRejectedError, functionInvokeError } from '@/lib/functionErrors';
 import { validateVideoSizeBytes } from '@/lib/videoUploadLimits';
 import { formatBytes } from '@/lib/utils';
 
@@ -93,7 +94,7 @@ async function invokeUploadSession<T>(
 ): Promise<T> {
   checkCancelled(signal);
   const { data, error } = await supabase.functions.invoke('video-upload-session', { body, signal });
-  if (error) throw new Error(`Video upload session failed: ${error.message}`);
+  if (error) throw await functionInvokeError(error, 'request failed', 'Video upload session failed: ');
   if (!data || typeof data !== 'object' || 'error' in data) {
     throw new Error(typeof data?.error === 'string' ? data.error : 'Invalid video upload session response');
   }
@@ -286,6 +287,14 @@ export async function uploadVideoForTranscription(opts: VideoUploadOptions): Pro
     }
     return { materialId: created.materialId, transcriptionStatus: completed.transcriptionStatus };
   } catch (error) {
+    if (error instanceof UploadRejectedError) {
+      // Nothing was reserved, so there is no upload to resume.
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        // Nothing to clean up if browser storage is unavailable.
+      }
+    }
     if (signal?.aborted && !completionStarted) {
       if (materialId) {
         try {

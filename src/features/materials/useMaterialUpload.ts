@@ -4,29 +4,29 @@ import { toast } from 'sonner';
 
 import { supabase } from '@/integrations/supabase/client';
 import type { Database } from '@/integrations/supabase/types';
+import { UploadRejectedError, functionInvokeError } from '@/lib/functionErrors';
 import {
   getDeferredUploadValidationError,
   getImmediateUploadValidationError,
-  isTextLikeUpload,
-  isVideoUpload,
   toStorageSafeFileName,
 } from '@/lib/materialUpload';
 import { uploadToStorageWithProgress } from '@/lib/uploadWithProgress';
 import { uploadVideoForTranscription } from '@/lib/videoUploadPipeline';
-import type { AccessScope, UploadOutcome } from './types';
+import {
+  UPLOAD_POLICY,
+  acceptedUploadSentence,
+  checkUpload,
+  fileInputAccept,
+  type UploadPolicy,
+} from '../../../supabase/functions/_shared/uploadPolicy.ts';
+import type { AccessScope, UploadOutcome, UploadRejection } from './types';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-const SUPPORTED_EXTENSIONS = new Set([
-  'pdf', 'doc', 'docx', 'pptx', 'png', 'jpg', 'jpeg', 'webp', 'gif',
-  'txt', 'md', 'markdown', 'csv', 'json', 'ts', 'tsx', 'js', 'jsx',
-  'py', 'java', 'go', 'rb', 'rs', 'c', 'cpp', 'html', 'css', 'sql',
-  'mp4', 'webm',
-]);
-
-export const ACCEPTED_FILE_TYPES =
-  '.txt,.md,.markdown,.csv,.json,.ts,.tsx,.js,.jsx,.py,.java,.go,.rb,.rs,.c,.cpp,.html,.css,.sql,.pdf,.doc,.docx,.pptx,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm';
+// The file chooser offers only what the upload policy accepts. The server
+// enforces the same policy, so this is a convenience, not the guard.
+export const ACCEPTED_FILE_TYPES = fileInputAccept(UPLOAD_POLICY);
 
 function getFileType(fileName: string) {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -41,11 +41,6 @@ function getFileType(fileName: string) {
   return 'other';
 }
 
-function isFileSupported(candidate: File) {
-  const extension = candidate.name.split('.').pop()?.toLowerCase() || '';
-  return candidate.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
-}
-
 function getPendingFileKey(candidate: File) {
   return `${candidate.name}-${candidate.size}-${candidate.lastModified}`;
 }
@@ -53,10 +48,14 @@ function getPendingFileKey(candidate: File) {
 interface UseMaterialUploadOptions {
   uploaderId: string | undefined;
   onUploaded: () => Promise<void> | void;
+  // Tests pass another policy; the app always uses UPLOAD_POLICY.
+  uploadPolicy?: UploadPolicy;
 }
 
-export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadOptions) {
+export function useMaterialUpload({ uploaderId, onUploaded, uploadPolicy = UPLOAD_POLICY }: UseMaterialUploadOptions) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  // Files turned away by the upload policy, with the reason for each.
+  const [rejectedUploads, setRejectedUploads] = useState<UploadRejection[]>([]);
   const [currentUploadFileName, setCurrentUploadFileName] = useState<string | null>(null);
   const [currentUploadStatusText, setCurrentUploadStatusText] = useState<string | null>(null);
   const [currentUploadProgress, setCurrentUploadProgress] = useState<number | null>(null);
@@ -126,14 +125,15 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       return;
     }
 
-    const unsupported: string[] = [];
+    const unsupported: UploadRejection[] = [];
     const oversized: string[] = [];
     const knownKeys = new Set(pendingFiles.map((item) => getPendingFileKey(item)));
     const accepted: File[] = [];
 
     for (const candidate of candidates) {
-      if (!isFileSupported(candidate)) {
-        unsupported.push(candidate.name);
+      const decision = checkUpload({ fileName: candidate.name, contentType: candidate.type }, uploadPolicy);
+      if (!decision.allowed) {
+        unsupported.push({ fileName: candidate.name, message: decision.message });
         continue;
       }
 
@@ -159,8 +159,11 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       });
     }
 
-    if (unsupported.length > 0) {
-      toast.error(`Skipped ${unsupported.length} unsupported file${unsupported.length === 1 ? '' : 's'}.`);
+    setRejectedUploads(unsupported);
+    if (unsupported.length === 1) {
+      toast.error(unsupported[0].message);
+    } else if (unsupported.length > 1) {
+      toast.error(`Skipped ${unsupported.length} files that can't be uploaded. ${acceptedUploadSentence(uploadPolicy)}`);
     }
 
     if (oversized.length > 0) {
@@ -244,10 +247,9 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
     academicTermId: string,
     uploadController: AbortController
   ): Promise<UploadOutcome | 'saved-with-error'> => {
-    const extension = targetFile.name.split('.').pop()?.toLowerCase() || '';
-    const isSupported = targetFile.type.startsWith('text/') || SUPPORTED_EXTENSIONS.has(extension);
-    if (!isSupported) {
-      throw new Error('Unsupported file type. Please upload a supported format.');
+    const decision = checkUpload({ fileName: targetFile.name, contentType: targetFile.type }, uploadPolicy);
+    if (!decision.allowed) {
+      throw new UploadRejectedError(decision.message, decision.reason);
     }
 
     const uploadValidationError = await getDeferredUploadValidationError(targetFile);
@@ -256,7 +258,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
     }
 
     // Videos use a durable material record and resumable direct-to-Storage upload.
-    if (isVideoUpload(targetFile)) {
+    if (decision.pipeline === 'video') {
       if (cancelUploadRef.current || uploadController.signal.aborted) {
         throw new Error('Upload cancelled');
       }
@@ -291,6 +293,8 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       bucket: 'course-materials',
       path: filePath,
       body: targetFile,
+      // Store the canonical type, not whatever the browser guessed.
+      contentType: decision.contentType,
       signal: uploadController.signal,
       onProgress: (fraction) => {
         const pct = Math.round(fraction * 100);
@@ -338,8 +342,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       throw new Error('Upload cancelled');
     }
 
-    const isTextLike = isTextLikeUpload(targetFile);
-    if (isTextLike) {
+    if (decision.pipeline === 'text') {
       const text = await targetFile.text();
       const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
         body: {
@@ -350,7 +353,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       });
 
       if (ingestError) {
-        throw new Error(ingestError.message || 'Failed to ingest material');
+        throw await functionInvokeError(ingestError, 'Failed to ingest material');
       }
 
       if (ingestResult?.error) {
@@ -363,13 +366,13 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       body: {
         materialId: material.id,
         filePath,
-        fileType: extension,
+        fileType: decision.extension,
       },
       signal: uploadController.signal,
     });
 
     if (parseError) {
-      throw new Error(parseError.message || 'Failed to parse material');
+      throw await functionInvokeError(parseError, 'Failed to parse material');
     }
 
     if (parseResult?.error) {
@@ -403,6 +406,7 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
     const queue = [...pendingFiles];
     const failedFiles: File[] = [];
+    const rejectedFiles: UploadRejection[] = [];
     let indexedCount = 0;
     let processingCount = 0;
     let savedWithErrorCount = 0;
@@ -448,6 +452,13 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
             break;
           }
 
+          if (error instanceof UploadRejectedError) {
+            // Retrying cannot help; drop the file and say why.
+            rejectedFiles.push({ fileName: targetFile.name, message });
+            toast.error(message);
+            continue;
+          }
+
           failedFiles.push(targetFile);
           toast.error(`${targetFile.name}: ${message}`);
         } finally {
@@ -464,6 +475,9 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
       }
 
       setPendingFiles(failedFiles);
+      if (rejectedFiles.length > 0) {
+        setRejectedUploads(rejectedFiles);
+      }
 
       if (indexedCount > 0 || processingCount > 0 || savedWithErrorCount > 0) {
         await onUploaded();
@@ -506,6 +520,8 @@ export function useMaterialUpload({ uploaderId, onUploaded }: UseMaterialUploadO
 
   return {
     pendingFiles,
+    rejectedUploads,
+    dismissRejectedUploads: () => setRejectedUploads([]),
     currentUploadFileName,
     currentUploadStatusText,
     currentUploadProgress,

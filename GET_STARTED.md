@@ -63,11 +63,13 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 
 Admins upload course materials in two pipelines, both async and job-tracked.
 
-### Documents (PDF, DOC/DOCX, PPTX, images)
+**New uploads are PDF and video only** (`.pdf`, `.mp4`, `.webm`). Word, PowerPoint, images and text files are turned away with a message telling the teacher to export them as PDF. One policy, [`_shared/uploadPolicy.ts`](supabase/functions/_shared/uploadPolicy.ts), drives the file chooser and the server checks in `parse-document`, `ingest-material`, `video-upload-session` and `upload-video`. Materials uploaded before the policy keep working. To accept DOCX/PPTX again, add `"office"` to `UPLOAD_POLICY.enabledFamilies`; the conversion pipeline below is still in place.
+
+### Documents (PDF; DOCX/PPTX, DOC and images while disabled by the upload policy)
 
 - ⏱ **15 MB** size limit (Gemini inline-vision constraint).
-- Supported: `pdf, png, jpg, jpeg, webp, gif, doc, docx, pptx`. Not supported: legacy `.ppt`, `.xls`/`.xlsx`.
-- `docx`/`pptx` are parsed directly from their XML (no AI call); `pdf`/images are OCR'd by OpenAI (`gpt-5.6-luna`, file/image sent inline via the shared `_shared/llm.ts` wrapper); legacy `.doc` still goes through Gemini Vision.
+- Accepted for new uploads: `pdf`. Before queuing, `parse-document` checks the stored file's first bytes for a PDF header and its recorded content type, so a renamed file is rejected. Still processed for existing materials: `png, jpg, jpeg, webp, gif, doc, docx, pptx`. Never supported: legacy `.ppt`, `.xls`/`.xlsx`.
+- `docx`/`pptx` are converted to PDF (see HANDOFF.md, "Office documents → PDF"); `pdf`/images are OCR'd by OpenAI (`gpt-5.6-luna`, file/image sent inline via the shared `_shared/llm.ts` wrapper); legacy `.doc` still goes through Gemini Vision.
 - Upload enqueues a `material_processing_jobs` row and fires the worker; extraction happens off the upload request.
 - ⏱ Runs under Supabase's edge limits (**150 s** wall clock on the free plan, 2 s CPU). PDFs over 16 pages are OCR'd in **16-page ranges** with progress saved to the job after each range, so long decks span several worker runs instead of timing out. `429`/`5xx` responses are retried with exponential backoff (3 retries); each OCR call has a 90 s timeout.
 - Extracted text is chunked (⏱ 1200 chars/chunk, 200-char overlap, ~1000-char step) and embedded, ⏱ up to 3 retry attempts per embedding call.

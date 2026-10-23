@@ -13,7 +13,7 @@ vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from 
 vi.mock('@/features/materials/useMaterialsList', () => ({ useMaterialsList: () => mocks.list }));
 vi.mock('@/features/materials/useMaterialUpload', () => ({
   useMaterialUpload: () => mocks.upload,
-  ACCEPTED_FILE_TYPES: '.pdf,.doc,.docx,.mp4',
+  ACCEPTED_FILE_TYPES: '.pdf,application/pdf,.mp4,video/mp4,.webm,video/webm',
   INLINE_GEMINI_MAX_FILE_SIZE_BYTES: 20 * 1024 * 1024,
 }));
 vi.mock('@/features/materials/useMaterialActions', () => ({ useMaterialActions: () => mocks.actions }));
@@ -43,7 +43,7 @@ describe('MaterialsTab', () => {
     mocks.update.mockReturnValue({ in: mocks.in });
     mocks.from.mockReturnValue({ update: mocks.update });
     mocks.list = { materials: [video, failed], isLoadingMaterials: false, searchQuery: '', setSearchQuery: fn(), showFilters: false, setShowFilters: fn(), courseFilter: 'all', setCourseFilter: fn(), accessFilter: 'all', setAccessFilter: fn(), academicTermFilter: 'all', setAcademicTermFilter: fn(), documentTypeFilter: 'all', setDocumentTypeFilter: fn(), dateFilter: 'all', setDateFilter: fn(), statusFilter: 'all', setStatusFilter: fn(), fetchMaterials: fn(), setMaterials: fn(), materialsPage: 1, setMaterialsPage: fn(), totalMaterialPages: 2, totalMaterialsCount: 12, visibleMaterialRangeStart: 1, visibleMaterialRangeEnd: 10 };
-    mocks.upload = { fileInputRef: { current: null }, pendingFiles: [], isUploading: false, isDragActive: false, handleFileInputChange: fn(), handleOpenFilePicker: fn(), handleDragOver: fn(), handleDragLeave: fn(), handleDrop: fn(), getPendingFileKey: (f: File) => f.name, removePendingFile: fn(), handleCancelUpload: fn(), handleUpload: fn(), currentUploadFileName: null, currentUploadFileSize: null, currentUploadIndex: null, currentUploadProgress: null, currentUploadStatusText: null };
+    mocks.upload = { fileInputRef: { current: null }, pendingFiles: [], rejectedUploads: [], dismissRejectedUploads: fn(), isUploading: false, isDragActive: false, handleFileInputChange: fn(), handleOpenFilePicker: fn(), handleDragOver: fn(), handleDragLeave: fn(), handleDrop: fn(), getPendingFileKey: (f: File) => f.name, removePendingFile: fn(), handleCancelUpload: fn(), handleUpload: fn(), currentUploadFileName: null, currentUploadFileSize: null, currentUploadIndex: null, currentUploadProgress: null, currentUploadStatusText: null };
     mocks.actions = { linkedUrlMaterial: null, linkedUrlValue: '', isSavingLinkedUrl: false, setLinkedUrlValue: fn(), closeLinkedUrlDialog: fn(), handleSaveLinkedUrl: fn(), transcriptMaterial: null, transcriptSegments: [], isLoadingTranscript: false, closeTranscriptDialog: fn(), editingFileNameMaterial: null, editingFileNameValue: '', isUpdatingFileName: false, setEditingFileNameValue: fn(), closeEditFileNameDialog: fn(), handleUpdateFileName: fn(), handleAttachLink: fn(), handleOpenTranscript: fn(), reindexingIds: new Set(), handleReindexMaterial: fn(), openEditFileNameDialog: fn(), handleDeleteMaterial: fn() };
   });
   const renderTab = () => render(<MaterialsTab uploaderId="u1" courses={[{ id: 'c1', name: 'Algorithms', code: 'CS101' } as never]} academicTerms={[{ id: 't1', label: 'Semester 1', is_active: true }, { id: 't2', label: 'Semester 2', is_active: false }] as never} isLoadingTerms={false} />);
@@ -71,6 +71,22 @@ describe('MaterialsTab', () => {
     expect(screen.getByText(/Drop your course materials here/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Drop your course materials here/ })); expect(mocks.upload.handleOpenFilePicker).toHaveBeenCalledWith(null);
     fireEvent.click(screen.getByRole('button', { name: 'Private' })); expect(screen.getAllByText('Private').length).toBeGreaterThan(0);
+  });
+  it('limits the chooser to PDF and video and explains what can be uploaded', () => {
+    const { container } = renderTab();
+    expect(container.querySelector('input[type=file]')).toHaveAttribute('accept', '.pdf,application/pdf,.mp4,video/mp4,.webm,video/webm');
+    expect(screen.getByText('PDF documents and MP4 or WebM videos.')).toBeInTheDocument();
+    expect(screen.getByText(/Save or export Word \(DOCX\) and PowerPoint \(PPTX\) files as PDF/)).toBeInTheDocument();
+    expect(screen.queryByText(/DOCX and PPTX files are extracted/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+  it('shows files the upload policy turned away and lets the teacher dismiss them', () => {
+    mocks.upload = { ...mocks.upload, rejectedUploads: [{ fileName: 'deck.pptx', message: '"deck.pptx" can\'t be uploaded. Only PDF documents and MP4 or WebM videos are accepted.' }] };
+    renderTab();
+    expect(screen.getByRole('alert')).toHaveTextContent('1 file was not added');
+    expect(screen.getByRole('alert')).toHaveTextContent('"deck.pptx" can\'t be uploaded.');
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss' }));
+    expect(mocks.upload.dismissRejectedUploads).toHaveBeenCalled();
   });
   it('removes and submits a prepared file once metadata is complete', () => {
     const file = new File(['abc'], 'lesson.pdf', { type: 'application/pdf' }); mocks.upload = { ...mocks.upload, pendingFiles: [file] };

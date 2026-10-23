@@ -11,7 +11,16 @@ vi.mock('@/lib/uploadWithProgress', () => ({ uploadToStorageWithProgress: mocks.
 vi.mock('@/lib/videoUploadPipeline', () => ({ uploadVideoForTranscription: mocks.uploadVideo }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess, info: mocks.toastInfo } }));
 
-import { useMaterialUpload } from './useMaterialUpload';
+import { ACCEPTED_FILE_TYPES, useMaterialUpload } from './useMaterialUpload';
+import type { UploadPolicy } from '../../../supabase/functions/_shared/uploadPolicy.ts';
+
+const ONLY_MESSAGE = 'Only PDF documents and MP4 or WebM videos are accepted.';
+const TEXT_ENABLED: UploadPolicy = { enabledFamilies: ['pdf', 'video', 'text'] };
+const OFFICE_ENABLED: UploadPolicy = { enabledFamilies: ['pdf', 'video', 'office'] };
+const httpError = (status: number, body: unknown) => ({
+  message: 'Edge Function returned a non-2xx status code',
+  context: new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }),
+});
 
 function insertChain(result: { data: unknown; error: unknown }) {
   const single = vi.fn().mockResolvedValue(result);
@@ -39,8 +48,8 @@ describe('useMaterialUpload', () => {
     onUploaded.mockResolvedValue(undefined);
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'uuid') });
   });
-  const setup = (uploaderId: string | undefined = 'user-1') =>
-    renderHook(() => useMaterialUpload({ uploaderId, onUploaded })).result;
+  const setup = (uploaderId: string | undefined = 'user-1', uploadPolicy?: UploadPolicy) =>
+    renderHook(() => useMaterialUpload({ uploaderId, onUploaded, uploadPolicy })).result;
   const add = (result: ReturnType<typeof setup>, files: File[], error: string | null = null) =>
     act(() => result.current.handleFileInputChange({ target: { files } } as unknown as React.ChangeEvent<HTMLInputElement>, error));
 
@@ -49,7 +58,7 @@ describe('useMaterialUpload', () => {
     const pdf = file('notes.pdf');
     add(result, [pdf, pdf, file('virus.exe')]);
     expect(result.current.pendingFiles).toEqual([pdf]);
-    expect(mocks.toastError).toHaveBeenCalledWith('Skipped 1 unsupported file.');
+    expect(mocks.toastError).toHaveBeenCalledWith(`"virus.exe" can't be uploaded. ${ONLY_MESSAGE}`);
     const huge = file('huge.pdf');
     Object.defineProperty(huge, 'size', { value: 16 * 1024 * 1024 });
     add(result, [huge]);
@@ -75,8 +84,87 @@ describe('useMaterialUpload', () => {
     expect(result.current.isDragActive).toBe(false);
   });
 
-  it('uploads and directly ingests text with correct metadata and progress', async () => {
+  it('accepts a video whose browser type is unknown and hands it to the video pipeline', async () => {
     const result = setup();
+    const video = file('lecture.mp4', 'video', '');
+    add(result, [video]);
+    expect(result.current.pendingFiles).toEqual([video]);
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(mocks.uploadVideo).toHaveBeenCalledWith(expect.objectContaining({ file: video }));
+  });
+
+  it('restricts the file chooser to PDF and video', () => {
+    expect(ACCEPTED_FILE_TYPES).toBe('.pdf,application/pdf,.mp4,video/mp4,.webm,video/webm');
+  });
+
+  it('turns away Office, image, text and mislabelled files at selection with a visible reason', () => {
+    const result = setup();
+    const pdf = file('notes.pdf', '%PDF', 'application/pdf');
+    const video = file('lecture.webm', 'video', 'video/webm');
+    add(result, [
+      pdf,
+      video,
+      file('slides.pptx', 'x', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'),
+      file('notes.docx', 'x', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      file('photo.png', 'x', 'image/png'),
+      file('lesson.txt', 'x', 'text/plain'),
+      file('renamed.pdf', 'x', 'video/mp4'),
+    ]);
+    expect(result.current.pendingFiles).toEqual([pdf, video]);
+    expect(result.current.rejectedUploads.map((item) => item.fileName)).toEqual([
+      'slides.pptx', 'notes.docx', 'photo.png', 'lesson.txt', 'renamed.pdf',
+    ]);
+    expect(result.current.rejectedUploads[0].message).toBe(`"slides.pptx" can't be uploaded. ${ONLY_MESSAGE}`);
+    expect(result.current.rejectedUploads[4].message).toContain("doesn't match the .pdf extension");
+    expect(mocks.toastError).toHaveBeenCalledWith(`Skipped 5 files that can't be uploaded. ${ONLY_MESSAGE}`);
+
+    add(result, [file('more.pdf')]);
+    expect(result.current.rejectedUploads).toEqual([]);
+    add(result, [file('again.pptx')]);
+    act(() => result.current.dismissRejectedUploads());
+    expect(result.current.rejectedUploads).toEqual([]);
+  });
+
+  it('shows the server admission error and drops the file instead of offering a retry', async () => {
+    const message = `"slides.pdf" can't be uploaded: its contents aren't a valid PDF file. ${ONLY_MESSAGE}`;
+    mocks.invoke.mockResolvedValueOnce({ data: null, error: httpError(415, { error: message, code: 'content_mismatch' }) });
+    const result = setup();
+    add(result, [file('slides.pdf')]);
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(mocks.toastError).toHaveBeenCalledWith(message);
+    expect(result.current.pendingFiles).toEqual([]);
+    expect(result.current.rejectedUploads).toEqual([{ fileName: 'slides.pdf', message }]);
+    expect(mocks.toastError).not.toHaveBeenCalledWith(expect.stringContaining('Remove or retry'));
+  });
+
+  it('surfaces other server error bodies instead of the generic non-2xx text', async () => {
+    mocks.invoke.mockResolvedValueOnce({ data: null, error: httpError(500, { error: 'Failed to enqueue parse job' }) });
+    const result = setup();
+    const pdf = file('slides.pdf');
+    add(result, [pdf]);
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(mocks.toastError).toHaveBeenCalledWith('slides.pdf: Failed to enqueue parse job');
+    expect(result.current.pendingFiles).toEqual([pdf]);
+  });
+
+  it('routes DOCX/PPTX through parse-document again when the policy enables Office', async () => {
+    mocks.invoke.mockResolvedValueOnce({ data: { queued: true }, error: null });
+    const result = setup('user-1', OFFICE_ENABLED);
+    add(result, [file('deck.pptx')]);
+    expect(result.current.rejectedUploads).toEqual([]);
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(mocks.uploadStorage).toHaveBeenCalledWith(expect.objectContaining({
+      path: 'course-1/uuid-deck.pptx',
+      contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    }));
+    expect(db.insert).toHaveBeenCalledWith(expect.objectContaining({ file_type: 'slides' }));
+    expect(mocks.invoke).toHaveBeenCalledWith('parse-document', expect.objectContaining({
+      body: { materialId: 'material-1', filePath: 'course-1/uuid-deck.pptx', fileType: 'pptx' },
+    }));
+  });
+
+  it('uploads and directly ingests text with correct metadata and progress when text is enabled', async () => {
+    const result = setup('user-1', TEXT_ENABLED);
     const textFile = file('lesson.ts', 'export const answer = 42;', 'text/plain');
     add(result, [textFile]);
     await act(async () => result.current.handleUpload('course-1', 'public', 'term-1'));
@@ -100,6 +188,7 @@ describe('useMaterialUpload', () => {
     const result = setup();
     add(result, [file('slides.pdf')]);
     await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    expect(mocks.uploadStorage).toHaveBeenCalledWith(expect.objectContaining({ contentType: 'application/pdf' }));
     expect(mocks.invoke).toHaveBeenCalledWith('parse-document', expect.objectContaining({
       body: { materialId: 'material-1', filePath: 'course-1/uuid-slides.pdf', fileType: 'pdf' },
     }));
@@ -147,7 +236,7 @@ describe('useMaterialUpload', () => {
       .mockResolvedValueOnce({ data: {}, error: null })
       .mockResolvedValueOnce({ data: { error: 'OCR failed' }, error: null });
     const result = setup();
-    const good = file('good.txt', 'good', 'text/plain');
+    const good = file('good.pdf', '%PDF', 'application/pdf');
     const bad = file('bad.pdf');
     add(result, [good, bad]);
     await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
@@ -159,7 +248,7 @@ describe('useMaterialUpload', () => {
 
   it('validates required upload context and resets or removes queued selections', async () => {
     const result = setup(null as unknown as undefined);
-    add(result, [file('notes.txt', 'notes', 'text/plain')]);
+    add(result, [file('notes.pdf', '%PDF', 'application/pdf')]);
     await act(async () => result.current.handleUpload('course', 'course', 'term'));
     expect(mocks.toastError).toHaveBeenCalledWith('Profile not loaded');
     expect(mocks.uploadStorage).not.toHaveBeenCalled();
@@ -167,7 +256,7 @@ describe('useMaterialUpload', () => {
     const key = result.current.getPendingFileKey(result.current.pendingFiles[0]);
     act(() => result.current.removePendingFile(key));
     expect(result.current.pendingFiles).toEqual([]);
-    add(result, [file('again.txt', 'notes', 'text/plain')]);
+    add(result, [file('again.pdf', '%PDF', 'application/pdf')]);
     act(() => result.current.handleCancelUpload());
     expect(result.current.pendingFiles).toEqual([]);
   });

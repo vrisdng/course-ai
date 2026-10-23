@@ -137,4 +137,30 @@ describe('uploadVideoForTranscription', () => {
     await expect(run({ file: makeFile(R2_MAX_OBJECT_BYTES + 1) })).rejects.toThrow('5 TB');
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
+
+  it('reports the server upload-policy refusal as an admission rejection', async () => {
+    const message = '"lecture.mp4" can\'t be uploaded: its file type (video/webm) doesn\'t match the .mp4 extension. Only PDF documents and MP4 or WebM videos are accepted.';
+    mocks.invoke.mockResolvedValueOnce({
+      data: null,
+      error: {
+        message: 'Edge Function returned a non-2xx status code',
+        context: new Response(JSON.stringify({ error: message, code: 'type_mismatch' }), { status: 415 }),
+      },
+    });
+    const { UploadRejectedError } = await import('./functionErrors');
+    const failure = await run().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(UploadRejectedError);
+    expect((failure as Error).message).toBe(message);
+  });
+
+  it('includes the server error body for other session failures', async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      data: null,
+      error: {
+        message: 'Edge Function returned a non-2xx status code',
+        context: new Response(JSON.stringify({ error: 'Course or academic term does not exist' }), { status: 400 }),
+      },
+    });
+    await expect(run()).rejects.toThrow('Video upload session failed: Course or academic term does not exist');
+  });
 });

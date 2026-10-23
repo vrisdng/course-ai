@@ -1,18 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { corsHeaders } from "../_shared/cors.ts";
 import { chunkText } from "../_shared/chunking.ts";
 import { EMBEDDING_COLUMN, type EmbeddingService } from "../_shared/embeddings.ts";
 import { createOpenAIEmbeddingService } from "../_shared/llm.ts";
-
-interface IngestRequest {
-  materialId: string;
-  text: string;
-}
+import { handleIngestMaterial, type IngestAuthorization } from "./handler.ts";
 
 const DEFAULT_CHUNK_SIZE = 1200;
 const DEFAULT_OVERLAP = 200;
-const MAX_TEXT_LENGTH = 500_000;
 const MAX_TEXT_CHUNKS = 250;
 const EMBEDDING_PROGRESS_START = 70;
 const EMBEDDING_PROGRESS_END = 95;
@@ -59,175 +53,144 @@ const embedChunks = async (options: {
 };
 
 serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const supabaseClient = createClient(supabaseUrl, supabaseKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
 
-  let materialIdForError: string | null = null;
+  return handleIngestMaterial(req, {
+    embeddingConfigured: Boolean(openAiApiKey),
 
-  try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Missing authorization header" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    async authorize(header: string): Promise<IngestAuthorization> {
+      const { data: { user }, error: userError } = await supabaseClient.auth.getUser(
+        header.replace("Bearer ", "")
       );
-    }
+      if (userError || !user) return "unauthorized";
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+      const { data: profile, error: profileError } = await supabaseClient
+        .from("profiles")
+        .select("role")
+        .eq("user_id", user.id)
+        .single();
+      if (profileError || !profile) return "error";
+      return profile.role === "admin" ? "admin" : "forbidden";
+    },
 
-    if (!openAiApiKey) {
-      return new Response(
-        JSON.stringify({ error: "Embedding service is not configured. Please add OPENAI_API_KEY secret." }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    async findMaterial(id: string) {
+      const { data, error } = await createClient(supabaseUrl, supabaseKey)
+        .from("materials")
+        .select("id, file_name, file_path, processing_status")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(`Failed to load material: ${error.message}`);
+      return data
+        ? { id: data.id, fileName: data.file_name, filePath: data.file_path, processingStatus: data.processing_status }
+        : null;
+    },
 
-    const supabaseClient = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    async rejectMaterial(id: string, message: string) {
+      await markMaterialFailed(supabaseUrl, supabaseKey, id, message);
+    },
 
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(
-      authHeader.replace("Bearer ", "")
-    );
-
-    if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const { data: profile, error: profileError } = await supabaseClient
-      .from("profiles")
-      .select("role")
-      .eq("user_id", user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return new Response(
-        JSON.stringify({ error: "Unable to verify user role" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (profile.role !== "admin") {
-      return new Response(
-        JSON.stringify({ error: "Forbidden" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const { materialId, text } = await req.json() as IngestRequest;
-    materialIdForError = materialId;
-
-    if (!materialId || !text) {
-      return new Response(
-        JSON.stringify({ error: "materialId and text are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (text.length > MAX_TEXT_LENGTH) {
-      return new Response(
-        JSON.stringify({ error: `Text exceeds maximum length of ${MAX_TEXT_LENGTH} characters` }),
-        { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const { error: materialError } = await supabaseClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_error: null,
-        processing_stage: "chunking",
-        processing_progress: 45,
-      })
-      .eq("id", materialId);
-
-    if (materialError) {
-      throw new Error(`Failed to update material status: ${materialError.message}`);
-    }
-
-    const chunks = chunkText(text, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP);
-
-    if (chunks.length === 0) {
-      throw new Error("No text content to process");
-    }
-
-    if (chunks.length > MAX_TEXT_CHUNKS) {
-      throw new Error(
-        `Text expands to ${chunks.length} chunks, which exceeds the processing limit of ${MAX_TEXT_CHUNKS}. Split the file into smaller parts.`,
-      );
-    }
-
-    await supabaseClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_stage: "embedding",
-        processing_progress: EMBEDDING_PROGRESS_START,
-      })
-      .eq("id", materialId);
-
-    const rows = await embedChunks({
-      chunks,
-      embeddingService: createOpenAIEmbeddingService(openAiApiKey),
-      materialId,
-      supabaseClient,
-    });
-
-    const batchSize = 100;
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize);
-      const { error: insertError } = await supabaseClient.from("chunks").insert(batch);
-      if (insertError) {
-        throw new Error(`Failed to insert chunks: ${insertError.message}`);
-      }
-    }
-
-    await supabaseClient
-      .from("materials")
-      .update({
-        processing_status: "completed",
-        processing_error: null,
-        processing_stage: "completed",
-        processing_progress: 100,
-      })
-      .eq("id", materialId);
-
-    return new Response(
-      JSON.stringify({ inserted: rows.length }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "An unexpected error occurred";
-    console.error("Ingest material error:", error);
-
-    if (materialIdForError) {
+    async ingest(materialId: string, text: string) {
       try {
-        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-        const supabaseClient = createClient(supabaseUrl, supabaseKey);
-        await supabaseClient
-          .from("materials")
-          .update({
-            processing_status: "failed",
-            processing_error: message,
-            processing_stage: "failed",
-            processing_progress: null,
-          })
-          .eq("id", materialIdForError);
-      } catch (updateError) {
-        console.error("Failed to update material error status:", updateError);
+        return await ingestText({ materialId, text, supabaseClient, openAiApiKey: openAiApiKey! });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "An unexpected error occurred";
+        await markMaterialFailed(supabaseUrl, supabaseKey, materialId, message);
+        throw error;
       }
-    }
+    },
+  });
+});
 
-    return new Response(
-      JSON.stringify({ error: message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+async function markMaterialFailed(supabaseUrl: string, supabaseKey: string, materialId: string, message: string) {
+  try {
+    const supabaseClient = createClient(supabaseUrl, supabaseKey);
+    await supabaseClient
+      .from("materials")
+      .update({
+        processing_status: "failed",
+        processing_error: message,
+        processing_stage: "failed",
+        processing_progress: null,
+      })
+      .eq("id", materialId);
+  } catch (updateError) {
+    console.error("Failed to update material error status:", updateError);
+  }
+}
+
+async function ingestText(options: {
+  materialId: string;
+  text: string;
+  supabaseClient: ReturnType<typeof createClient>;
+  openAiApiKey: string;
+}): Promise<number> {
+  const { materialId, text, supabaseClient } = options;
+  const { error: materialError } = await supabaseClient
+    .from("materials")
+    .update({
+      processing_status: "processing",
+      processing_error: null,
+      processing_stage: "chunking",
+      processing_progress: 45,
+    })
+    .eq("id", materialId);
+
+  if (materialError) {
+    throw new Error(`Failed to update material status: ${materialError.message}`);
+  }
+
+  const chunks = chunkText(text, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP);
+
+  if (chunks.length === 0) {
+    throw new Error("No text content to process");
+  }
+
+  if (chunks.length > MAX_TEXT_CHUNKS) {
+    throw new Error(
+      `Text expands to ${chunks.length} chunks, which exceeds the processing limit of ${MAX_TEXT_CHUNKS}. Split the file into smaller parts.`,
     );
   }
-});
+
+  await supabaseClient
+    .from("materials")
+    .update({
+      processing_status: "processing",
+      processing_stage: "embedding",
+      processing_progress: EMBEDDING_PROGRESS_START,
+    })
+    .eq("id", materialId);
+
+  const rows = await embedChunks({
+    chunks,
+    embeddingService: createOpenAIEmbeddingService(options.openAiApiKey),
+    materialId,
+    supabaseClient,
+  });
+
+  const batchSize = 100;
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+    const { error: insertError } = await supabaseClient.from("chunks").insert(batch);
+    if (insertError) {
+      throw new Error(`Failed to insert chunks: ${insertError.message}`);
+    }
+  }
+
+  await supabaseClient
+    .from("materials")
+    .update({
+      processing_status: "completed",
+      processing_error: null,
+      processing_stage: "completed",
+      processing_progress: 100,
+    })
+    .eq("id", materialId);
+
+  return rows.length;
+}
