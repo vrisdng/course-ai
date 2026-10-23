@@ -1,5 +1,13 @@
+import {
+  UPLOAD_POLICY,
+  UPLOAD_REJECTED_STATUS,
+  acceptedUploadSentence,
+  checkUpload,
+  uploadRejectionBody,
+  type UploadPolicy,
+} from '../_shared/uploadPolicy.ts';
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const VIDEO_TYPES: Record<string, string> = { 'video/mp4': 'mp4', 'video/webm': 'webm' };
 
 export interface UploadUser { userId: string; profileId: string }
 export interface UploadMaterial {
@@ -96,7 +104,7 @@ function hasUnsafeNameCharacter(value: string): boolean {
   });
 }
 
-function sameUpload(material: UploadMaterial, input: Record<string, unknown>): boolean {
+function sameUpload(material: UploadMaterial, input: ValidatedCreateParams): boolean {
   return material.course_id === input.courseId &&
     material.academic_term_id === input.academicTermId &&
     material.access_scope === input.accessScope &&
@@ -117,31 +125,56 @@ interface ValidatedCreateParams {
   accessScope: UploadMaterial['access_scope'];
   fileName: string;
   fileSize: number;
+  // Canonical type from the upload policy.
   contentType: string;
+  // Matches contentType and the file name.
+  extension: string;
   uploadKey: string | null;
 }
 
-function validateCreateParams(body: Record<string, unknown>): ValidatedCreateParams | null {
+type CreateParamsResult =
+  | { ok: true; params: ValidatedCreateParams }
+  | { ok: false; result: SessionResult };
+
+function validateCreateParams(body: Record<string, unknown>, policy: UploadPolicy): CreateParamsResult {
   const { courseId, academicTermId, accessScope, fileName, fileSize, contentType, uploadKey } = body;
   if (!UUID.test(String(courseId)) || !UUID.test(String(academicTermId)) ||
     !['course', 'public', 'private'].includes(String(accessScope)) ||
     typeof fileName !== 'string' || fileName.length < 1 || fileName.length > 255 ||
     hasUnsafeNameCharacter(fileName) ||
-    typeof contentType !== 'string' || !(contentType in VIDEO_TYPES) ||
-    !fileName.toLowerCase().endsWith(`.${VIDEO_TYPES[contentType]}`) ||
+    typeof contentType !== 'string' ||
     typeof fileSize !== 'number' || !Number.isSafeInteger(fileSize) ||
     fileSize < 1 ||
     (uploadKey !== undefined && !UUID.test(String(uploadKey)))) {
-    return null;
+    return { ok: false, result: reply(400, { error: 'Invalid video upload parameters' }) };
+  }
+  // The upload policy decides the type before any material, path or
+  // credential exists.
+  const decision = checkUpload({ fileName, contentType }, policy);
+  if (!decision.allowed) {
+    return { ok: false, result: reply(UPLOAD_REJECTED_STATUS, { ...uploadRejectionBody(decision) }) };
+  }
+  if (decision.pipeline !== 'video') {
+    return {
+      ok: false,
+      result: reply(UPLOAD_REJECTED_STATUS, {
+        error: `"${fileName}" isn't a video. ${acceptedUploadSentence(policy)}`,
+        code: 'type_mismatch',
+      }),
+    };
   }
   return {
-    courseId: courseId as string,
-    academicTermId: academicTermId as string,
-    accessScope: accessScope as UploadMaterial['access_scope'],
-    fileName: fileName as string,
-    fileSize: fileSize as number,
-    contentType: contentType as string,
-    uploadKey: typeof uploadKey === 'string' ? uploadKey : null,
+    ok: true,
+    params: {
+      courseId: courseId as string,
+      academicTermId: academicTermId as string,
+      accessScope: accessScope as UploadMaterial['access_scope'],
+      fileName,
+      fileSize,
+      contentType: decision.contentType,
+      extension: decision.extension,
+      uploadKey: typeof uploadKey === 'string' ? uploadKey : null,
+    },
   };
 }
 
@@ -203,27 +236,29 @@ export async function handleUploadSession(
   user: UploadUser,
   store: UploadSessionStore,
   newId: () => string = () => crypto.randomUUID(),
+  policy: UploadPolicy = UPLOAD_POLICY,
 ): Promise<SessionResult> {
   if (!isRecord(body)) return reply(400, { error: 'Invalid request body' });
 
   if (body.action === 'create') {
-    const params = validateCreateParams(body);
-    if (!params) return reply(400, { error: 'Invalid video upload parameters' });
-    const { courseId, academicTermId, accessScope, fileName, fileSize, contentType, uploadKey } = params;
+    const validated = validateCreateParams(body, policy);
+    if (!validated.ok) return validated.result;
+    const { params } = validated;
+    const { courseId, academicTermId, accessScope, fileName, fileSize, contentType, extension, uploadKey } = params;
     if (!await store.courseExists(courseId) || !await store.termExists(academicTermId)) {
       return reply(400, { error: 'Course or academic term does not exist' });
     }
 
     const existing = uploadKey ? await store.findByKey(user.profileId, uploadKey) : null;
     if (existing) {
-      if (!sameUpload(existing, body) || ['cancelled', 'deleting'].includes(existing.video_upload_state)) {
+      if (!sameUpload(existing, params) || ['cancelled', 'deleting'].includes(existing.video_upload_state)) {
         return reply(409, { error: 'Upload key was already used for different parameters' });
       }
       return reply(200, { materialId: existing.id, filePath: existing.file_path, uploaded: await uploaded(existing, store) });
     }
 
     const id = newId();
-    const path = `videos/${user.userId}/${id}.${VIDEO_TYPES[contentType]}`;
+    const path = `videos/${user.userId}/${id}.${extension}`;
     const record: NewUploadMaterial = {
       id, course_id: courseId as string, academic_term_id: academicTermId as string,
       access_scope: accessScope as UploadMaterial['access_scope'], uploaded_by: user.profileId,
@@ -240,7 +275,7 @@ export async function handleUploadSession(
       // Two create requests with the same key may race at the unique index.
       const raced = uploadKey ? await store.findByKey(user.profileId, uploadKey) : null;
       if (raced) {
-        if (!sameUpload(raced, body) || ['cancelled', 'deleting'].includes(raced.video_upload_state)) {
+        if (!sameUpload(raced, params) || ['cancelled', 'deleting'].includes(raced.video_upload_state)) {
           return reply(409, { error: 'Upload key was already used for different parameters' });
         }
         return reply(200, { materialId: raced.id, filePath: raced.file_path, uploaded: await uploaded(raced, store) });
@@ -250,16 +285,17 @@ export async function handleUploadSession(
   }
 
   if (body.action === 'create-multipart') {
-    const params = validateCreateParams(body);
-    if (!params) return reply(400, { error: 'Invalid video upload parameters' });
-    const { courseId, academicTermId, accessScope, fileName, fileSize, contentType, uploadKey } = params;
+    const validated = validateCreateParams(body, policy);
+    if (!validated.ok) return validated.result;
+    const { params } = validated;
+    const { courseId, academicTermId, accessScope, fileName, fileSize, contentType, extension, uploadKey } = params;
     if (!await store.courseExists(courseId) || !await store.termExists(academicTermId)) {
       return reply(400, { error: 'Course or academic term does not exist' });
     }
 
     const existing = uploadKey ? await store.findByKey(user.profileId, uploadKey) : null;
     if (existing) {
-      if (!sameUpload(existing, body) || ['cancelled', 'deleting'].includes(existing.video_upload_state)) {
+      if (!sameUpload(existing, params) || ['cancelled', 'deleting'].includes(existing.video_upload_state)) {
         return reply(409, { error: 'Upload key was already used for different parameters' });
       }
       if (existing.storage_provider !== 'r2') {
@@ -281,7 +317,7 @@ export async function handleUploadSession(
     }
 
     const id = newId();
-    const path = r2VideoPath(id, VIDEO_TYPES[contentType]);
+    const path = r2VideoPath(id, extension);
     const record: NewUploadMaterial = {
       id, course_id: courseId, academic_term_id: academicTermId,
       access_scope: accessScope, uploaded_by: user.profileId,
@@ -302,7 +338,7 @@ export async function handleUploadSession(
       // Two create requests with the same key may race at the unique index.
       const raced = uploadKey ? await store.findByKey(user.profileId, uploadKey) : null;
       if (raced) {
-        if (!sameUpload(raced, body) || raced.storage_provider !== 'r2' ||
+        if (!sameUpload(raced, params) || raced.storage_provider !== 'r2' ||
           ['cancelled', 'deleting'].includes(raced.video_upload_state)) {
           return reply(409, { error: 'Upload key was already used for different parameters' });
         }
