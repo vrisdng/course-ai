@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { HttpError, generateChatTextStream } from "../_shared/llm.ts";
 import { buildOpenAIConversationMessages, type ConversationHistoryTurn } from "../_shared/history.ts";
@@ -76,8 +76,8 @@ interface AnalyticsData {
 }
 
 async function fetchAnalyticsData(
-  supabaseClient: ReturnType<typeof createClient>,
-  supabaseAdmin: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
+  supabaseAdmin: SupabaseClient,
   courseId: string,
   startAt: string | null,
   endAt: string | null,
@@ -86,6 +86,8 @@ async function fetchAnalyticsData(
     .select("query_text, unresolved_reason, created_at")
     .eq("course_id", courseId)
     .eq("unresolved", true)
+    .eq("outcome", "success")
+    .is("error_code", null)
     .order("created_at", { ascending: false })
     .limit(15);
 
@@ -296,7 +298,7 @@ serve(async (req: Request) => {
           try {
             throwIfAborted(requestAbortController.signal);
 
-            const answer = await generateChatTextStream({
+            const { text: answer } = await generateChatTextStream({
               apiKey: openAiApiKey,
               model: CHAT_MODEL,
               messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),

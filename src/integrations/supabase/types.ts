@@ -944,14 +944,29 @@ export type Database = {
           assistant_message_id: string | null
           citation_count: number
           citation_hit: boolean
+          completion_tokens: number | null
           conversation_id: string | null
           course_id: string | null
           created_at: string
+          embedding_ms: number | null
+          error_code: string | null
+          first_token_ms: number | null
+          generation_ms: number | null
           id: string
           latency_ms: number | null
+          model_id: string | null
+          model_tier: string | null
+          outcome: string
+          pipeline_version: string | null
+          prompt_tokens: number | null
           query_category: string
           query_text: string
+          request_id: string | null
+          retrieval_ms: number | null
           retrieved_chunk_count: number
+          search_count: number | null
+          skip_rag: boolean | null
+          tool_call_count: number | null
           unresolved: boolean
           unresolved_reason: string | null
           user_id: string
@@ -962,14 +977,29 @@ export type Database = {
           assistant_message_id?: string | null
           citation_count?: number
           citation_hit?: boolean
+          completion_tokens?: number | null
           conversation_id?: string | null
           course_id?: string | null
           created_at?: string
+          embedding_ms?: number | null
+          error_code?: string | null
+          first_token_ms?: number | null
+          generation_ms?: number | null
           id?: string
           latency_ms?: number | null
+          model_id?: string | null
+          model_tier?: string | null
+          outcome?: string
+          pipeline_version?: string | null
+          prompt_tokens?: number | null
           query_category?: string
           query_text: string
+          request_id?: string | null
+          retrieval_ms?: number | null
           retrieved_chunk_count?: number
+          search_count?: number | null
+          skip_rag?: boolean | null
+          tool_call_count?: number | null
           unresolved?: boolean
           unresolved_reason?: string | null
           user_id: string
@@ -980,14 +1010,29 @@ export type Database = {
           assistant_message_id?: string | null
           citation_count?: number
           citation_hit?: boolean
+          completion_tokens?: number | null
           conversation_id?: string | null
           course_id?: string | null
           created_at?: string
+          embedding_ms?: number | null
+          error_code?: string | null
+          first_token_ms?: number | null
+          generation_ms?: number | null
           id?: string
           latency_ms?: number | null
+          model_id?: string | null
+          model_tier?: string | null
+          outcome?: string
+          pipeline_version?: string | null
+          prompt_tokens?: number | null
           query_category?: string
           query_text?: string
+          request_id?: string | null
+          retrieval_ms?: number | null
           retrieved_chunk_count?: number
+          search_count?: number | null
+          skip_rag?: boolean | null
+          tool_call_count?: number | null
           unresolved?: boolean
           unresolved_reason?: string | null
           user_id?: string
@@ -1311,6 +1356,40 @@ export type Database = {
       }
     }
     Views: {
+      analytics_course_chat_health: {
+        Row: {
+          aborted_count: number | null
+          academic_term_id: string | null
+          avg_latency_ms: number | null
+          completion_tokens: number | null
+          course_id: string | null
+          day: string | null
+          error_count: number | null
+          error_rate: number | null
+          known_usage_count: number | null
+          p95_latency_ms: number | null
+          persistence_error_count: number | null
+          prompt_tokens: number | null
+          request_count: number | null
+          success_count: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "query_events_academic_term_id_fkey"
+            columns: ["academic_term_id"]
+            isOneToOne: false
+            referencedRelation: "academic_terms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "query_events_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       analytics_query_category_stats: {
         Row: {
           citation_hit_count: number | null

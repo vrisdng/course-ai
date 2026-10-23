@@ -10,7 +10,7 @@ vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from,
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
 import AdminAnalytics from './AdminAnalytics';
 
-function chain(result: unknown) { const q: Record<string, unknown> = {}; for (const m of ['select', 'order', 'eq', 'gte', 'lte']) q[m] = vi.fn(() => q); q.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve); return q; }
+function chain(result: unknown) { const q: Record<string, unknown> = {}; for (const m of ['select', 'order', 'eq', 'is', 'gte', 'lte']) q[m] = vi.fn(() => q); q.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve); return q; }
 
 describe('AdminAnalytics', () => {
   beforeEach(() => {
@@ -25,6 +25,10 @@ describe('AdminAnalytics', () => {
     render(<AdminAnalytics />);
     expect(await screen.findByText('Course Analytics')).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText('20').length).toBeGreaterThan(0));
+    const queryIndex = mocks.from.mock.calls.findIndex(([table]) => table === 'query_events');
+    const questionsQuery = mocks.from.mock.results[queryIndex].value;
+    expect(questionsQuery.eq).toHaveBeenCalledWith('outcome', 'success');
+    expect(questionsQuery.is).toHaveBeenCalledWith('error_code', null);
     expect(screen.getAllByText('12').length).toBeGreaterThan(0); expect(screen.getAllByText('8').length).toBeGreaterThan(0); expect(screen.getAllByText('42').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'suggestion' })); fireEvent.click(screen.getByRole('button', { name: 'send analytics' })); fireEvent.click(screen.getByRole('button', { name: 'stop analytics' }));
     expect(mocks.chat.setInput).toHaveBeenCalledWith('Summarize activity'); expect(mocks.chat.handleSend).toHaveBeenCalled(); expect(mocks.chat.stopGenerating).toHaveBeenCalled();

@@ -185,3 +185,17 @@ No byte ceiling rejects a video; AssemblyAI's duration, source-size, format, and
 - **Frontend**: [src/lib/videoUploadPipeline.ts](src/lib/videoUploadPipeline.ts) orchestrates `upload-video` → `transcribe-video` and would need its Step 1 rewritten (Storage upload instead of AssemblyAI proxy).
 
 Whoever picks this up: start by confirming whether client-side audio extraction (already implemented) reliably gets lecture-length videos under OpenAI's 25MB cap before committing to the Storage-upload restructure.
+
+
+## Student chat telemetry (2026-10-22)
+
+`query_events` now stores one best-effort terminal event for each authenticated, valid student-chat request, including errors and client aborts. Earlier authentication/configuration/JSON failures remain in function logs. `request_id` is server-generated and unique; course/conversation IDs are populated only after access resolution. Hard runtime termination or a failed telemetry write can still leave no event.
+
+- `outcome = success` means the final SSE answer was delivered. A later message-save failure keeps that outcome and sets `error_code = message_persistence_failed`. Existing usage analytics exclude errors, aborts, and these persistence failures; historical rows default to success with unknown telemetry fields.
+- `latency_ms` ends at final delivery for successful answers, or at failure/abort. `first_token_ms` measures the first nonempty text sent, including text later cleared by a tool-call reset. The monotonic clock starts after authentication and valid message parsing.
+- `generation_ms` measures the answer-generation block, including agent searches and fallback turns. `embedding_ms` and `retrieval_ms` sum actual search work, even failed phases; concurrent searches can overlap. These timings are not additive. Citation repair, video-evidence selection, and message persistence are outside `generation_ms`.
+- The custom Chat Completions provider sets `compatibility: "strict"`; AI SDK v4 otherwise omits streaming usage.
+- Token totals cover all chat-model steps, retries, citation repair, and video-evidence selection, including fast-model evidence selection on smart/pro requests. `model_id`/`model_tier` identify the answer model. Embedding tokens are excluded. Missing/failed call usage makes the affected token total NULL, not zero or an undercount.
+- `analytics_course_chat_health` uses UTC daily buckets and invoker security over admin-only event RLS. It excludes legacy rows without request IDs; latency averages/p95 use successes, and error rate is errors / (successes + errors). Aborts and persistence errors have separate counts. `known_usage_count` shows token-total coverage. Do not average daily p95 values to obtain a multi-day p95.
+- Migration `20261021120000` was applied and recorded through the Management API after a rollback preview. Hosted history was partially tracked (6 entries before this migration), not empty. Inspect current history before any `db push`.
+- Deploy both `rag-chat` and `analytics-chat` when changing the streaming return shape. Validation lives in `_shared/{chatTelemetry,llmUsage,llmStreaming}.test.ts`, `rag-chat/index.test.ts`, and `supabase/tests/chat_telemetry.sql` (transactional rollback).

@@ -146,6 +146,8 @@ export default function AdminAnalytics() {
     const questionsQuery = supabase
       .from('query_events')
       .select('id', { count: 'exact', head: true })
+      .eq('outcome', 'success')
+      .is('error_code', null)
       .eq('course_id', selectedCourseId)
       .gte('created_at', analyticsStartAt)
       .lte('created_at', analyticsEndAt);

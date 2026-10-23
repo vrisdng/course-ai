@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import {
   HttpError,
   createOpenAIEmbeddingService,
@@ -51,6 +51,8 @@ import {
   type ChatSettings,
   type CourseChatSettingsRow,
 } from "../_shared/chatSettings.ts";
+import { ChatTelemetry, classifyChatFailure, finishChatTelemetry, type ChatOutcome, type ChatTelemetryFields } from "../_shared/chatTelemetry.ts";
+import type { TokenUsage } from "../_shared/llmUsage.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { formatSseEvent, isAbortError, throwIfAborted } from "../_shared/sse.ts";
 import { FORMATTING_FORMATTING_EXTRA } from "../_shared/formatting.ts";
@@ -117,11 +119,11 @@ interface RetrievedChunk {
 
 interface QueryEventInsert {
   user_id: string;
-  conversation_id: string;
-  course_id: string;
+  conversation_id: string | null;
+  course_id: string | null;
   academic_term_id: string | null;
-  user_message_id: string;
-  assistant_message_id: string;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
   query_text: string;
   query_category: string;
   retrieved_chunk_count: number;
@@ -129,7 +131,6 @@ interface QueryEventInsert {
   citation_hit: boolean;
   unresolved: boolean;
   unresolved_reason: string | null;
-  latency_ms: number | null;
 }
 
 interface ChatTextGenerationOptions {
@@ -141,6 +142,7 @@ interface ChatTextGenerationOptions {
   temperature?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  onUsage?: (usage: TokenUsage) => void;
 }
 
 interface ChatStreamGenerationOptions extends ChatTextGenerationOptions {
@@ -155,11 +157,12 @@ async function generateModelText(options: ChatTextGenerationOptions): Promise<st
     temperature: options.temperature,
     maxOutputTokens: options.maxOutputTokens,
     signal: options.signal,
+    onUsage: options.onUsage,
   });
 }
 
 async function generateModelTextStream(options: ChatStreamGenerationOptions): Promise<string> {
-  return generateChatTextStream({
+  const { text } = await generateChatTextStream({
     apiKey: options.apiKey,
     model: options.modelConfig.modelId,
     messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
@@ -167,11 +170,13 @@ async function generateModelTextStream(options: ChatStreamGenerationOptions): Pr
     maxOutputTokens: options.maxOutputTokens,
     signal: options.signal,
     onTextDelta: options.onTextDelta,
+    onUsage: options.onUsage,
   });
+  return text;
 }
 
 async function retrieveChunkCandidates(options: {
-  supabaseClient: ReturnType<typeof createClient>;
+  supabaseClient: SupabaseClient;
   userId: string;
   courseId: string;
   embedding: number[];
@@ -202,7 +207,7 @@ async function retrieveChunkCandidates(options: {
 }
 
 async function getActiveAcademicTermId(
-  supabaseClient: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
 ): Promise<string | null> {
   const { data, error } = await supabaseClient
     .from("academic_terms")
@@ -221,8 +226,8 @@ async function getActiveAcademicTermId(
 }
 
 async function insertQueryEvent(
-  supabaseClient: ReturnType<typeof createClient>,
-  payload: QueryEventInsert,
+  supabaseClient: SupabaseClient,
+  payload: QueryEventInsert & ChatTelemetryFields,
 ): Promise<void> {
   const { error } = await supabaseClient
     .from("query_events")
@@ -236,7 +241,7 @@ async function insertQueryEvent(
 // Inserts the user question and assistant answer with timestamps 1ms apart
 // so ordering by created_at always returns user before assistant.
 async function persistTurn(
-  supabaseClient: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
   conversationId: string,
   userContent: string,
   assistantContent: string,
@@ -279,6 +284,7 @@ async function formatAnswerWithReliableCitations(options: {
   signal?: AbortSignal;
   imageResolver?: (sourceNumber: number) => SourceImage | null;
   blockCountBySource?: BlockCountBySource;
+  onUsage?: (usage: TokenUsage) => void;
 }): Promise<{
   answer: string;
   citedChunks: RetrievedChunk[];
@@ -329,6 +335,7 @@ ${buildCitationRewriteSourceContext(options.chunks)}`;
       temperature: 0.1,
       maxOutputTokens: 1800,
       signal: options.signal,
+      onUsage: options.onUsage,
     });
 
     sanitized = sanitizeAndRemapCitations(rewrittenAnswer, options.chunks.length, options.blockCountBySource);
@@ -377,12 +384,13 @@ ${buildCitationRewriteSourceContext(options.chunks)}`;
 }
 
 async function selectVideoEvidence(options: {
-  client: ReturnType<typeof createClient>;
+  client: SupabaseClient;
   chunks: RetrievedChunk[];
   answer: string;
   question: string;
   apiKey: string;
   signal?: AbortSignal;
+  onUsage?: (usage: TokenUsage) => void;
 }): Promise<Map<number, VideoEvidenceSegment[]>> {
   try {
     const candidates = (await Promise.all(options.chunks.map(async (chunk, index): Promise<VideoEvidenceCandidate | null> => {
@@ -417,6 +425,7 @@ async function selectVideoEvidence(options: {
       temperature: 0,
       maxOutputTokens: 800,
       signal: options.signal,
+      onUsage: options.onUsage,
     });
     return parseVideoEvidenceSelection(raw, candidates);
   } catch (error) {
@@ -428,7 +437,7 @@ async function selectVideoEvidence(options: {
 // The course's admin-tuned chat settings, or the defaults when the row is
 // missing or unreadable.
 async function loadCourseChatSettings(
-  client: ReturnType<typeof createClient>,
+  client: SupabaseClient,
   courseId: string,
 ): Promise<ChatSettings> {
   const { data, error } = await client
@@ -443,7 +452,7 @@ async function loadCourseChatSettings(
 }
 
 async function hasCourseAccess(
-  supabaseClient: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
   userId: string,
   checkCourseId: string,
 ): Promise<boolean> {
@@ -472,7 +481,7 @@ async function hasCourseAccess(
 }
 
 async function resolveSelectedMaterials(
-  supabaseClient: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
   courseId: string,
   selectedDocumentIds: string[],
 ): Promise<ResolvedSelectedMaterial[]> {
@@ -510,7 +519,7 @@ async function resolveSelectedMaterials(
 }
 
 async function findDefaultCourseId(
-  supabaseClient: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
   userId: string,
 ): Promise<string | null> {
   const { data: enrollmentRow, error: enrollmentError } = await supabaseClient
@@ -562,7 +571,7 @@ async function findDefaultCourseId(
 }
 
 async function resolveConversation(
-  supabaseClient: ReturnType<typeof createClient>,
+  supabaseClient: SupabaseClient,
   userId: string,
   message: string,
   conversationId?: string,
@@ -653,6 +662,10 @@ serve(async (req: Request) => {
     { once: true },
   );
 
+  let telemetry: ChatTelemetry | null = null;
+  let eventContext: QueryEventInsert | null = null;
+  let recordEvent: ((outcome: ChatOutcome, errorCode?: string | null) => Promise<void>) | null = null;
+
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -714,7 +727,7 @@ serve(async (req: Request) => {
       model: rawModel,
       skipRag: rawSkipRag,
     } = await req.json() as ChatRequest;
-    const trimmedMessage = message?.trim();
+    const trimmedMessage = typeof message === "string" ? message.trim() : "";
     const selectedDocumentIds = normalizeSelectedDocumentIds(rawSelectedDocumentIds);
     const skipRag = rawSkipRag === true;
 
@@ -725,7 +738,22 @@ serve(async (req: Request) => {
       );
     }
 
-    const requestStartedAt = Date.now();
+    const chatTelemetry = new ChatTelemetry(crypto.randomUUID(), skipRag);
+    telemetry = chatTelemetry;
+    eventContext = {
+      user_id: user.id, conversation_id: null, course_id: null, academic_term_id: null,
+      user_message_id: null, assistant_message_id: null,
+      query_text: trimmedMessage, query_category: classifyQueryCategory(trimmedMessage),
+      retrieved_chunk_count: 0, citation_count: 0, citation_hit: false,
+      unresolved: false, unresolved_reason: null,
+    };
+    const context = eventContext;
+    recordEvent = (outcome, errorCode = null) => finishChatTelemetry(
+      chatTelemetry,
+      (fields) => insertQueryEvent(supabaseAdminClient, { ...context, ...fields }),
+      outcome, errorCode,
+    );
+    const recordUsage = (usage: TokenUsage) => chatTelemetry.recordUsage(usage);
     throwIfAborted(requestAbortController.signal);
 
     const resolved = await resolveConversation(
@@ -740,6 +768,8 @@ serve(async (req: Request) => {
 
     const activeConversationId = resolved.conversationId;
     const activeCourseId = resolved.courseId;
+    context.conversation_id = activeConversationId;
+    context.course_id = activeCourseId;
 
     // ── Fetch conversation history and course settings (always needed) ──
     const [activeAcademicTermId, { data: recentMessages, error: historyError }, chatSettings] = await Promise.all([
@@ -757,7 +787,10 @@ serve(async (req: Request) => {
       console.error("Failed to load conversation history:", historyError);
     }
 
-    chatModelConfig = CHAT_MODEL_CONFIGS[resolveRequestedModelTier(rawModel, chatSettings)];
+    context.academic_term_id = activeAcademicTermId;
+    const modelTier = resolveRequestedModelTier(rawModel, chatSettings);
+    chatModelConfig = CHAT_MODEL_CONFIGS[modelTier];
+    chatTelemetry.setModel(chatModelConfig.modelId, modelTier);
     const courseInstructionsBlock = chatSettings.courseInstructions
       ? `\n\nCOURSE INSTRUCTIONS (set by the course staff):\n${chatSettings.courseInstructions}`
       : "";
@@ -853,30 +886,34 @@ ${retrievalScopeInstruction}`;
     // settings, and keep the relevant ones.
     const searchCourse = async (query: string): Promise<RetrievedChunk[]> => {
       throwIfAborted(requestAbortController.signal);
-      const embedding = await embeddingService.embedQuery(query, requestAbortController.signal);
+      chatTelemetry.recordSearch();
+      const embedding = await chatTelemetry.measure("embedding", () =>
+        embeddingService.embedQuery(query, requestAbortController.signal));
       const { matchThreshold, matchCount, relevanceFloor, finalCount } = getRetrievalSettings(
         { isSummaryQuery, hasSelectedDocumentFilter },
         chatSettings,
       );
-      const candidates = await retrieveChunkCandidates({
-        supabaseClient,
-        userId: user.id,
-        courseId: activeCourseId,
-        embedding,
-        threshold: matchThreshold,
-        count: matchCount,
-        selectedMaterialIds,
+      return chatTelemetry.measure("retrieval", async () => {
+        const candidates = await retrieveChunkCandidates({
+          supabaseClient,
+          userId: user.id,
+          courseId: activeCourseId,
+          embedding,
+          threshold: matchThreshold,
+          count: matchCount,
+          selectedMaterialIds,
+        });
+        let ranked = rerankRetrievedChunks(
+          dedupeRetrievedChunksByBestScore(candidates),
+          query,
+          finalCount,
+          chatSettings.semanticWeight,
+        );
+        if (isSummaryQuery) ranked = spreadAcrossTimeline(ranked, chatSettings.videoSpreadWindowMs);
+        const relevant = ranked.filter((chunk) => chunk.relevance_score >= relevanceFloor);
+        console.log(`Search "${query.substring(0, 60)}": ${candidates.length} candidates, ${relevant.length} above relevance floor.`);
+        return relevant;
       });
-      let ranked = rerankRetrievedChunks(
-        dedupeRetrievedChunksByBestScore(candidates),
-        query,
-        finalCount,
-        chatSettings.semanticWeight,
-      );
-      if (isSummaryQuery) ranked = spreadAcrossTimeline(ranked, chatSettings.videoSpreadWindowMs);
-      const relevant = ranked.filter((chunk) => chunk.relevance_score >= relevanceFloor);
-      console.log(`Search "${query.substring(0, 60)}": ${candidates.length} candidates, ${relevant.length} above relevance floor.`);
-      return relevant;
     };
 
     // Page blocks (PDF sources) and image references for sources the model is
@@ -966,67 +1003,77 @@ ${retrievalScopeInstruction}`;
         };
 
         (async () => {
+          let outcome: ChatOutcome = "error";
+          let errorCode: string | null = "incomplete_request";
+          let answerDelivered = false;
           try {
             ensureStreamActive();
 
             const streamDelta = (delta: string) => {
               ensureStreamActive();
               sendEvent("token", { text: delta });
+              chatTelemetry.recordFirstToken(delta);
             };
 
-            let rawAnswer: string;
-            if (skipRag) {
-              rawAnswer = await generateModelTextStream({
-                modelConfig: chatModelConfig,
-                apiKey: chatApiKey,
-                systemPrompt,
-                userPrompt: trimmedMessage,
-                historyTurns,
-                temperature: chatSettings.answerTemperature,
-                maxOutputTokens: chatSettings.maxAnswerTokens,
-                signal: requestAbortController.signal,
-                onTextDelta: streamDelta,
-              });
-            } else {
-              // Every source the model sees gets one number for the whole
-              // answer, however many searches it runs.
-              // Sized so no allowed search ever has its results dropped.
-              const sources = new SourceRegistry<RetrievedChunk>(
-                sourceLimitForSearches(MAX_AGENT_SEARCHES, chatSettings.finalCount),
-              );
-              rawAnswer = await generateAgentTextStream({
-                apiKey: chatApiKey,
-                model: chatModelConfig.modelId,
-                messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
-                maxSteps: MAX_AGENT_STEPS,
-                maxToolCalls: MAX_AGENT_SEARCHES,
-                temperature: chatSettings.answerTemperature,
-                signal: requestAbortController.signal,
-                tool: {
-                  name: COURSE_SEARCH_TOOL,
-                  description: "Search this course's materials (lecture notes, slides, documents, video transcripts) for passages relevant to a query. Returns numbered sources to cite.",
-                  queryDescription: "What to look for, as a short standalone search query (resolve references like 'it' using the conversation).",
-                  execute: (query) =>
-                    runCourseSearch(query, {
-                      search: searchCourse,
-                      registry: sources,
-                      prepare: prepareSources,
-                      renderBody: renderSourceBody,
-                    }),
-                },
-                onTextDelta: streamDelta,
-                onReset: () => {
-                  ensureStreamActive();
-                  sendEvent("reset", {});
-                },
-                onToolCall: (query) => {
-                  ensureStreamActive();
-                  sendEvent("status", { message: `Searching course materials for "${query}"` });
-                },
-              });
-              retrievedChunks = sources.list();
-              console.log(`Agent answered with ${retrievedChunks.length} distinct source(s) found.`);
-            }
+            const rawAnswer = await chatTelemetry.measure("generation", async () => {
+              if (skipRag) {
+                return generateModelTextStream({
+                  modelConfig: chatModelConfig,
+                  apiKey: chatApiKey,
+                  systemPrompt,
+                  userPrompt: trimmedMessage,
+                  historyTurns,
+                  temperature: chatSettings.answerTemperature,
+                  maxOutputTokens: chatSettings.maxAnswerTokens,
+                  signal: requestAbortController.signal,
+                  onTextDelta: streamDelta,
+                  onUsage: recordUsage,
+                });
+              } else {
+                // Every source the model sees gets one number for the whole
+                // answer, however many searches it runs.
+                // Sized so no allowed search ever has its results dropped.
+                const sources = new SourceRegistry<RetrievedChunk>(
+                  sourceLimitForSearches(MAX_AGENT_SEARCHES, chatSettings.finalCount),
+                );
+                const { text } = await generateAgentTextStream({
+                  apiKey: chatApiKey,
+                  model: chatModelConfig.modelId,
+                  messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
+                  maxSteps: MAX_AGENT_STEPS,
+                  maxToolCalls: MAX_AGENT_SEARCHES,
+                  temperature: chatSettings.answerTemperature,
+                  signal: requestAbortController.signal,
+                  tool: {
+                    name: COURSE_SEARCH_TOOL,
+                    description: "Search this course's materials (lecture notes, slides, documents, video transcripts) for passages relevant to a query. Returns numbered sources to cite.",
+                    queryDescription: "What to look for, as a short standalone search query (resolve references like 'it' using the conversation).",
+                    execute: (query) =>
+                      runCourseSearch(query, {
+                        search: searchCourse,
+                        registry: sources,
+                        prepare: prepareSources,
+                        renderBody: renderSourceBody,
+                      }),
+                  },
+                  onTextDelta: streamDelta,
+                  onUsage: recordUsage,
+                  onReset: () => {
+                    ensureStreamActive();
+                    sendEvent("reset", {});
+                  },
+                  onToolCall: (query) => {
+                    chatTelemetry.recordToolCall();
+                    ensureStreamActive();
+                    sendEvent("status", { message: `Searching course materials for "${query}"` });
+                  },
+                });
+                retrievedChunks = sources.list();
+                context.retrieved_chunk_count = retrievedChunks.length;
+                console.log(`Agent answered with ${retrievedChunks.length} distinct source(s) found.`);
+                return text;
+              }
+            });
 
             ensureStreamActive();
 
@@ -1035,6 +1082,7 @@ ${retrievalScopeInstruction}`;
               apiKey: chatApiKey,
               question: trimmedMessage,
               rawAnswer,
+              onUsage: recordUsage,
               chunks: retrievedChunks,
               signal: requestAbortController.signal,
               imageResolver: (sourceNumber) => imageSourceRefs.get(sourceNumber) ?? null,
@@ -1053,6 +1101,7 @@ ${retrievalScopeInstruction}`;
               chunks: citedChunks,
               answer,
               question: trimmedMessage,
+              onUsage: recordUsage,
               apiKey: chatApiKey,
               signal: requestAbortController.signal,
             });
@@ -1090,6 +1139,16 @@ ${retrievalScopeInstruction}`;
               },
             });
 
+            answerDelivered = true;
+            chatTelemetry.recordAnswerDelivered();
+            outcome = "success";
+            errorCode = null;
+            context.citation_count = citedChunks.length;
+            context.citation_hit = citedChunks.length > 0;
+            context.unresolved_reason = inferUnresolvedReason({
+              retrievedChunkCount: retrievedChunks.length, citationCount: citedChunks.length, answer,
+            });
+            context.unresolved = context.unresolved_reason !== null;
             console.log(`Successfully generated response with ${citations.length} citations`);
 
             // --- Persist to database (best-effort after client has received the answer) ---
@@ -1101,28 +1160,23 @@ ${retrievalScopeInstruction}`;
               answer,
             );
 
+            context.user_message_id = userMessageResult.data?.id ?? null;
+            context.assistant_message_id = assistantMessageResult.data?.id ?? null;
             if (userMessageResult.error || !userMessageResult.data) {
+              errorCode = "message_persistence_failed";
               console.error(`Failed to save user message: ${userMessageResult.error?.message || "Unknown error"}`);
               return;
             }
 
             if (assistantMessageResult.error || !assistantMessageResult.data) {
+              errorCode = "message_persistence_failed";
               console.error(`Failed to save assistant message: ${assistantMessageResult.error?.message || "Unknown error"}`);
               return;
             }
 
-            const userMessage = userMessageResult.data;
             const assistantMessage = assistantMessageResult.data;
 
-            // Citations, conversation update, and analytics can all run in parallel
-            const queryCategory = classifyQueryCategory(trimmedMessage);
-            const unresolvedReason = inferUnresolvedReason({
-              retrievedChunkCount: retrievedChunks.length,
-              citationCount: citedChunks.length,
-              answer,
-            });
-            const unresolved = unresolvedReason !== null;
-
+            // Citations and conversation update can run in parallel.
             await Promise.all([
               // Insert citations
               (async () => {
@@ -1151,26 +1205,20 @@ ${retrievalScopeInstruction}`;
                 .from("conversations")
                 .update({ updated_at: new Date().toISOString() })
                 .eq("id", activeConversationId),
-              // Insert analytics event
-              insertQueryEvent(supabaseAdminClient, {
-                user_id: user.id,
-                conversation_id: activeConversationId,
-                course_id: activeCourseId,
-                academic_term_id: activeAcademicTermId,
-                user_message_id: userMessage.id,
-                assistant_message_id: assistantMessage.id,
-                query_text: trimmedMessage,
-                query_category: queryCategory,
-                retrieved_chunk_count: retrievedChunks.length,
-                citation_count: citedChunks.length,
-                citation_hit: citedChunks.length > 0,
-                unresolved,
-                unresolved_reason: unresolvedReason,
-                latency_ms: Date.now() - requestStartedAt,
-              }),
             ]);
           } catch (streamError) {
-            if (isAbortError(streamError)) {
+            const failure = classifyChatFailure(streamError, requestAbortController.signal);
+            if (answerDelivered) {
+              errorCode = "message_persistence_failed";
+            } else {
+              outcome = failure.outcome;
+              errorCode = failure.errorCode;
+            }
+            if (answerDelivered) {
+              console.error("Failed to persist delivered RAG answer", streamError);
+              return;
+            }
+            if (failure.outcome === "aborted") {
               console.log("RAG chat stream aborted");
               return;
             }
@@ -1182,6 +1230,7 @@ ${retrievalScopeInstruction}`;
 
             sendEvent("error", { error: message, status });
           } finally {
+            await recordEvent!(outcome, errorCode);
             if (!streamCancelled) {
               controller.close();
             }
@@ -1204,7 +1253,9 @@ ${retrievalScopeInstruction}`;
     });
 
   } catch (error) {
-    if (isAbortError(error)) {
+    const failure = classifyChatFailure(error, requestAbortController.signal);
+    if (telemetry && recordEvent) await recordEvent(failure.outcome, failure.errorCode);
+    if (failure.outcome === "aborted") {
       console.log("RAG chat request aborted before completion");
       return new Response(null, {
         status: 204,

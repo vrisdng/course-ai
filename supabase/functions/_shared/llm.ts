@@ -28,6 +28,13 @@ import {
   type ReasoningEffort,
 } from "./llmConfig.ts";
 
+import { mergeTokenUsage, normalizeTokenUsage, type TokenUsage } from "./llmUsage.ts";
+
+export interface ChatTextResult {
+  text: string;
+  usage: TokenUsage;
+}
+
 export class HttpError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -50,6 +57,7 @@ export interface ChatTextOptions {
   // Only reasoning-model callers should set this. It is omitted otherwise.
   reasoningEffort?: ReasoningEffort;
   signal?: AbortSignal;
+  onUsage?: (usage: TokenUsage) => void;
 }
 
 export interface ChatStreamOptions extends ChatTextOptions {
@@ -57,7 +65,7 @@ export interface ChatStreamOptions extends ChatTextOptions {
 }
 
 function toOpenAiModel(apiKey: string, model: string) {
-  return createOpenAI({ apiKey })(model);
+  return createOpenAI({ apiKey, compatibility: "strict" })(model);
 }
 
 function buildGenerationOptions(options: ChatTextOptions) {
@@ -85,15 +93,23 @@ function wrapProviderError(error: unknown, label = "Chat API error"): never {
 export async function generateChatText(options: ChatTextOptions): Promise<string> {
   try {
     const result = await generateText(buildGenerationOptions(options));
+    options.onUsage?.(normalizeTokenUsage(result.usage));
     return requireGeneratedText(result.text, options.model, result.finishReason);
   } catch (error) {
+    options.onUsage?.(normalizeTokenUsage());
     wrapProviderError(error);
   }
 }
 
-export async function generateChatTextStream(options: ChatStreamOptions): Promise<string> {
+export async function generateChatTextStream(options: ChatStreamOptions): Promise<ChatTextResult> {
+  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0 };
+  const recordUsage = (stepUsage: { promptTokens: number; completionTokens: number }) => {
+    const normalized = normalizeTokenUsage(stepUsage);
+    usage = mergeTokenUsage(usage, normalized);
+    options.onUsage?.(normalized);
+  };
   try {
-    const result = streamText(buildGenerationOptions(options));
+    const result = streamText({ ...buildGenerationOptions(options), onStepFinish: (step) => recordUsage(step.usage) });
 
     let fullText = "";
     for await (const delta of result.textStream) {
@@ -104,13 +120,14 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
     }
     const finishReason = await result.finishReason;
     if (fullText.trim()) {
-      return fullText.trim();
+      return { text: fullText.trim(), usage };
     }
 
     console.warn(
       `OpenAI stream for ${options.model} returned no text (finish reason: ${finishReason}); retrying once without streaming`,
     );
     const fallbackResult = await generateText(buildGenerationOptions(options));
+    recordUsage(fallbackResult.usage);
     const fallbackText = requireGeneratedText(
       fallbackResult.text,
       options.model,
@@ -119,8 +136,9 @@ export async function generateChatTextStream(options: ChatStreamOptions): Promis
     if (options.onTextDelta) {
       await options.onTextDelta(fallbackText);
     }
-    return fallbackText;
+    return { text: fallbackText, usage };
   } catch (error) {
+    options.onUsage?.(normalizeTokenUsage());
     wrapProviderError(error);
   }
 }
@@ -151,11 +169,18 @@ export interface AgentStreamOptions {
   // Text already streamed belonged to a step that ended in a tool call.
   onReset(): Promise<void> | void;
   onToolCall(query: string): Promise<void> | void;
+  onUsage?: (usage: TokenUsage) => void;
 }
 
 // Answers with tool use (agentic RAG). Runs on the Responses API, because Chat
 // Completions rejects function tools on these reasoning models.
-export async function generateAgentTextStream(options: AgentStreamOptions): Promise<string> {
+export async function generateAgentTextStream(options: AgentStreamOptions): Promise<ChatTextResult> {
+  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0 };
+  const recordUsage = (stepUsage: { promptTokens: number; completionTokens: number }) => {
+    const normalized = normalizeTokenUsage(stepUsage);
+    usage = mergeTokenUsage(usage, normalized);
+    options.onUsage?.(normalized);
+  };
   try {
     const openai = createOpenAI({ apiKey: options.apiKey });
     const model = openai.responses(options.model);
@@ -176,6 +201,7 @@ export async function generateAgentTextStream(options: AgentStreamOptions): Prom
       tools,
       providerOptions: buildAgentProviderOptions(options.reasoningEffort),
       abortSignal: options.signal,
+      onStepFinish: (step: { usage: { promptTokens: number; completionTokens: number } }) => recordUsage(step.usage),
     };
 
     const result = streamText({ ...shared, messages: options.messages, maxSteps: options.maxSteps });
@@ -184,7 +210,7 @@ export async function generateAgentTextStream(options: AgentStreamOptions): Prom
       onReset: options.onReset,
       onToolCall: (_toolName, args) => options.onToolCall(String((args as { query?: unknown })?.query ?? "")),
     });
-    if (!needsAnswerOnlyTurn(text)) return text;
+    if (!needsAnswerOnlyTurn(text)) return { text, usage };
 
     // The steps ran out on a search. Answer from what was found, tools off.
     const { messages: stepMessages } = await result.response;
@@ -200,8 +226,9 @@ export async function generateAgentTextStream(options: AgentStreamOptions): Prom
       answer += delta;
       await options.onTextDelta(delta);
     }
-    return requireGeneratedText(answer.trim(), options.model, await answerTurn.finishReason);
+    return { text: requireGeneratedText(answer.trim(), options.model, await answerTurn.finishReason), usage };
   } catch (error) {
+    options.onUsage?.(normalizeTokenUsage());
     wrapProviderError(error);
   }
 }
