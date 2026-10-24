@@ -113,12 +113,12 @@ Two invitation-based enrollment options remain available, both admin-only to cre
 
 ## Admin analytics
 
-`/admin-analytics` — per-course analytics for a date range: enrolled students, active students, document count and total questions in the sidebar, and four tabs:
+`/admin-analytics` — per-course analytics for a date range (7, 30 or 90 days ending now, or custom). One scrolling page:
 
-- **Materials** (default): the materials students' answers cited, most-asked first. Opening one lists its cited pages, or 5-minute stretches for videos, with question counts.
-- **Keyword**: a teacher types a keyword; it is embedded and matched against every chunk of the course's materials (any term, any access scope). Matches are grouped into places (pages, merged video stretches), all ticked. The page counts the distinct questions whose answers cited a ticked place and lists the newest 50. Unticking a wrong match recounts.
-- **Question types**: questions bucketed by type (concept, how-to, calculation, comparison, troubleshooting, fact lookup, course logistics, other), plus how many were study questions and how many were answered from the materials. Labels come from OpenAI's Decisions API.
-- **Ask**: the analytics chat (see below).
+- **Summary tiles:** questions, active students (of enrolled), share of labelled questions answered from the materials, and materials cited (of all materials).
+- **What students asked about** (main card): the materials students' answers cited, most-asked first; opening one lists its cited pages, or 5-minute stretches for videos. Searching a topic swaps the list for keyword results: the keyword is embedded and matched against every chunk of the course's materials (any term, any access scope), matches are grouped into places (pages, merged video stretches) and ticked, and the card counts the distinct questions whose answers cited a ticked place, listing the newest 50. Unticking a wrong match recounts; "Back to all materials" returns to the list.
+- **Question types** (side card): questions bucketed by type (concept, how-to, calculation, comparison, troubleshooting, fact lookup, course logistics, other), with how many were study questions and how many were answered from the materials. Labels come from OpenAI's Decisions API.
+- **Ask about this data** (side card): opens the analytics chat (see below) in a side panel.
 
 - ⏱ **Questions are labelled when an admin opens the page.** Unlabelled questions in the window are sent to the Decisions API in rounds of up to 25 (at most 8 rounds per visit); each question is labelled once. Until then, a question shows its rule-based type.
 - Counts use citations' material, page and time, not chunk IDs, so they survive re-processing a material.
