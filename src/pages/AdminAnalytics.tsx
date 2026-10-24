@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, FileText, Loader2, MessageSquare, RotateCcw, UserCheck, Users } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -9,10 +9,17 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/integrations/supabase/client';
 
 import { AnalyticsChatMessageList } from '@/features/analytics-chat/AnalyticsChatMessageList';
 import { useAnalyticsChat } from '@/features/analytics-chat/useAnalyticsChat';
+import { CitedMaterialsPanel } from '@/features/course-analytics/CitedMaterialsPanel';
+import { KeywordSearchPanel } from '@/features/course-analytics/KeywordSearchPanel';
+import { QuestionBucketsPanel } from '@/features/course-analytics/QuestionBucketsPanel';
+import { useCitedMaterials } from '@/features/course-analytics/useCitedMaterials';
+import { useKeywordSearch } from '@/features/course-analytics/useKeywordSearch';
+import { useQuestionLabels } from '@/features/course-analytics/useQuestionLabels';
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
 
 type Course = {
@@ -92,6 +99,11 @@ export default function AdminAnalytics() {
               : null;
   const analyticsStartAt = analyticsRangeError || !parsedRangeStart ? null : parsedRangeStart.toISOString();
   const analyticsEndAt = analyticsRangeError || !parsedRangeEnd ? null : parsedRangeEnd.toISOString();
+  const analyticsRange = useMemo(
+    () => (analyticsStartAt && analyticsEndAt ? { startAt: analyticsStartAt, endAt: analyticsEndAt } : null),
+    [analyticsStartAt, analyticsEndAt],
+  );
+  const [activeView, setActiveView] = useState('materials');
   const statItems = [
     { key: 'enrolledStudents' as const, label: 'Enrolled Students', icon: Users },
     { key: 'activeStudents' as const, label: 'Active Students', icon: UserCheck },
@@ -101,6 +113,10 @@ export default function AdminAnalytics() {
 
   const { messages, input, setInput, isLoading, handleSend, stopGenerating, clearChat } =
     useAnalyticsChat(selectedCourseId || null, analyticsStartAt, analyticsEndAt);
+  // Called here, not in the tabs, so question labelling starts when the page opens.
+  const citedMaterials = useCitedMaterials(selectedCourseId || null, analyticsRange);
+  const keywordSearch = useKeywordSearch(selectedCourseId || null, analyticsRange);
+  const questionLabels = useQuestionLabels(selectedCourseId || null, analyticsRange);
 
   const fetchCourses = useCallback(async () => {
     const { data, error } = await supabase
@@ -238,7 +254,7 @@ export default function AdminAnalytics() {
             <div>
               <h1 className="text-lg font-semibold">Course Analytics</h1>
               <p className="text-xs text-muted-foreground">
-                Ask questions about student activity and course usage
+                What students ask about, by the materials their answers cite
               </p>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
@@ -342,7 +358,7 @@ export default function AdminAnalytics() {
             </nav>
           </aside>
 
-          {/* Chat area */}
+          {/* Analytics views */}
           <div className="flex flex-1 flex-col overflow-hidden">
             {/* Mobile stats bar */}
             <div className="flex gap-4 overflow-x-auto border-b border-border px-4 py-2 md:hidden">
@@ -364,30 +380,57 @@ export default function AdminAnalytics() {
               })}
             </div>
 
-            <ScrollArea className="flex-1">
-              <div className="mx-auto max-w-3xl space-y-6 p-4">
-                <AnalyticsChatMessageList
-                  messages={messages}
-                  onSuggestionClick={handleSuggestionClick}
-                />
-                <div ref={messagesEndRef} />
+            <Tabs value={activeView} onValueChange={setActiveView} className="flex flex-1 flex-col overflow-hidden">
+              <div className="border-b border-border px-4 py-2">
+                <TabsList>
+                  <TabsTrigger value="materials">Materials</TabsTrigger>
+                  <TabsTrigger value="keyword">Keyword</TabsTrigger>
+                  <TabsTrigger value="types">Question types</TabsTrigger>
+                  <TabsTrigger value="ask">Ask</TabsTrigger>
+                </TabsList>
               </div>
-            </ScrollArea>
+              <TabsContent value="materials" className="mt-0 flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-3xl p-4">
+                  <CitedMaterialsPanel state={citedMaterials} />
+                </div>
+              </TabsContent>
+              <TabsContent value="keyword" className="mt-0 flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-3xl p-4">
+                  <KeywordSearchPanel state={keywordSearch} />
+                </div>
+              </TabsContent>
+              <TabsContent value="types" className="mt-0 flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-3xl p-4">
+                  <QuestionBucketsPanel state={questionLabels} />
+                </div>
+              </TabsContent>
+              <TabsContent value="ask" className="mt-0 flex flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+                <ScrollArea className="flex-1">
+                  <div className="mx-auto max-w-3xl space-y-6 p-4">
+                    <AnalyticsChatMessageList
+                      messages={messages}
+                      onSuggestionClick={handleSuggestionClick}
+                    />
+                    <div ref={messagesEndRef} />
+                  </div>
+                </ScrollArea>
 
-            <ChatComposer
-              input={input}
-              isLoading={isLoading}
-              disabled={Boolean(analyticsRangeError)}
-              onInputChange={setInput}
-              onSend={handleAnalyticsSend}
-              onStop={stopGenerating}
-              placeholder="Ask about your course analytics..."
-              footerText={
-                analyticsRangeError
-                  ? 'Fix the analytics date range to ask questions.'
-                  : `Answers are generated from your course's usage data for ${formatAnalyticsRangeLabel(analyticsStartAt, analyticsEndAt)}`
-              }
-            />
+                <ChatComposer
+                  input={input}
+                  isLoading={isLoading}
+                  disabled={Boolean(analyticsRangeError)}
+                  onInputChange={setInput}
+                  onSend={handleAnalyticsSend}
+                  onStop={stopGenerating}
+                  placeholder="Ask about your course analytics..."
+                  footerText={
+                    analyticsRangeError
+                      ? 'Fix the analytics date range to ask questions.'
+                      : `Answers are generated from your course's usage data for ${formatAnalyticsRangeLabel(analyticsStartAt, analyticsEndAt)}`
+                  }
+                />
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </div>
