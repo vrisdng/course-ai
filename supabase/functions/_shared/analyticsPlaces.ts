@@ -43,8 +43,12 @@ export type PlaceFilter =
   | { material_id: string; start_ms: number; end_ms: number };
 
 // Keyword search settings. A short keyword scores lower against passages
-// than a full question does, hence a lower floor than the chat's.
-export const KEYWORD_MATCH_THRESHOLD = 0.25;
+// than a full question does, hence a lower floor than the chat's. Measured
+// on a course's notes with text-embedding-3-large (2026-10-24): topics the
+// materials cover score 0.37-0.65, a rare covered term ("tombstone") peaks
+// at 0.24, and off-topic words ("banana", "photosynthesis") stay at or
+// below 0.17.
+export const KEYWORD_MATCH_THRESHOLD = 0.2;
 export const KEYWORD_MATCH_COUNT = 40;
 
 type TimedChunk = MatchedChunk & { start_ms: number };

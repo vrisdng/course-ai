@@ -113,7 +113,15 @@ Two invitation-based enrollment options remain available, both admin-only to cre
 
 ## Admin analytics
 
-`/admin-analytics` — per-course usage metrics: enrolled students, active students, document count, total questions asked, most-referenced documents, top questions asked, and keyword frequency (English stopwords filtered, top 20 keywords).
+`/admin-analytics` — per-course analytics for a date range: enrolled students, active students, document count and total questions in the sidebar, and four tabs:
+
+- **Materials** (default): the materials students' answers cited, most-asked first. Opening one lists its cited pages, or 5-minute stretches for videos, with question counts.
+- **Keyword**: a teacher types a keyword; it is embedded and matched against every chunk of the course's materials (any term, any access scope). Matches are grouped into places (pages, merged video stretches), all ticked. The page counts the distinct questions whose answers cited a ticked place and lists the newest 50. Unticking a wrong match recounts.
+- **Question types**: questions bucketed by type (concept, how-to, calculation, comparison, troubleshooting, fact lookup, course logistics, other), plus how many were study questions and how many were answered from the materials. Labels come from OpenAI's Decisions API.
+- **Ask**: the analytics chat (see below).
+
+- ⏱ **Questions are labelled when an admin opens the page.** Unlabelled questions in the window are sent to the Decisions API in rounds of up to 25 (at most 8 rounds per visit); each question is labelled once. Until then, a question shows its rule-based type.
+- Counts use citations' material, page and time, not chunk IDs, so they survive re-processing a material.
 
 - ⏱ **Default date range is the last 30 days**, computed from "now" — not a fixed calendar window. Admins can pick an arbitrary custom start/end range; the "reset" control re-anchors back to "now minus 30 days" rather than restoring a fixed default.
 - Top-questions and keyword-frequency results are hard-capped server-side (max 10 questions, max 20 keywords) regardless of what the client requests.
