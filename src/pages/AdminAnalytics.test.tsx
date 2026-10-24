@@ -1,7 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), chat: {} as Record<string, unknown>, toastError: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  from: vi.fn(), rpc: vi.fn(), chat: {} as Record<string, unknown>, toastError: vi.fn(),
+  useCitedMaterials: vi.fn((_courseId: string | null, _range: unknown) => ({ marker: 'materials' })),
+  useKeywordSearch: vi.fn((_courseId: string | null, _range: unknown) => ({ marker: 'keyword' })),
+  useQuestionLabels: vi.fn((_courseId: string | null, _range: unknown) => ({ marker: 'labels' })),
+}));
+vi.mock('@/features/course-analytics/useCitedMaterials', () => ({ useCitedMaterials: mocks.useCitedMaterials }));
+vi.mock('@/features/course-analytics/useKeywordSearch', () => ({ useKeywordSearch: mocks.useKeywordSearch }));
+vi.mock('@/features/course-analytics/useQuestionLabels', () => ({ useQuestionLabels: mocks.useQuestionLabels }));
+vi.mock('@/features/course-analytics/CitedMaterialsPanel', () => ({ CitedMaterialsPanel: ({ state }: { state: { marker: string } }) => <p>panel:{state.marker}</p> }));
+vi.mock('@/features/course-analytics/KeywordSearchPanel', () => ({ KeywordSearchPanel: ({ state }: { state: { marker: string } }) => <p>panel:{state.marker}</p> }));
+vi.mock('@/features/course-analytics/QuestionBucketsPanel', () => ({ QuestionBucketsPanel: ({ state }: { state: { marker: string } }) => <p>panel:{state.marker}</p> }));
 vi.mock('@/components/layout/MainLayout', () => ({ MainLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('@/features/analytics-chat/useAnalyticsChat', () => ({ useAnalyticsChat: () => mocks.chat }));
 vi.mock('@/features/analytics-chat/AnalyticsChatMessageList', () => ({ AnalyticsChatMessageList: ({ onSuggestionClick }: { onSuggestionClick: (s: string) => void }) => <button onClick={() => onSuggestionClick('Summarize activity')}>suggestion</button> }));
@@ -9,6 +20,8 @@ vi.mock('@/features/student-chat/ChatComposer', () => ({ ChatComposer: ({ onSend
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from, rpc: mocks.rpc } }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
 import AdminAnalytics from './AdminAnalytics';
+
+function openTab(name: string) { fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0 }); }
 
 function chain(result: unknown) { const q: Record<string, unknown> = {}; for (const m of ['select', 'order', 'eq', 'is', 'gte', 'lte']) q[m] = vi.fn(() => q); q.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve); return q; }
 
@@ -30,6 +43,7 @@ describe('AdminAnalytics', () => {
     expect(questionsQuery.eq).toHaveBeenCalledWith('outcome', 'success');
     expect(questionsQuery.is).toHaveBeenCalledWith('error_code', null);
     expect(screen.getAllByText('12').length).toBeGreaterThan(0); expect(screen.getAllByText('8').length).toBeGreaterThan(0); expect(screen.getAllByText('42').length).toBeGreaterThan(0);
+    openTab('Ask');
     fireEvent.click(screen.getByRole('button', { name: 'suggestion' })); fireEvent.click(screen.getByRole('button', { name: 'send analytics' })); fireEvent.click(screen.getByRole('button', { name: 'stop analytics' }));
     expect(mocks.chat.setInput).toHaveBeenCalledWith('Summarize activity'); expect(mocks.chat.handleSend).toHaveBeenCalled(); expect(mocks.chat.stopGenerating).toHaveBeenCalled();
   });
@@ -38,6 +52,8 @@ describe('AdminAnalytics', () => {
     const start = screen.getByLabelText('Start'); const end = screen.getByLabelText('End');
     fireEvent.change(start, { target: { value: '2030-01-02T00:00' } }); fireEvent.change(end, { target: { value: '2030-01-01T00:00' } });
     expect(screen.getByText('Start date and time must be earlier than or equal to the end date and time.')).toBeInTheDocument();
+    expect(mocks.useCitedMaterials).toHaveBeenLastCalledWith('c1', null);
+    openTab('Ask');
     expect(screen.getByRole('button', { name: 'send analytics' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Last 30 days' })); expect(screen.queryByText(/Start date and time must/)).not.toBeInTheDocument();
   });
@@ -46,6 +62,18 @@ describe('AdminAnalytics', () => {
     const start = screen.getByLabelText('Start'); const end = screen.getByLabelText('End');
     fireEvent.change(start, { target: { value: '' } }); expect(screen.getByText('Choose a start date and time.')).toBeInTheDocument();
     fireEvent.change(start, { target: { value: '2026-01-01T00:00' } }); fireEvent.change(end, { target: { value: '' } }); expect(screen.getByText('Choose an end date and time.')).toBeInTheDocument();
+  });
+  it('opens on cited materials and switches between the analytics views', async () => {
+    render(<AdminAnalytics />);
+    expect(await screen.findByText('panel:materials')).toBeInTheDocument();
+    const range = mocks.useCitedMaterials.mock.lastCall?.[1] as { startAt: string; endAt: string };
+    expect(mocks.useCitedMaterials).toHaveBeenLastCalledWith('c1', range);
+    expect(new Date(range.endAt).getTime() - new Date(range.startAt).getTime()).toBeGreaterThan(29 * 24 * 3600 * 1000);
+    expect(mocks.useKeywordSearch).toHaveBeenLastCalledWith('c1', range);
+    expect(mocks.useQuestionLabels).toHaveBeenLastCalledWith('c1', range);
+    openTab('Keyword'); expect(screen.getByText('panel:keyword')).toBeInTheDocument();
+    openTab('Question types'); expect(screen.getByText('panel:labels')).toBeInTheDocument();
+    openTab('Ask'); expect(screen.getByRole('button', { name: 'send analytics' })).toBeInTheDocument();
   });
   it('handles course loading failures and the no-course state', async () => {
     mocks.from.mockImplementation((table: string) => table === 'courses' ? chain({ data: null, error: { message: 'offline' } }) : chain({ count: 0 }));

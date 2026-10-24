@@ -941,6 +941,12 @@ export type Database = {
       query_events: {
         Row: {
           academic_term_id: string | null
+          ai_answered_from_materials: boolean | null
+          ai_category: string | null
+          ai_category_confidence: number | null
+          ai_is_study_question: boolean | null
+          ai_label_model: string | null
+          ai_labeled_at: string | null
           assistant_message_id: string | null
           citation_count: number
           citation_hit: boolean
@@ -974,6 +980,12 @@ export type Database = {
         }
         Insert: {
           academic_term_id?: string | null
+          ai_answered_from_materials?: boolean | null
+          ai_category?: string | null
+          ai_category_confidence?: number | null
+          ai_is_study_question?: boolean | null
+          ai_label_model?: string | null
+          ai_labeled_at?: string | null
           assistant_message_id?: string | null
           citation_count?: number
           citation_hit?: boolean
@@ -1007,6 +1019,12 @@ export type Database = {
         }
         Update: {
           academic_term_id?: string | null
+          ai_answered_from_materials?: boolean | null
+          ai_category?: string | null
+          ai_category_confidence?: number | null
+          ai_is_study_question?: boolean | null
+          ai_label_model?: string | null
+          ai_labeled_at?: string | null
           assistant_message_id?: string | null
           citation_count?: number
           citation_hit?: boolean
@@ -1620,6 +1638,58 @@ export type Database = {
               unique_student_count: number
             }[]
           }
+      get_course_cited_materials: {
+        Args: { in_course_id: string; in_end_at?: string; in_start_at?: string }
+        Returns: {
+          file_type: string
+          citation_count: number
+          last_cited_at: string
+          student_count: number
+          question_count: number
+          file_name: string
+          material_id: string
+        }[]
+      }
+      get_course_cited_places: {
+        Args: {
+          in_start_at?: string
+          in_course_id: string
+          in_end_at?: string
+          in_material_id?: string
+          in_video_bucket_ms?: number
+          in_limit?: number
+        }
+        Returns: {
+          material_id: string
+          file_name: string
+          file_type: string
+          page_number: number
+          start_ms: number
+          end_ms: number
+          question_count: number
+          citation_count: number
+        }[]
+      }
+      get_course_question_buckets: {
+        Args: { in_start_at?: string; in_end_at?: string; in_course_id: string }
+        Returns: {
+          study_question_count: number
+          answered_from_materials_count: number
+          category: string
+          question_count: number
+          labeled_count: number
+        }[]
+      }
+      get_course_questions_at_places: {
+        Args: {
+          in_question_limit?: number
+          in_places: Json
+          in_end_at: string
+          in_start_at: string
+          in_course_id: string
+        }
+        Returns: Json
+      }
       get_material_course_id: {
         Args: { check_material_id: string }
         Returns: string
@@ -1796,6 +1866,25 @@ export type Database = {
           relevance_score: number
           start_ms: number
           student_document_id: string
+        }[]
+      }
+      match_course_chunks_for_analytics: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          in_course_id: string
+          query_embedding: string
+        }
+        Returns: {
+          material_id: string
+          page_number: number
+          start_ms: number
+          end_ms: number
+          snippet: string
+          file_type: string
+          file_name: string
+          similarity: number
+          chunk_id: string
         }[]
       }
       org_has_active_subscription: {
