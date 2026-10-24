@@ -5,11 +5,14 @@ vi.mock('@/integrations/supabase/client', () => ({
   supabase: { rpc: mocks.rpc, functions: { invoke: mocks.invoke } },
 }));
 
+import { NO_FILTERS, toQuestionArgs } from './questionFilters';
 import {
   fetchCitedMaterials,
   fetchCitedPlaces,
   fetchQuestionBuckets,
-  fetchQuestionsAtPlaces,
+  fetchQuestionOverview,
+  fetchQuestionTerms,
+  fetchQuestions,
   labelQuestions,
   matchKeyword,
 } from './analyticsApi';
@@ -35,7 +38,7 @@ describe('analyticsApi RPCs', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('get_course_cited_materials', rangeArgs);
   });
 
-  it('maps cited places with keys, for one material', async () => {
+  it('maps cited places with keys, course-wide or for one material', async () => {
     mocks.rpc.mockResolvedValue({
       data: [
         { material_id: 'm1', file_name: 'A.pdf', file_type: 'pdf', page_number: 4, start_ms: null, end_ms: null, question_count: 2, citation_count: 3 },
@@ -43,10 +46,13 @@ describe('analyticsApi RPCs', () => {
       ],
       error: null,
     });
-    const places = await fetchCitedPlaces(COURSE, RANGE, 'm1');
+    const places = await fetchCitedPlaces(COURSE, RANGE, { materialId: 'm1', limit: 10 });
     expect(places.map((place) => place.key)).toEqual(['m1:page:4', 'v1:time:0-300000']);
     expect(places[0]).toMatchObject({ pageNumber: 4, startMs: null, questionCount: 2, citationCount: 3 });
-    expect(mocks.rpc).toHaveBeenCalledWith('get_course_cited_places', { ...rangeArgs, in_material_id: 'm1', in_limit: 100 });
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_cited_places', { ...rangeArgs, in_material_id: 'm1', in_limit: 10 });
+
+    await fetchCitedPlaces(COURSE, RANGE);
+    expect(mocks.rpc).toHaveBeenLastCalledWith('get_course_cited_places', { ...rangeArgs, in_material_id: null, in_limit: 5 });
   });
 
   it('maps question buckets', async () => {
@@ -59,21 +65,67 @@ describe('analyticsApi RPCs', () => {
     ]);
   });
 
-  it('counts questions at places and validates the JSON shape', async () => {
-    const places = [{ material_id: 'm1', page_number: 4 }];
-    mocks.rpc.mockResolvedValueOnce({
-      data: { question_count: 2, student_count: 1, questions: [{ id: 'q1', query_text: 'what is x', created_at: '2026-10-02T00:00:00Z', category: 'definition_concept' }] },
+  it('maps the overview numbers', async () => {
+    mocks.rpc.mockResolvedValue({
+      data: [{
+        question_count: 31, student_count: 2, labeled_count: 30, answered_from_materials_count: 21,
+        needs_attention_count: 8, cited_question_count: 25, document_question_count: 25, video_question_count: 3,
+      }],
       error: null,
     });
-    await expect(fetchQuestionsAtPlaces(COURSE, RANGE, places)).resolves.toEqual({
-      questionCount: 2,
-      studentCount: 1,
-      questions: [{ id: 'q1', queryText: 'what is x', createdAt: '2026-10-02T00:00:00Z', category: 'definition_concept' }],
+    await expect(fetchQuestionOverview(COURSE, RANGE)).resolves.toEqual({
+      questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21,
+      needsAttentionCount: 8, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
     });
-    expect(mocks.rpc).toHaveBeenCalledWith('get_course_questions_at_places', { ...rangeArgs, in_places: places, in_question_limit: 50 });
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_overview', rangeArgs);
 
-    mocks.rpc.mockResolvedValueOnce({ data: 'nonsense', error: null });
-    await expect(fetchQuestionsAtPlaces(COURSE, RANGE, places)).rejects.toThrow('Unexpected response');
+    mocks.rpc.mockResolvedValue({ data: [], error: null });
+    await expect(fetchQuestionOverview(COURSE, RANGE)).rejects.toThrow('Unexpected response');
+  });
+
+  it('fetches a page of questions with the filters and validates the JSON shape', async () => {
+    const filters = { ...NO_FILTERS, needsAttention: true, sourceKind: 'video' as const };
+    mocks.rpc.mockResolvedValueOnce({
+      data: {
+        total_count: 40,
+        student_count: 6,
+        questions: [{
+          id: 'q1', query_text: 'what is x', created_at: '2026-10-02T00:00:00Z', category: 'definition_concept',
+          is_study_question: true, answered_from_materials: null, needs_attention: true,
+          sources: [{ material_id: 'v1', file_name: 'L.mp4', file_type: 'video', page_number: null, start_ms: 65000, end_ms: 80000 }],
+        }],
+      },
+      error: null,
+    });
+    await expect(fetchQuestions(COURSE, RANGE, filters, { limit: 25, offset: 25 })).resolves.toEqual({
+      totalCount: 40,
+      studentCount: 6,
+      questions: [{
+        id: 'q1', queryText: 'what is x', createdAt: '2026-10-02T00:00:00Z', category: 'definition_concept',
+        isStudyQuestion: true, answeredFromMaterials: null, needsAttention: true,
+        sources: [{ materialId: 'v1', fileName: 'L.mp4', fileType: 'video', pageNumber: null, startMs: 65000, endMs: 80000 }],
+      }],
+    });
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_questions', {
+      ...rangeArgs, ...toQuestionArgs(filters), in_limit: 25, in_offset: 25,
+    });
+
+    mocks.rpc.mockResolvedValueOnce({ data: { questions: 'nope' }, error: null });
+    await expect(fetchQuestions(COURSE, RANGE, NO_FILTERS, { limit: 25, offset: 0 })).rejects.toThrow('Unexpected response');
+  });
+
+  it('maps question terms and keeps the top ones', async () => {
+    mocks.rpc.mockResolvedValue({
+      data: [
+        { term_key: 'cortado compani', term: 'cortado company', word_count: 2, question_count: 4, student_count: 1 },
+        { term_key: 'cortado', term: 'cortado', word_count: 1, question_count: 4, student_count: 1 },
+      ],
+      error: null,
+    });
+    await expect(fetchQuestionTerms(COURSE, RANGE)).resolves.toEqual([
+      { key: 'cortado compani', term: 'cortado company', wordCount: 2, questionCount: 4, studentCount: 1 },
+    ]);
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_terms', rangeArgs);
   });
 
   it('throws the database error message', async () => {

@@ -1,5 +1,5 @@
-// Typed calls for the citation-based admin analytics: the RPCs from migration
-// 20261024120000 and the course-analytics edge function.
+// Typed calls for the admin analytics page: the RPCs from migrations
+// 20261024120000 and 20261025090000, and the course-analytics edge function.
 import { supabase } from '@/integrations/supabase/client';
 
 import {
@@ -10,7 +10,10 @@ import {
 } from '../../../supabase/functions/_shared/analyticsPlaces.ts';
 import type { LabelQuestionsResponse } from '../../../supabase/functions/course-analytics/handler.ts';
 
-export type { AnalyticsPlace, LabelQuestionsResponse, PlaceFilter };
+import { toQuestionArgs, type QuestionFilters, type QuestionSource } from './questionFilters';
+import { pickTopTerms, type QuestionTerm } from './questionTerms';
+
+export type { AnalyticsPlace, LabelQuestionsResponse, PlaceFilter, QuestionTerm };
 
 export interface AnalyticsRange {
   startAt: string;
@@ -44,23 +47,37 @@ export interface QuestionBucket {
   answeredFromMaterialsCount: number;
 }
 
-export interface PlaceQuestion {
+export interface QuestionOverview {
+  questionCount: number;
+  studentCount: number;
+  labeledCount: number;
+  answeredFromMaterialsCount: number;
+  needsAttentionCount: number;
+  citedQuestionCount: number;
+  documentQuestionCount: number;
+  videoQuestionCount: number;
+}
+
+export interface AnalyticsQuestion {
   id: string;
   queryText: string;
   createdAt: string;
   category: string;
+  // Decisions API labels; null until labelled (or if the model refused).
+  isStudyQuestion: boolean | null;
+  answeredFromMaterials: boolean | null;
+  needsAttention: boolean;
+  sources: QuestionSource[];
 }
 
-export interface QuestionsAtPlaces {
-  questionCount: number;
+export interface QuestionPage {
+  totalCount: number;
   studentCount: number;
-  questions: PlaceQuestion[];
+  questions: AnalyticsQuestion[];
 }
 
-// Places listed when a material is expanded.
-const PLACES_PER_MATERIAL = 100;
-// Questions listed under a keyword's count.
-const QUESTIONS_PER_KEYWORD = 50;
+// Most-asked places shown when no material is chosen.
+const TOP_PLACES = 5;
 
 function rangeArgs(courseId: string, range: AnalyticsRange) {
   return { in_course_id: courseId, in_start_at: range.startAt, in_end_at: range.endAt };
@@ -107,11 +124,15 @@ export async function fetchCitedMaterials(courseId: string, range: AnalyticsRang
   }));
 }
 
-export async function fetchCitedPlaces(courseId: string, range: AnalyticsRange, materialId: string): Promise<CitedPlace[]> {
+export async function fetchCitedPlaces(
+  courseId: string,
+  range: AnalyticsRange,
+  options: { materialId?: string; limit?: number } = {},
+): Promise<CitedPlace[]> {
   const rows = unwrap(await supabase.rpc('get_course_cited_places', {
     ...rangeArgs(courseId, range),
-    in_material_id: materialId,
-    in_limit: PLACES_PER_MATERIAL,
+    in_material_id: options.materialId ?? null,
+    in_limit: options.limit ?? TOP_PLACES,
   })) as CitedPlaceRow[] | null;
   return (rows ?? []).map((row) => {
     const location: PlaceLocation = {
@@ -146,33 +167,84 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseQuestionsAtPlaces(value: unknown): QuestionsAtPlaces {
-  if (!isRecord(value) || typeof value.question_count !== 'number' || !Array.isArray(value.questions)) {
-    throw new Error('Unexpected response from get_course_questions_at_places');
-  }
+const toNumber = (value: unknown): number | null => (value === null || value === undefined ? null : Number(value));
+const toFlag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+
+export async function fetchQuestionOverview(courseId: string, range: AnalyticsRange): Promise<QuestionOverview> {
+  const rows = unwrap(await supabase.rpc('get_course_question_overview', rangeArgs(courseId, range)));
+  const row = rows?.[0];
+  if (!row) throw new Error('Unexpected response from get_course_question_overview');
   return {
-    questionCount: value.question_count,
-    studentCount: typeof value.student_count === 'number' ? value.student_count : 0,
-    questions: value.questions.filter(isRecord).map((question) => ({
-      id: String(question.id),
-      queryText: String(question.query_text ?? ''),
-      createdAt: String(question.created_at ?? ''),
-      category: String(question.category ?? 'other'),
-    })),
+    questionCount: Number(row.question_count),
+    studentCount: Number(row.student_count),
+    labeledCount: Number(row.labeled_count),
+    answeredFromMaterialsCount: Number(row.answered_from_materials_count),
+    needsAttentionCount: Number(row.needs_attention_count),
+    citedQuestionCount: Number(row.cited_question_count),
+    documentQuestionCount: Number(row.document_question_count),
+    videoQuestionCount: Number(row.video_question_count),
   };
 }
 
-export async function fetchQuestionsAtPlaces(
+function parseSource(value: Record<string, unknown>): QuestionSource {
+  return {
+    materialId: String(value.material_id),
+    fileName: String(value.file_name ?? ''),
+    fileType: String(value.file_type ?? ''),
+    pageNumber: toNumber(value.page_number),
+    startMs: toNumber(value.start_ms),
+    endMs: toNumber(value.end_ms),
+  };
+}
+
+function parseQuestion(value: Record<string, unknown>): AnalyticsQuestion {
+  return {
+    id: String(value.id),
+    queryText: String(value.query_text ?? ''),
+    createdAt: String(value.created_at ?? ''),
+    category: String(value.category ?? 'other'),
+    isStudyQuestion: toFlag(value.is_study_question),
+    answeredFromMaterials: toFlag(value.answered_from_materials),
+    needsAttention: value.needs_attention === true,
+    sources: Array.isArray(value.sources) ? value.sources.filter(isRecord).map(parseSource) : [],
+  };
+}
+
+function parseQuestionPage(value: unknown): QuestionPage {
+  if (!isRecord(value) || typeof value.total_count !== 'number' || !Array.isArray(value.questions)) {
+    throw new Error('Unexpected response from get_course_questions');
+  }
+  return {
+    totalCount: value.total_count,
+    studentCount: typeof value.student_count === 'number' ? value.student_count : 0,
+    questions: value.questions.filter(isRecord).map(parseQuestion),
+  };
+}
+
+export async function fetchQuestions(
   courseId: string,
   range: AnalyticsRange,
-  places: PlaceFilter[],
-): Promise<QuestionsAtPlaces> {
-  const data = unwrap(await supabase.rpc('get_course_questions_at_places', {
+  filters: QuestionFilters,
+  page: { limit: number; offset: number },
+): Promise<QuestionPage> {
+  const data = unwrap(await supabase.rpc('get_course_questions', {
     ...rangeArgs(courseId, range),
-    in_places: places,
-    in_question_limit: QUESTIONS_PER_KEYWORD,
+    ...toQuestionArgs(filters),
+    in_limit: page.limit,
+    in_offset: page.offset,
   }));
-  return parseQuestionsAtPlaces(data);
+  return parseQuestionPage(data);
+}
+
+export async function fetchQuestionTerms(courseId: string, range: AnalyticsRange): Promise<QuestionTerm[]> {
+  const rows = unwrap(await supabase.rpc('get_course_question_terms', rangeArgs(courseId, range)));
+  return pickTopTerms((rows ?? []).map((row) => ({
+    key: row.term_key,
+    term: row.term,
+    wordCount: Number(row.word_count),
+    questionCount: Number(row.question_count),
+    studentCount: Number(row.student_count),
+  })));
 }
 
 // supabase-js reports a non-2xx function response with a generic message;

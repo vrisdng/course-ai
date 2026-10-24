@@ -1,8 +1,7 @@
-// "Places" in course materials for keyword analytics: a document page, or a
+// "Places" in course materials for topic search: a document page, or a
 // stretch of a video. The course-analytics function turns the chunks a
-// teacher's keyword matched into places; the admin page shows them, lets the
-// teacher untick wrong ones, and counts the questions whose answers cited
-// them (get_course_questions_at_places).
+// teacher's topic matched into places; the admin page then lists questions
+// whose answers cited them (get_course_questions' in_topic_places).
 //
 // The admin page imports this file too, so keep it free of Deno and URL
 // imports.
@@ -37,7 +36,7 @@ export interface AnalyticsPlace extends PlaceLocation {
   chunkCount: number;
 }
 
-// The JSON shape get_course_questions_at_places takes.
+// The JSON shape get_course_questions takes for a place.
 export type PlaceFilter =
   | { material_id: string; page_number: number | null }
   | { material_id: string; start_ms: number; end_ms: number };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -7,7 +7,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/integrations/supabase/client';
 
 import { useAnalyticsChat } from '@/features/analytics-chat/useAnalyticsChat';
-import type { AnalyticsRange } from '@/features/course-analytics/analyticsApi';
+import { AnalyticsCard } from '@/features/course-analytics/AnalyticsCard';
+import {
+  fetchCitedMaterials,
+  fetchCitedPlaces,
+  fetchQuestionOverview,
+  fetchQuestionTerms,
+  fetchQuestions,
+  type AnalyticsRange,
+} from '@/features/course-analytics/analyticsApi';
 import {
   DEFAULT_PRESET,
   RANGE_PRESETS,
@@ -18,19 +26,35 @@ import {
   type RangePreset,
 } from '@/features/course-analytics/analyticsRange';
 import { AnalyticsRangePicker } from '@/features/course-analytics/AnalyticsRangePicker';
-import { AnalyticsSummary, type CourseStats } from '@/features/course-analytics/AnalyticsSummary';
 import { AskAnalyticsSheet } from '@/features/course-analytics/AskAnalyticsSheet';
-import { MaterialsExplorer } from '@/features/course-analytics/MaterialsExplorer';
+import { CitedFilesCard } from '@/features/course-analytics/CitedFilesCard';
+import { NeedsAttentionCard } from '@/features/course-analytics/NeedsAttentionCard';
+import { OverviewNumbers } from '@/features/course-analytics/OverviewNumbers';
 import { QuestionBucketsPanel } from '@/features/course-analytics/QuestionBucketsPanel';
-import { useCitedMaterials } from '@/features/course-analytics/useCitedMaterials';
-import { useKeywordSearch } from '@/features/course-analytics/useKeywordSearch';
+import {
+  NO_FILTERS,
+  withoutFilter,
+  type FilterName,
+  type PlaceChoice,
+  type QuestionFilters,
+  type SourceKind,
+  type TopicFilter,
+} from '@/features/course-analytics/questionFilters';
+import { QuestionList } from '@/features/course-analytics/QuestionList';
+import { TopicsCard } from '@/features/course-analytics/TopicsCard';
+import { useLoader } from '@/features/course-analytics/useLoader';
+import { useQuestionFeed } from '@/features/course-analytics/useQuestionFeed';
 import { useQuestionLabels } from '@/features/course-analytics/useQuestionLabels';
+import { useTopicSearch } from '@/features/course-analytics/useTopicSearch';
 
 type Course = {
   id: string;
   name: string;
   code: string | null;
 };
+
+// Questions shown as examples in the "Needs attention" card.
+const ATTENTION_EXAMPLES = 3;
 
 function daysFor(preset: RangePreset): number {
   return RANGE_PRESETS.find((option) => option.value === preset)?.days ?? 30;
@@ -40,14 +64,14 @@ export default function AdminAnalytics() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
-  const [stats, setStats] = useState<CourseStats | null>(null);
-  const [isLoadingStats, setIsLoadingStats] = useState(false);
 
   // A preset's window is fixed when it is picked, so it doesn't drift on re-render.
   const [preset, setPreset] = useState<RangePreset>(DEFAULT_PRESET);
   const [presetWindow, setPresetWindow] = useState<AnalyticsRange>(() => presetRange(daysFor(DEFAULT_PRESET)));
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [filters, setFilters] = useState<QuestionFilters>(NO_FILTERS);
+  const questionsRef = useRef<HTMLDivElement>(null);
 
   const custom = useMemo(() => resolveCustomRange(customStart, customEnd), [customStart, customEnd]);
   const range: AnalyticsRange | null = preset === 'custom' ? custom.range : presetWindow;
@@ -65,12 +89,6 @@ export default function AdminAnalytics() {
     setPreset(next);
   }, [presetWindow]);
 
-  const chat = useAnalyticsChat(courseId, range?.startAt ?? null, range?.endAt ?? null);
-  // All views load when the page opens, so question labelling starts at once.
-  const citedMaterials = useCitedMaterials(courseId, range);
-  const keywordSearch = useKeywordSearch(courseId, range);
-  const questionLabels = useQuestionLabels(courseId, range);
-
   useEffect(() => {
     void (async () => {
       const { data, error } = await supabase.from('courses').select('id, name, code').order('name');
@@ -86,54 +104,62 @@ export default function AdminAnalytics() {
     })();
   }, []);
 
-  const startAt = range?.startAt ?? null;
-  const endAt = range?.endAt ?? null;
+  const chat = useAnalyticsChat(courseId, range?.startAt ?? null, range?.endAt ?? null);
+  // Opening the page labels unlabelled questions; version goes up when
+  // that changed something, so the views that use labels reload.
+  const labels = useQuestionLabels(courseId, range);
 
-  useEffect(() => {
-    if (!selectedCourseId || !startAt || !endAt) {
-      setStats(null);
-      setIsLoadingStats(false);
-      return;
-    }
+  const rangeKey = courseId && range ? `${courseId}|${range.startAt}|${range.endAt}` : null;
+  const labelledKey = rangeKey && `${rangeKey}|${labels.version}`;
+  const overview = useLoader(labelledKey && `overview|${labelledKey}`, () => fetchQuestionOverview(courseId!, range!));
+  const terms = useLoader(labelledKey && `terms|${labelledKey}`, () => fetchQuestionTerms(courseId!, range!));
+  const attentionExamples = useLoader(labelledKey && `attention|${labelledKey}`, async () =>
+    (await fetchQuestions(courseId!, range!, { ...NO_FILTERS, needsAttention: true }, { limit: ATTENTION_EXAMPLES, offset: 0 })).questions);
+  const files = useLoader(rangeKey && `files|${rangeKey}`, () => fetchCitedMaterials(courseId!, range!));
+  const places = useLoader(rangeKey && `places|${rangeKey}`, () => fetchCitedPlaces(courseId!, range!));
+  const feed = useQuestionFeed(courseId, range, filters, labels.version);
 
-    let cancelled = false;
-    setIsLoadingStats(true);
-    Promise.all([
-      supabase.from('enrollments').select('id', { count: 'exact', head: true }).eq('course_id', selectedCourseId),
-      supabase.rpc('get_course_active_student_count', { in_course_id: selectedCourseId, in_start_at: startAt, in_end_at: endAt }),
-      supabase.from('materials').select('id', { count: 'exact', head: true }).eq('course_id', selectedCourseId),
-      supabase
-        .from('query_events')
-        .select('id', { count: 'exact', head: true })
-        .eq('outcome', 'success')
-        .is('error_code', null)
-        .eq('course_id', selectedCourseId)
-        .gte('created_at', startAt)
-        .lte('created_at', endAt),
-    ])
-      .then(([enrollmentRes, activeRes, materialsRes, questionsRes]) => {
-        if (cancelled) return;
-        setStats({
-          enrolledStudents: enrollmentRes.count ?? 0,
-          activeStudents: typeof activeRes.data === 'number' ? activeRes.data : 0,
-          documents: materialsRes.count ?? 0,
-          totalQuestions: questionsRes.count ?? 0,
-        });
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error('Failed to load analytics stats:', error);
-        toast.error(error instanceof Error ? error.message : 'Failed to load analytics stats');
-        setStats(null);
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingStats(false);
-      });
+  const setTopic = useCallback((topic: TopicFilter | null) => setFilters((current) => ({ ...current, topic })), []);
+  const search = useTopicSearch(courseId, setTopic);
+  const { setInput: setSearchInput } = search;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [endAt, selectedCourseId, startAt]);
+  const changeCourse = (id: string) => {
+    setSelectedCourseId(id);
+    setFilters(NO_FILTERS);
+    setSearchInput('');
+  };
+
+  const showQuestions = () => questionsRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+
+  const selectTerm = (term: string) => {
+    setSearchInput('');
+    setFilters((current) => ({
+      ...current,
+      topic: current.topic?.source === 'term' && current.topic.text === term ? null : { text: term, places: null, source: 'term' },
+    }));
+  };
+  const selectFile = (file: { id: string; name: string }) =>
+    setFilters((current) => ({ ...current, material: current.material?.id === file.id ? null : file }));
+  const selectSourceKind = (kind: SourceKind) =>
+    setFilters((current) => ({ ...current, sourceKind: current.sourceKind === kind ? null : kind }));
+  const selectCategory = (category: string) =>
+    setFilters((current) => ({ ...current, category: current.category === category ? null : category }));
+  const selectPlace = (place: PlaceChoice) => {
+    setFilters((current) => ({ ...current, place: current.place?.key === place.key ? null : place }));
+    showQuestions();
+  };
+  const showNeedsAttention = () => {
+    setFilters((current) => ({ ...current, needsAttention: true }));
+    showQuestions();
+  };
+  const removeFilter = (name: FilterName) => {
+    if (name === 'topic') setSearchInput('');
+    setFilters((current) => withoutFilter(current, name));
+  };
+  const clearFilters = () => {
+    setSearchInput('');
+    setFilters(NO_FILTERS);
+  };
 
   const rangeLabel = range ? formatRangeLabel(range) : null;
 
@@ -144,11 +170,11 @@ export default function AdminAnalytics() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Course analytics</h1>
             <p className="text-sm text-muted-foreground">
-              What students ask about, traced to the materials their answers cite.
+              What students are asking, and where your materials help or fall short.
             </p>
           </div>
           {!isLoadingCourses && courses.length > 0 && (
-            <Select value={selectedCourseId} onValueChange={setSelectedCourseId}>
+            <Select value={selectedCourseId} onValueChange={changeCourse}>
               <SelectTrigger className="w-full sm:w-[280px]" aria-label="Course">
                 <SelectValue placeholder="Select a course" />
               </SelectTrigger>
@@ -186,30 +212,51 @@ export default function AdminAnalytics() {
               {rangeLabel && <p className="text-sm text-muted-foreground sm:pt-2">{rangeLabel}</p>}
             </div>
 
-            <AnalyticsSummary
-              isLoading={isLoadingStats}
-              stats={stats}
-              buckets={questionLabels.buckets}
-              citedMaterialCount={range ? citedMaterials.materials.length : null}
+            <OverviewNumbers overview={overview} onShowNeedsAttention={showNeedsAttention} />
+
+            <NeedsAttentionCard
+              count={overview.data?.needsAttentionCount ?? null}
+              examples={attentionExamples}
+              places={places}
+              onShowNeedsAttention={showNeedsAttention}
+              onSelectPlace={selectPlace}
             />
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-              <MaterialsExplorer materials={citedMaterials} keyword={keywordSearch} />
+              <div ref={questionsRef} className="min-w-0 scroll-mt-20">
+                <QuestionList
+                  feed={feed}
+                  search={search}
+                  filters={filters}
+                  onRemoveFilter={removeFilter}
+                  onClearFilters={clearFilters}
+                  onSelectPlace={selectPlace}
+                />
+              </div>
 
               <aside className="min-w-0 space-y-6">
-                <section aria-labelledby="types-heading" className="rounded-xl border border-border bg-card p-5">
-                  <h2 id="types-heading" className="text-base font-semibold">Question types</h2>
-                  <p className="mb-4 text-sm text-muted-foreground">What kind of questions students asked.</p>
-                  <QuestionBucketsPanel state={questionLabels} />
-                </section>
-
-                <section aria-labelledby="ask-heading" className="rounded-xl border border-border bg-card p-5">
-                  <h2 id="ask-heading" className="text-base font-semibold">Ask about this data</h2>
-                  <p className="mb-4 text-sm text-muted-foreground">
-                    Chat with an assistant that can see this course's usage for the selected dates.
-                  </p>
+                <TopicsCard
+                  terms={terms}
+                  selected={filters.topic?.source === 'term' ? filters.topic.text : null}
+                  onSelect={selectTerm}
+                />
+                <CitedFilesCard
+                  files={files}
+                  overview={overview.data}
+                  selectedFileId={filters.material?.id ?? null}
+                  selectedSourceKind={filters.sourceKind}
+                  onSelectFile={selectFile}
+                  onSelectSourceKind={selectSourceKind}
+                />
+                <AnalyticsCard title="Question types" description="What kind of questions students asked.">
+                  <QuestionBucketsPanel state={labels} selected={filters.category} onSelect={selectCategory} />
+                </AnalyticsCard>
+                <AnalyticsCard
+                  title="Ask about this data"
+                  description="Chat with an assistant that can see this course's usage for the selected dates."
+                >
                   <AskAnalyticsSheet chat={chat} disabledReason={rangeError} rangeLabel={rangeLabel} />
-                </section>
+                </AnalyticsCard>
               </aside>
             </div>
           </>
