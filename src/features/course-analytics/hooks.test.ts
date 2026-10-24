@@ -110,6 +110,18 @@ describe('useKeywordSearch', () => {
     expect(result.current.places).toEqual([]);
   });
 
+  it('clear() resets the keyword and its results', async () => {
+    api.matchKeyword.mockResolvedValue([pdfPlace]);
+    api.fetchQuestionsAtPlaces.mockResolvedValue({ questionCount: 1, studentCount: 1, questions: [] });
+    const { result } = renderHook(() => useKeywordSearch(COURSE, RANGE));
+    act(() => result.current.setKeyword('recursion'));
+    await act(async () => result.current.search());
+    await waitFor(() => expect(result.current.result).not.toBeNull());
+    act(() => result.current.clear());
+    expect(result.current).toMatchObject({ keyword: '', searchedKeyword: null, places: [], result: null, searchError: null });
+    expect(result.current.selectedKeys.size).toBe(0);
+  });
+
   it('clears the search when the course changes', async () => {
     api.matchKeyword.mockResolvedValue([pdfPlace]);
     api.fetchQuestionsAtPlaces.mockResolvedValue({ questionCount: 1, studentCount: 1, questions: [] });

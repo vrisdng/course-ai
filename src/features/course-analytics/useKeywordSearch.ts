@@ -14,6 +14,8 @@ export interface KeywordSearchState {
   keyword: string;
   setKeyword(keyword: string): void;
   search(): Promise<void>;
+  // Back to no keyword.
+  clear(): void;
   // The keyword the current places were found for.
   searchedKeyword: string | null;
   places: AnalyticsPlace[];
@@ -47,14 +49,21 @@ export function useKeywordSearch(courseId: string | null, range: AnalyticsRange 
   const startAt = range?.startAt ?? null;
   const endAt = range?.endAt ?? null;
 
-  useEffect(() => {
+  const reset = useCallback(() => {
     setSearchedKeyword(null);
     setPlaces([]);
     setSelectedKeys(new Set());
     setResult(null);
     setSearchError(null);
     setCountError(null);
-  }, [courseId]);
+  }, []);
+
+  useEffect(reset, [courseId, reset]);
+
+  const clear = useCallback(() => {
+    setKeyword('');
+    reset();
+  }, [reset]);
 
   const search = useCallback(async () => {
     const trimmed = keyword.trim();
@@ -117,7 +126,7 @@ export function useKeywordSearch(courseId: string | null, range: AnalyticsRange 
   }, [courseId, startAt, endAt, searchedKeyword, selectedPlaces]);
 
   return {
-    keyword, setKeyword, search, searchedKeyword, places, isSearching, searchError,
+    keyword, setKeyword, search, clear, searchedKeyword, places, isSearching, searchError,
     selectedKeys, togglePlace, result, isCounting, countError,
   };
 }

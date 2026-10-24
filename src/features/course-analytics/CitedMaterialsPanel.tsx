@@ -35,10 +35,7 @@ export function CitedMaterialsPanel({ state }: { state: CitedMaterialsState }) {
   const maxQuestions = Math.max(...materials.map((material) => material.questionCount));
 
   return (
-    <div className="space-y-4">
-      <p className="text-xs text-muted-foreground">
-        Materials students' answers cited, most-asked first. Open one to see which pages or video moments.
-      </p>
+    <div>
       <ul className="divide-y divide-border rounded-lg border border-border">
         {materials.map((material) => {
           const detail = expanded[material.materialId];

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CitedMaterialsPanel } from './CitedMaterialsPanel';
-import { KeywordSearchPanel } from './KeywordSearchPanel';
+import { KeywordResults } from './KeywordResults';
 import { QuestionBucketsPanel } from './QuestionBucketsPanel';
 import { categoryLabel } from './questionCategories';
 import type { CitedMaterialsState } from './useCitedMaterials';
@@ -64,7 +64,7 @@ const places = [
 
 function keywordState(overrides: Partial<KeywordSearchState> = {}): KeywordSearchState {
   return {
-    keyword: 'recursion', setKeyword: vi.fn(), search: vi.fn().mockResolvedValue(undefined),
+    keyword: 'recursion', setKeyword: vi.fn(), search: vi.fn().mockResolvedValue(undefined), clear: vi.fn(),
     searchedKeyword: 'recursion', places, isSearching: false, searchError: null,
     selectedKeys: new Set(['m1:page:3']), togglePlace: vi.fn(),
     result: {
@@ -75,19 +75,15 @@ function keywordState(overrides: Partial<KeywordSearchState> = {}): KeywordSearc
   };
 }
 
-describe('KeywordSearchPanel', () => {
-  it('searches on submit', () => {
-    const state = keywordState({ searchedKeyword: null, places: [], result: null });
-    render(<KeywordSearchPanel state={state} />);
-    fireEvent.change(screen.getByLabelText('Keyword'), { target: { value: 'stack' } });
-    expect(state.setKeyword).toHaveBeenCalledWith('stack');
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-    expect(state.search).toHaveBeenCalled();
+describe('KeywordResults', () => {
+  it('renders nothing before a search', () => {
+    const { container } = render(<KeywordResults state={keywordState({ searchedKeyword: null, places: [], result: null })} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('shows the count, the matched places to untick and the questions', () => {
     const state = keywordState();
-    render(<KeywordSearchPanel state={state} />);
+    render(<KeywordResults state={state} />);
     expect(screen.getByText(/5 questions/)).toBeInTheDocument();
     expect(screen.getByText(/from 3 students/)).toBeInTheDocument();
 
@@ -104,9 +100,9 @@ describe('KeywordSearchPanel', () => {
   });
 
   it('says when nothing matched, and shows errors', () => {
-    const { rerender } = render(<KeywordSearchPanel state={keywordState({ places: [], result: null })} />);
+    const { rerender } = render(<KeywordResults state={keywordState({ places: [], result: null })} />);
     expect(screen.getByText(/Nothing in this course's materials matched "recursion"/)).toBeInTheDocument();
-    rerender(<KeywordSearchPanel state={keywordState({ searchError: 'keyword is required' })} />);
+    rerender(<KeywordResults state={keywordState({ searchError: 'keyword is required' })} />);
     expect(screen.getByRole('alert')).toHaveTextContent('keyword is required');
   });
 });
