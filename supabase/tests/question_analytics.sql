@@ -146,6 +146,11 @@ BEGIN
     format('Hashing.pdf across both copies: %s', row);
   ASSERT (SELECT count(*) = 2 FROM public.get_course_cited_files(course, s, e)), 'Hashing.pdf and Lecture 4.mp4';
 
+  -- Question types: study only drops q4's course_logistics bucket.
+  ASSERT (SELECT sum(question_count) = 5 FROM public.get_course_question_buckets(course, s, e));
+  ASSERT (SELECT sum(question_count) = 4 FROM public.get_course_question_buckets(course, s, e, true));
+  ASSERT NOT EXISTS (SELECT 1 FROM public.get_course_question_buckets(course, s, e, true) WHERE category = 'course_logistics');
+
   -- Study questions only: drops q4, the logistics question.
   result := public.get_course_questions(course, s, e, in_study_only => true);
   ASSERT (result->>'total_count')::int = 4, format('Study only: %s', result);

@@ -8,7 +8,6 @@ import { categoryLabel } from './questionCategories';
 export type Selection =
   | { kind: 'all' }
   | { kind: 'attention' }
-  | { kind: 'term'; term: string }
   // A typed search: question text, or answers citing where the materials
   // cover it (places; null when the materials search failed).
   | { kind: 'search'; text: string; places: PlaceFilter[] | null }
@@ -30,7 +29,7 @@ export interface QuestionFilters {
 
 export function filtersFor(selection: Selection, studyOnly: boolean): QuestionFilters {
   return {
-    topicText: selection.kind === 'term' ? selection.term : selection.kind === 'search' ? selection.text : null,
+    topicText: selection.kind === 'search' ? selection.text : null,
     topicPlaces: selection.kind === 'search' ? selection.places : null,
     materialIds: selection.kind === 'file' ? selection.ids : null,
     category: selection.kind === 'type' ? selection.category : null,
@@ -67,7 +66,6 @@ export function selectionTitle(selection: Selection): string {
   switch (selection.kind) {
     case 'all': return 'All questions';
     case 'attention': return 'Not answered from materials';
-    case 'term': return `Mentions “${selection.term}”`;
     case 'search': return `About “${selection.text}”`;
     case 'file': return `Cited ${selection.name}`;
     case 'type': return categoryLabel(selection.category);
@@ -76,7 +74,6 @@ export function selectionTitle(selection: Selection): string {
 
 function selectionKey(selection: Selection): string {
   switch (selection.kind) {
-    case 'term': return `term:${selection.term}`;
     case 'search': return `search:${selection.text}`;
     case 'file': return `file:${selection.name}`;
     case 'type': return `type:${selection.category}`;

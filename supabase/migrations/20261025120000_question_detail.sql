@@ -7,7 +7,8 @@
 -- Sources are now merged by file name, so page 2 of two copies of the same
 -- file shows once. Adds get_course_cited_files, the cited files of a course
 -- with copies merged, and get_course_question_detail. The overview gains
--- non_study_count so counts can match the list with in_study_only.
+-- non_study_count, and get_course_question_buckets gains in_study_only, so
+-- counts can match the list with in_study_only.
 
 DROP FUNCTION IF EXISTS public.get_course_questions(
   uuid, timestamptz, timestamptz, text, jsonb, jsonb, uuid, text, text, boolean, integer, integer);
@@ -296,6 +297,51 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.get_course_question_overview(uuid, timestamptz, timestamptz) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_course_question_overview(uuid, timestamptz, timestamptz) TO authenticated;
+
+-- ── Question buckets ─────────────────────────────────────────────────────
+
+DROP FUNCTION IF EXISTS public.get_course_question_buckets(uuid, timestamptz, timestamptz);
+
+-- As in migration 20261024120000, with in_study_only.
+CREATE FUNCTION public.get_course_question_buckets(
+  in_course_id uuid,
+  in_start_at timestamptz DEFAULT NULL,
+  in_end_at timestamptz DEFAULT NULL,
+  in_study_only boolean DEFAULT false
+)
+RETURNS TABLE (
+  category text,
+  question_count bigint,
+  labeled_count bigint,
+  study_question_count bigint,
+  answered_from_materials_count bigint
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT public.is_admin(auth.uid()) THEN
+    RAISE EXCEPTION 'Access denied' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    q.category,
+    COUNT(*)::bigint,
+    COUNT(*) FILTER (WHERE q.is_labeled)::bigint,
+    COUNT(*) FILTER (WHERE q.is_study_question)::bigint,
+    COUNT(*) FILTER (WHERE q.answered_from_materials)::bigint
+  FROM public.analytics_counted_questions(in_course_id, in_start_at, in_end_at) q
+  WHERE NOT COALESCE(in_study_only, false) OR q.is_study_question IS NOT FALSE
+  GROUP BY 1
+  ORDER BY 2 DESC, 1 ASC;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.get_course_question_buckets(uuid, timestamptz, timestamptz, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_course_question_buckets(uuid, timestamptz, timestamptz, boolean) TO authenticated;
 
 -- ── Cited files ──────────────────────────────────────────────────────────
 

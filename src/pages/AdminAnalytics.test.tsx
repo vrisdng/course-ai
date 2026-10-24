@@ -9,7 +9,6 @@ const api = vi.hoisted(() => ({
   fetchQuestionOverview: vi.fn(),
   fetchQuestions: vi.fn(),
   fetchQuestionDetail: vi.fn(),
-  fetchQuestionTerms: vi.fn(),
   fetchCitedFiles: vi.fn(),
   fetchQuestionBuckets: vi.fn(),
   labelQuestions: vi.fn(),
@@ -66,7 +65,6 @@ describe('AdminAnalytics', () => {
       answerText: `Answer for ${id}`, relatedCount: 1,
       related: [{ id: 'q9', queryText: 'a related question', createdAt: '2026-10-09T00:00:00Z', needsAttention: false }],
     }));
-    api.fetchQuestionTerms.mockResolvedValue([{ key: 'hash', term: 'hashing', wordCount: 1, questionCount: 8, studentCount: 2 }]);
     api.fetchCitedFiles.mockResolvedValue([{ fileName: 'Hashing.pdf', fileType: 'pdf', materialIds: ['m1', 'm2'], questionCount: 20, studentCount: 2 }]);
     api.fetchQuestionBuckets.mockResolvedValue([
       { category: 'comparison', questionCount: 3, labeledCount: 3, studyQuestionCount: 3, answeredFromMaterialsCount: 3 },
@@ -85,7 +83,6 @@ describe('AdminAnalytics', () => {
     expect(new Date(range.endAt).getTime() - new Date(range.startAt).getTime()).toBe(30 * DAY);
     expect(lastFilters()).toMatchObject({ needsAttention: false, studyOnly: true, topicText: null });
     expect(api.fetchQuestionDetail).toHaveBeenLastCalledWith('c1', range, 'q1');
-    expect(api.fetchQuestionTerms).toHaveBeenLastCalledWith('c1', range);
     expect(api.fetchCitedFiles).toHaveBeenLastCalledWith('c1', range);
     expect(api.labelQuestions).toHaveBeenCalledWith('c1', range);
     expect(mocks.useAnalyticsChat).toHaveBeenLastCalledWith('c1', range.startAt, range.endAt);
@@ -115,8 +112,6 @@ describe('AdminAnalytics', () => {
     expect(lastFilters()).toMatchObject({ needsAttention: true });
     expect(screen.getByRole('heading', { name: 'Not answered from materials' })).toBeInTheDocument();
 
-    fireEvent.click(within(nav).getByRole('button', { name: 'hashing, 8' }));
-    await waitFor(() => expect(lastFilters()).toMatchObject({ topicText: 'hashing', topicPlaces: null }));
     fireEvent.click(within(nav).getByRole('button', { name: 'Hashing.pdf, 20' }));
     await waitFor(() => expect(lastFilters()).toMatchObject({ materialIds: ['m1', 'm2'] }));
     fireEvent.click(await within(nav).findByRole('button', { name: 'Comparison, 3' }));
@@ -131,7 +126,7 @@ describe('AdminAnalytics', () => {
       { key: 'm1:page:2', materialId: 'm1', fileName: 'Hashing.pdf', fileType: 'pdf', pageNumber: 2, startMs: null, endMs: null, similarity: 0.5, snippet: '', chunkCount: 1 },
     ]);
     await renderLoaded();
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search questions' }), { target: { value: 'probing' } });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search all questions' }), { target: { value: 'probing' } });
     fireEvent.submit(screen.getByRole('search'));
     await waitFor(() => expect(lastFilters()).toMatchObject({ topicText: 'probing', topicPlaces: [{ material_id: 'm1', page_number: 2 }] }));
     expect(screen.getByRole('heading', { name: 'About “probing”' })).toBeInTheDocument();
@@ -139,13 +134,15 @@ describe('AdminAnalytics', () => {
 
   it('switches presets and validates a custom range', async () => {
     await renderLoaded();
-    fireEvent.click(screen.getByRole('radio', { name: '7 days' }));
+    fireEvent.click(screen.getByRole('button', { name: /Last 30 days/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Last 7 days' }));
     await waitFor(() => {
       const range = lastRange();
       expect(new Date(range.endAt).getTime() - new Date(range.startAt).getTime()).toBe(7 * DAY);
     });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.click(screen.getByRole('button', { name: /Last 7 days/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Custom range' }));
     expect((screen.getByLabelText('Start') as HTMLInputElement).value).not.toBe('');
     fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2030-01-02T00:00' } });
     fireEvent.change(screen.getByLabelText('End'), { target: { value: '2030-01-01T00:00' } });

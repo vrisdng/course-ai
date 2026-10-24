@@ -20,11 +20,16 @@ export interface QuestionLabelsState {
 
 const message = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong');
 
-// Question buckets for the window. Opening the page also labels questions
-// that have no AI label yet (Decisions API, via course-analytics), in rounds,
-// then reloads the buckets. Until then, unlabelled questions show their
-// rule-based category.
-export function useQuestionLabels(courseId: string | null, range: AnalyticsRange | null): QuestionLabelsState {
+// Opening the page labels questions that have no AI label yet (Decisions
+// API, via course-analytics), in rounds, once per course and window. The
+// question buckets load separately, for study questions only when asked, and
+// reload after labelling. Until labelled, a question shows its rule-based
+// category.
+export function useQuestionLabels(
+  courseId: string | null,
+  range: AnalyticsRange | null,
+  studyOnly = false,
+): QuestionLabelsState {
   const [buckets, setBuckets] = useState<QuestionBucket[]>([]);
   const [isLoadingBuckets, setIsLoadingBuckets] = useState(false);
   const [bucketError, setBucketError] = useState<string | null>(null);
@@ -36,34 +41,16 @@ export function useQuestionLabels(courseId: string | null, range: AnalyticsRange
   const endAt = range?.endAt ?? null;
 
   useEffect(() => {
-    setBuckets([]);
-    setBucketError(null);
     setRemaining(null);
     setLabelError(null);
     if (!courseId || !startAt || !endAt) {
-      setIsLoadingBuckets(false);
       setIsLabelling(false);
       return;
     }
     let cancelled = false;
     const window = { startAt, endAt };
 
-    const loadBuckets = async () => {
-      setIsLoadingBuckets(true);
-      try {
-        const rows = await fetchQuestionBuckets(courseId, window);
-        if (!cancelled) {
-          setBuckets(rows);
-          setBucketError(null);
-        }
-      } catch (error) {
-        if (!cancelled) setBucketError(message(error));
-      } finally {
-        if (!cancelled) setIsLoadingBuckets(false);
-      }
-    };
-
-    const label = async () => {
+    void (async () => {
       setIsLabelling(true);
       let labelledAny = false;
       try {
@@ -80,17 +67,38 @@ export function useQuestionLabels(courseId: string | null, range: AnalyticsRange
       } finally {
         if (!cancelled) setIsLabelling(false);
       }
-      if (labelledAny && !cancelled) {
-        await loadBuckets();
-        if (!cancelled) setVersion((current) => current + 1);
-      }
-    };
+      if (labelledAny && !cancelled) setVersion((current) => current + 1);
+    })();
 
-    void loadBuckets().then(label);
     return () => {
       cancelled = true;
     };
   }, [courseId, startAt, endAt]);
+
+  useEffect(() => {
+    if (!courseId || !startAt || !endAt) {
+      setBuckets([]);
+      setBucketError(null);
+      setIsLoadingBuckets(false);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingBuckets(true);
+    setBucketError(null);
+    fetchQuestionBuckets(courseId, { startAt, endAt }, studyOnly)
+      .then((rows) => {
+        if (!cancelled) setBuckets(rows);
+      })
+      .catch((error) => {
+        if (!cancelled) setBucketError(message(error));
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingBuckets(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [courseId, startAt, endAt, studyOnly, version]);
 
   return { buckets, isLoadingBuckets, bucketError, isLabelling, remaining, labelError, version };
 }

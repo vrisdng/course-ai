@@ -11,7 +11,6 @@ import {
   fetchQuestionDetail,
   fetchQuestionBuckets,
   fetchQuestionOverview,
-  fetchQuestionTerms,
   fetchQuestions,
   labelQuestions,
   matchKeyword,
@@ -65,9 +64,10 @@ describe('analyticsApi RPCs', () => {
       data: [{ category: 'calculation', question_count: 4, labeled_count: 3, study_question_count: 3, answered_from_materials_count: 2 }],
       error: null,
     });
-    await expect(fetchQuestionBuckets(COURSE, RANGE)).resolves.toEqual([
+    await expect(fetchQuestionBuckets(COURSE, RANGE, true)).resolves.toEqual([
       { category: 'calculation', questionCount: 4, labeledCount: 3, studyQuestionCount: 3, answeredFromMaterialsCount: 2 },
     ]);
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_buckets', { ...rangeArgs, in_study_only: true });
   });
 
   it('maps the overview numbers', async () => {
@@ -117,20 +117,6 @@ describe('analyticsApi RPCs', () => {
 
     mocks.rpc.mockResolvedValueOnce({ data: { questions: 'nope' }, error: null });
     await expect(fetchQuestions(COURSE, RANGE, filtersFor(ALL_QUESTIONS, false), { limit: 25, offset: 0 })).rejects.toThrow('Unexpected response');
-  });
-
-  it('maps question terms and keeps the top ones', async () => {
-    mocks.rpc.mockResolvedValue({
-      data: [
-        { term_key: 'cortado compani', term: 'cortado company', word_count: 2, question_count: 4, student_count: 1 },
-        { term_key: 'cortado', term: 'cortado', word_count: 1, question_count: 4, student_count: 1 },
-      ],
-      error: null,
-    });
-    await expect(fetchQuestionTerms(COURSE, RANGE)).resolves.toEqual([
-      { key: 'cortado compani', term: 'cortado company', wordCount: 2, questionCount: 4, studentCount: 1 },
-    ]);
-    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_terms', rangeArgs);
   });
 
   it('throws the database error message', async () => {

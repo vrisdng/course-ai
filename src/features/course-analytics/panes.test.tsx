@@ -6,7 +6,7 @@ import { NavPane } from './NavPane';
 import { QuestionDetailPane } from './QuestionDetailPane';
 import { ALL_QUESTIONS } from './questionFilters';
 import { QuestionsPane } from './QuestionsPane';
-import type { QuestionTerm } from './questionTerms';
+import { QuestionSearch } from './QuestionSearch';
 import type { QuestionFeedState } from './useQuestionFeed';
 import type { QuestionLabelsState } from './useQuestionLabels';
 import type { TopicSearchState } from './useTopicSearch';
@@ -18,7 +18,6 @@ const OVERVIEW: QuestionOverview = {
   questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21,
   needsAttentionCount: 8, nonStudyCount: 4, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
 };
-const TERMS: QuestionTerm[] = [{ key: 'hash', term: 'hashing', wordCount: 1, questionCount: 8, studentCount: 2 }];
 const FILES: CitedFile[] = [{ fileName: 'Hashing.pdf', fileType: 'pdf', materialIds: ['m1', 'm2'], questionCount: 20, studentCount: 2 }];
 
 function labels(overrides: Partial<QuestionLabelsState> = {}): QuestionLabelsState {
@@ -30,15 +29,14 @@ function labels(overrides: Partial<QuestionLabelsState> = {}): QuestionLabelsSta
 }
 
 describe('NavPane', () => {
-  it('lists views, topics, files and question types with counts, and picks one', () => {
+  it('lists views, files and question types with counts, and picks one', () => {
     const onSelect = vi.fn();
-    render(<NavPane overview={loaded(OVERVIEW)} terms={loaded(TERMS)} files={loaded(FILES)} labels={labels()} selection={ALL_QUESTIONS} studyOnly={false} onSelect={onSelect} />);
+    render(<NavPane overview={loaded(OVERVIEW)} files={loaded(FILES)} labels={labels()} selection={ALL_QUESTIONS} studyOnly={false} onSelect={onSelect} />);
 
     expect(screen.getByRole('button', { name: 'All questions, 31' })).toHaveAttribute('aria-current', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Not from materials, 8' }));
     expect(onSelect).toHaveBeenLastCalledWith({ kind: 'attention' });
-    fireEvent.click(screen.getByRole('button', { name: 'hashing, 8' }));
-    expect(onSelect).toHaveBeenLastCalledWith({ kind: 'term', term: 'hashing' });
+    expect(screen.queryByText('Topics')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hashing.pdf, 20' }));
     expect(onSelect).toHaveBeenLastCalledWith({ kind: 'file', name: 'Hashing.pdf', fileType: 'pdf', ids: ['m1', 'm2'] });
     fireEvent.click(screen.getByRole('button', { name: 'Comparison, 3' }));
@@ -46,19 +44,17 @@ describe('NavPane', () => {
   });
 
   it('marks the current selection and shows labelling progress', () => {
-    render(<NavPane overview={loaded(OVERVIEW)} terms={loaded(TERMS)} files={loaded(FILES)} labels={labels({ isLabelling: true, remaining: 4 })} selection={{ kind: 'term', term: 'hashing' }} studyOnly onSelect={vi.fn()} />);
-    expect(screen.getByRole('button', { name: 'hashing, 8' })).toHaveAttribute('aria-current', 'true');
+    render(<NavPane overview={loaded(OVERVIEW)} files={loaded(FILES)} labels={labels({ isLabelling: true, remaining: 4 })} selection={{ kind: 'type', category: 'comparison' }} studyOnly onSelect={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Comparison, 3' })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('button', { name: 'All questions, 27' })).not.toHaveAttribute('aria-current');
     expect(screen.getByText(/Labelling questions… 4 left/)).toBeInTheDocument();
   });
 
   it('explains empty sections, loading and errors', () => {
-    const { rerender } = render(<NavPane overview={loading} terms={loaded([])} files={loaded([])} labels={labels({ buckets: [] })} selection={ALL_QUESTIONS} studyOnly onSelect={vi.fn()} />);
-    expect(screen.getByText('No topic came up twice yet.')).toBeInTheDocument();
+    const { rerender } = render(<NavPane overview={loading} files={loaded([])} labels={labels({ buckets: [] })} selection={ALL_QUESTIONS} studyOnly onSelect={vi.fn()} />);
     expect(screen.getByText('No answers cited your materials.')).toBeInTheDocument();
-    rerender(<NavPane overview={loaded(OVERVIEW)} terms={{ data: null, isLoading: false, error: 'Access denied' }} files={loading} labels={labels({ labelError: 'Decisions API error (403)' })} selection={ALL_QUESTIONS} studyOnly onSelect={vi.fn()} />);
+    rerender(<NavPane overview={loaded(OVERVIEW)} files={{ data: null, isLoading: false, error: 'Access denied' }} labels={labels({ labelError: 'Decisions API error (403)' })} selection={ALL_QUESTIONS} studyOnly onSelect={vi.fn()} />);
     expect(screen.getByText('Access denied')).toBeInTheDocument();
-    expect(screen.getByLabelText('Loading files')).toBeInTheDocument();
     expect(screen.getByText(/Some questions couldn't be labelled: Decisions API error \(403\)/)).toBeInTheDocument();
   });
 });
@@ -87,7 +83,7 @@ describe('QuestionsPane', () => {
 
   it('lists questions compactly, marks gaps and the open question, and opens one', () => {
     const onSelectQuestion = vi.fn();
-    render(<QuestionsPane {...props} feed={feed()} search={search()} onSelectQuestion={onSelectQuestion} />);
+    render(<QuestionsPane {...props} feed={feed()} onSelectQuestion={onSelectQuestion} />);
     expect(screen.getByRole('heading', { name: 'All questions' })).toBeInTheDocument();
     expect(screen.getByText('2 questions · 1 student')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /What is double hashing\?/ })).toHaveAttribute('aria-current', 'true');
@@ -97,38 +93,50 @@ describe('QuestionsPane', () => {
     expect(onSelectQuestion).toHaveBeenCalledWith('q2');
   });
 
-  it('searches and toggles greetings and logistics', () => {
-    const setInput = vi.fn();
-    const submit = vi.fn();
+  it('toggles greetings and logistics', () => {
     const onStudyOnlyChange = vi.fn();
-    render(<QuestionsPane {...props} feed={feed()} search={search({ setInput, submit, note: 'Materials search failed.' })} onStudyOnlyChange={onStudyOnlyChange} />);
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search questions' }), { target: { value: 'probing' } });
-    expect(setInput).toHaveBeenCalledWith('probing');
-    fireEvent.submit(screen.getByRole('search'));
-    expect(submit).toHaveBeenCalled();
-    expect(screen.getByText('Materials search failed.')).toBeInTheDocument();
+    render(<QuestionsPane {...props} feed={feed()} onStudyOnlyChange={onStudyOnlyChange} />);
+    expect(screen.queryByRole('search')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Hide greetings and logistics' }));
     expect(onStudyOnlyChange).toHaveBeenCalledWith(false);
   });
 
   it('loads more and explains empty, loading and error states', () => {
     const loadMore = vi.fn();
-    const { rerender } = render(<QuestionsPane {...props} feed={feed({ hasMore: true, totalCount: 40, loadMore })} search={search()} />);
+    const { rerender } = render(<QuestionsPane {...props} feed={feed({ hasMore: true, totalCount: 40, loadMore })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     expect(loadMore).toHaveBeenCalled();
-    rerender(<QuestionsPane {...props} feed={feed({ questions: [], totalCount: 0 })} search={search()} />);
+    rerender(<QuestionsPane {...props} feed={feed({ questions: [], totalCount: 0 })} />);
     expect(screen.getByText('No questions here.')).toBeInTheDocument();
-    rerender(<QuestionsPane {...props} feed={feed({ questions: [], isLoading: true })} search={search()} />);
+    rerender(<QuestionsPane {...props} feed={feed({ questions: [], isLoading: true })} />);
     expect(screen.getByLabelText('Loading questions')).toBeInTheDocument();
-    rerender(<QuestionsPane {...props} feed={feed({ questions: [], error: 'Access denied' })} search={search()} />);
+    rerender(<QuestionsPane {...props} feed={feed({ questions: [], error: 'Access denied' })} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Access denied');
   });
 
   it('offers a way back on small screens', () => {
     const onBack = vi.fn();
-    render(<QuestionsPane {...props} feed={feed()} search={search()} onBack={onBack} />);
+    render(<QuestionsPane {...props} feed={feed()} onBack={onBack} />);
     fireEvent.click(screen.getByRole('button', { name: 'Back to views' }));
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe('QuestionSearch', () => {
+  it('searches all questions and shows why a search fell back to text', () => {
+    const setInput = vi.fn();
+    const submit = vi.fn();
+    render(<QuestionSearch search={search({ setInput, submit, note: 'Materials search failed.' })} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search all questions' }), { target: { value: 'probing' } });
+    expect(setInput).toHaveBeenCalledWith('probing');
+    fireEvent.submit(screen.getByRole('search'));
+    expect(submit).toHaveBeenCalled();
+    expect(screen.getByText('Materials search failed.')).toBeInTheDocument();
+  });
+
+  it('shows a spinner while matching the materials', () => {
+    render(<QuestionSearch search={search({ input: 'probing', isMatching: true })} />);
+    expect(screen.getByLabelText('Searching')).toBeInTheDocument();
   });
 });
 

@@ -7,9 +7,8 @@ import type { AnalyticsPlace, PlaceFilter } from '../../../supabase/functions/_s
 import type { LabelQuestionsResponse } from '../../../supabase/functions/course-analytics/handler.ts';
 
 import { toQuestionArgs, type QuestionFilters, type QuestionSource } from './questionFilters';
-import { pickTopTerms, type QuestionTerm } from './questionTerms';
 
-export type { AnalyticsPlace, LabelQuestionsResponse, PlaceFilter, QuestionTerm };
+export type { AnalyticsPlace, LabelQuestionsResponse, PlaceFilter };
 
 export interface AnalyticsRange {
   startAt: string;
@@ -121,8 +120,12 @@ export async function fetchCitedFiles(courseId: string, range: AnalyticsRange): 
   }));
 }
 
-export async function fetchQuestionBuckets(courseId: string, range: AnalyticsRange): Promise<QuestionBucket[]> {
-  const rows = unwrap(await supabase.rpc('get_course_question_buckets', rangeArgs(courseId, range)));
+export async function fetchQuestionBuckets(
+  courseId: string,
+  range: AnalyticsRange,
+  studyOnly = false,
+): Promise<QuestionBucket[]> {
+  const rows = unwrap(await supabase.rpc('get_course_question_buckets', { ...rangeArgs(courseId, range), in_study_only: studyOnly }));
   return (rows ?? []).map((row) => ({
     category: row.category,
     questionCount: Number(row.question_count),
@@ -209,17 +212,6 @@ export async function fetchQuestionDetail(
       needsAttention: item.needs_attention === true,
     })),
   };
-}
-
-export async function fetchQuestionTerms(courseId: string, range: AnalyticsRange): Promise<QuestionTerm[]> {
-  const rows = unwrap(await supabase.rpc('get_course_question_terms', rangeArgs(courseId, range)));
-  return pickTopTerms((rows ?? []).map((row) => ({
-    key: row.term_key,
-    term: row.term,
-    wordCount: Number(row.word_count),
-    questionCount: Number(row.question_count),
-    studentCount: Number(row.student_count),
-  })));
 }
 
 // supabase-js reports a non-2xx function response with a generic message;
