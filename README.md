@@ -140,6 +140,10 @@ Coordinate this rollout in order:
 
 Do not drop the table while an older frontend or any deployed invitation endpoint still uses it. Rollback requires restoring the table/data from a backup; existing student accounts and enrollments are independent of it.
 
+### Citation analytics rollout
+
+Apply `20261024120000_citation_analytics.sql` (additive: new `query_events` columns, indexes and admin-only RPCs), deploy the new `course-analytics` function, then release the frontend. The function needs `OPENAI_API_KEY` with access to the Decisions API. Inspect hosted migration history first; apply this one migration on its own rather than with `supabase db push`.
+
 ### Stored video rollout
 
 Apply the three video migrations in timestamp order, then regenerate `src/integrations/supabase/types.ts`. Before the scheduling migration, create Vault secrets named `project_url` and `service_role_key`; use the project's current secret API key, not the legacy service-role JWT. Deploy `video-upload-session`, `transcribe-video`, `signed-media`, `assemblyai-video-webhook`, and `reconcile-video-transcriptions`.
