@@ -207,6 +207,7 @@ export function SourcesPanel({
           onClick={onOpenPanel}
           className="fixed right-0 top-1/2 -translate-y-1/2 rounded-l-lg border border-r-0 border-border bg-background p-2 shadow-md"
           aria-label="Open sources"
+          data-tour="sources-toggle"
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
