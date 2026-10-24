@@ -151,13 +151,10 @@ export function validateChatSettings(settings: ChatSettings): ChatSettingsErrors
   return errors;
 }
 
-// video_share_percent comes from migration 20261023090000, which has not been
-// applied to the project the generated types were last produced from. Drop
-// this addition once types.ts is regenerated after that migration.
 export type CourseChatSettingsUpdate = Omit<
   TablesUpdate<'course_chat_settings'>,
   'course_id' | 'created_at' | 'updated_at' | 'updated_by'
-> & { video_share_percent?: number | null };
+>;
 
 export function toSettingsRow(settings: ChatSettings): CourseChatSettingsUpdate {
   return {

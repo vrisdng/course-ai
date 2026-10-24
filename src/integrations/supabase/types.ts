@@ -293,6 +293,7 @@ export type Database = {
           summary_relevance_floor: number
           updated_at: string
           updated_by: string | null
+          video_share_percent: number | null
           video_spread_window_ms: number
         }
         Insert: {
@@ -319,6 +320,7 @@ export type Database = {
           summary_relevance_floor?: number
           updated_at?: string
           updated_by?: string | null
+          video_share_percent?: number | null
           video_spread_window_ms?: number
         }
         Update: {
@@ -345,6 +347,7 @@ export type Database = {
           summary_relevance_floor?: number
           updated_at?: string
           updated_by?: string | null
+          video_share_percent?: number | null
           video_spread_window_ms?: number
         }
         Relationships: [
