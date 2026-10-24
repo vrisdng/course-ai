@@ -1,19 +1,46 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, FileText, Loader2, MessageSquare, RotateCcw, UserCheck, Users } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Skeleton } from '@/components/ui/skeleton';
 import { supabase } from '@/integrations/supabase/client';
+import { cn } from '@/lib/utils';
 
-import { AnalyticsChatMessageList } from '@/features/analytics-chat/AnalyticsChatMessageList';
 import { useAnalyticsChat } from '@/features/analytics-chat/useAnalyticsChat';
-import { ChatComposer } from '@/features/student-chat/ChatComposer';
+import {
+  fetchCitedFiles,
+  fetchQuestionDetail,
+  fetchQuestionOverview,
+  type AnalyticsRange,
+  type QuestionOverview,
+} from '@/features/course-analytics/analyticsApi';
+import {
+  DEFAULT_PRESET,
+  RANGE_PRESETS,
+  formatDateTimeLocalValue,
+  formatRangeLabel,
+  presetRange,
+  resolveCustomRange,
+  type RangePreset,
+} from '@/features/course-analytics/analyticsRange';
+import { AnalyticsRangePicker } from '@/features/course-analytics/AnalyticsRangePicker';
+import { AskAnalyticsSheet } from '@/features/course-analytics/AskAnalyticsSheet';
+import { NavPane } from '@/features/course-analytics/NavPane';
+import { plural } from '@/features/course-analytics/questionCategories';
+import { QuestionDetailPane } from '@/features/course-analytics/QuestionDetailPane';
+import { QuestionSearch } from '@/features/course-analytics/QuestionSearch';
+import {
+  ALL_QUESTIONS,
+  filtersFor,
+  selectionTitle,
+  type Selection,
+} from '@/features/course-analytics/questionFilters';
+import { QuestionsPane } from '@/features/course-analytics/QuestionsPane';
+import { useLoader } from '@/features/course-analytics/useLoader';
+import { useQuestionFeed } from '@/features/course-analytics/useQuestionFeed';
+import { useQuestionLabels } from '@/features/course-analytics/useQuestionLabels';
+import { useTopicSearch } from '@/features/course-analytics/useTopicSearch';
 
 type Course = {
   id: string;
@@ -21,375 +48,214 @@ type Course = {
   code: string | null;
 };
 
-interface CourseStats {
-  enrolledStudents: number;
-  activeStudents: number;
-  documents: number;
-  totalQuestions: number;
+// Small screens show one pane at a time.
+type MobilePane = 'nav' | 'list' | 'detail';
+
+function daysFor(preset: RangePreset): number {
+  return RANGE_PRESETS.find((option) => option.value === preset)?.days ?? 30;
 }
 
-function padDateTimePart(value: number): string {
-  return String(value).padStart(2, '0');
-}
-
-function formatDateTimeLocalValue(date: Date): string {
-  return [
-    date.getFullYear(),
-    padDateTimePart(date.getMonth() + 1),
-    padDateTimePart(date.getDate()),
-  ].join('-') + `T${padDateTimePart(date.getHours())}:${padDateTimePart(date.getMinutes())}`;
-}
-
-function parseDateTimeLocalValue(value: string): Date | null {
-  if (!value.trim()) {
-    return null;
+function summary(overview: QuestionOverview, studyOnly: boolean): string {
+  const questions = overview.questionCount - (studyOnly ? overview.nonStudyCount : 0);
+  const parts = [plural(questions, 'question'), plural(overview.studentCount, 'student')];
+  if (overview.labeledCount > 0) {
+    parts.push(`${Math.round((overview.answeredFromMaterialsCount / overview.labeledCount) * 100)}% answered from materials`);
   }
-
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function formatAnalyticsRangeLabel(startAt: string | null, endAt: string | null): string {
-  if (!startAt || !endAt) {
-    return 'a valid selected range';
-  }
-
-  const formatter = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-
-  return `${formatter.format(new Date(startAt))} to ${formatter.format(new Date(endAt))}`;
+  return parts.join(' · ');
 }
 
 export default function AdminAnalytics() {
-  const defaultRangeEnd = new Date();
-  const defaultRangeStart = new Date(defaultRangeEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
-  const [rangeStartInput, setRangeStartInput] = useState<string>(formatDateTimeLocalValue(defaultRangeStart));
-  const [rangeEndInput, setRangeEndInput] = useState<string>(formatDateTimeLocalValue(defaultRangeEnd));
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
-  const [stats, setStats] = useState<CourseStats | null>(null);
-  const [isLoadingStats, setIsLoadingStats] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const parsedRangeStart = parseDateTimeLocalValue(rangeStartInput);
-  const parsedRangeEnd = parseDateTimeLocalValue(rangeEndInput);
-  const analyticsRangeError =
-    !rangeStartInput.trim()
-      ? 'Choose a start date and time.'
-      : !parsedRangeStart
-        ? 'Enter a valid start date and time.'
-        : !rangeEndInput.trim()
-          ? 'Choose an end date and time.'
-          : !parsedRangeEnd
-            ? 'Enter a valid end date and time.'
-            : parsedRangeStart.getTime() > parsedRangeEnd.getTime()
-              ? 'Start date and time must be earlier than or equal to the end date and time.'
-              : null;
-  const analyticsStartAt = analyticsRangeError || !parsedRangeStart ? null : parsedRangeStart.toISOString();
-  const analyticsEndAt = analyticsRangeError || !parsedRangeEnd ? null : parsedRangeEnd.toISOString();
-  const statItems = [
-    { key: 'enrolledStudents' as const, label: 'Enrolled Students', icon: Users },
-    { key: 'activeStudents' as const, label: 'Active Students', icon: UserCheck },
-    { key: 'documents' as const, label: 'Documents', icon: FileText },
-    { key: 'totalQuestions' as const, label: 'Questions', icon: MessageSquare },
-  ];
 
-  const { messages, input, setInput, isLoading, handleSend, stopGenerating, clearChat } =
-    useAnalyticsChat(selectedCourseId || null, analyticsStartAt, analyticsEndAt);
+  // A preset's window is fixed when it is picked, so it doesn't drift on re-render.
+  const [preset, setPreset] = useState<RangePreset>(DEFAULT_PRESET);
+  const [presetWindow, setPresetWindow] = useState<AnalyticsRange>(() => presetRange(daysFor(DEFAULT_PRESET)));
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
 
-  const fetchCourses = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('courses')
-      .select('id, name, code')
-      .order('name');
+  const [selection, setSelection] = useState<Selection>(ALL_QUESTIONS);
+  const [studyOnly, setStudyOnly] = useState(true);
+  const [questionId, setQuestionId] = useState<string | null>(null);
+  // Phones start on the views, the top of the drill-down.
+  const [mobilePane, setMobilePane] = useState<MobilePane>('nav');
 
-    if (error) {
-      toast.error(error.message || 'Failed to load courses');
-      setCourses([]);
-      setSelectedCourseId('');
-      setIsLoadingCourses(false);
-      return;
+  const custom = useMemo(() => resolveCustomRange(customStart, customEnd), [customStart, customEnd]);
+  const range: AnalyticsRange | null = preset === 'custom' ? custom.range : presetWindow;
+  const rangeError = preset === 'custom' ? custom.error : null;
+  const courseId = selectedCourseId || null;
+
+  const handlePresetChange = useCallback((next: RangePreset) => {
+    if (next === 'custom') {
+      // Start from the window currently shown.
+      setCustomStart(formatDateTimeLocalValue(new Date(presetWindow.startAt)));
+      setCustomEnd(formatDateTimeLocalValue(new Date(presetWindow.endAt)));
+    } else {
+      setPresetWindow(presetRange(daysFor(next)));
     }
+    setPreset(next);
+  }, [presetWindow]);
 
-    const nextCourses = (data || []) as Course[];
-    setCourses(nextCourses);
-    setSelectedCourseId((current) => current || nextCourses[0]?.id || '');
-    setIsLoadingCourses(false);
+  useEffect(() => {
+    void (async () => {
+      const { data, error } = await supabase.from('courses').select('id, name, code').order('name');
+      if (error) {
+        toast.error(error.message || 'Failed to load courses');
+        setCourses([]);
+      } else {
+        const nextCourses = (data || []) as Course[];
+        setCourses(nextCourses);
+        setSelectedCourseId((current) => current || nextCourses[0]?.id || '');
+      }
+      setIsLoadingCourses(false);
+    })();
   }, []);
 
-  useEffect(() => {
-    void fetchCourses();
-  }, [fetchCourses]);
+  const chat = useAnalyticsChat(courseId, range?.startAt ?? null, range?.endAt ?? null);
+  // Opening the page labels unlabelled questions; version goes up when that
+  // changed something, so the views that use labels reload.
+  const labels = useQuestionLabels(courseId, range, studyOnly);
 
-  // Fetch stats when course changes
-  useEffect(() => {
-    if (!selectedCourseId) {
-      setStats(null);
-      setIsLoadingStats(false);
-      return;
-    }
+  const rangeKey = courseId && range ? `${courseId}|${range.startAt}|${range.endAt}` : null;
+  const labelledKey = rangeKey && `${rangeKey}|${labels.version}`;
+  const overview = useLoader(labelledKey && `overview|${labelledKey}`, () => fetchQuestionOverview(courseId!, range!));
+  const files = useLoader(rangeKey && `files|${rangeKey}`, () => fetchCitedFiles(courseId!, range!));
 
-    if (analyticsRangeError || !analyticsStartAt || !analyticsEndAt) {
-      setStats(null);
-      setIsLoadingStats(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoadingStats(true);
-
-    const questionsQuery = supabase
-      .from('query_events')
-      .select('id', { count: 'exact', head: true })
-      .eq('outcome', 'success')
-      .is('error_code', null)
-      .eq('course_id', selectedCourseId)
-      .gte('created_at', analyticsStartAt)
-      .lte('created_at', analyticsEndAt);
-
-    Promise.all([
-      supabase
-        .from('enrollments')
-        .select('id', { count: 'exact', head: true })
-        .eq('course_id', selectedCourseId),
-      supabase.rpc('get_course_active_student_count', {
-        in_course_id: selectedCourseId,
-        in_start_at: analyticsStartAt,
-        in_end_at: analyticsEndAt,
-      }),
-      supabase
-        .from('materials')
-        .select('id', { count: 'exact', head: true })
-        .eq('course_id', selectedCourseId),
-      questionsQuery,
-    ])
-      .then(([enrollmentRes, activeRes, materialsRes, questionsRes]) => {
-        if (cancelled) return;
-        setStats({
-          enrolledStudents: enrollmentRes.count ?? 0,
-          activeStudents: typeof activeRes.data === 'number' ? activeRes.data : 0,
-          documents: materialsRes.count ?? 0,
-          totalQuestions: questionsRes.count ?? 0,
-        });
-        setIsLoadingStats(false);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error('Failed to load analytics stats:', error);
-        toast.error(error instanceof Error ? error.message : 'Failed to load analytics stats');
-        setStats(null);
-        setIsLoadingStats(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [analyticsEndAt, analyticsRangeError, analyticsStartAt, selectedCourseId]);
-
-  // Auto-scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSuggestionClick = useCallback(
-    (suggestion: string) => {
-      setInput(suggestion);
-    },
-    [setInput],
+  const filters = useMemo(() => filtersFor(selection, studyOnly), [selection, studyOnly]);
+  const feed = useQuestionFeed(courseId, range, filters, labels.version);
+  const detail = useLoader(
+    labelledKey && questionId ? `detail|${labelledKey}|${questionId}` : null,
+    () => fetchQuestionDetail(courseId!, range!, questionId!),
   );
 
-  const handleResetDateRange = useCallback(() => {
-    const nextRangeEnd = new Date();
-    const nextRangeStart = new Date(nextRangeEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
-    setRangeStartInput(formatDateTimeLocalValue(nextRangeStart));
-    setRangeEndInput(formatDateTimeLocalValue(nextRangeEnd));
+  // Keep a question open: the first one of each new list, unless the open
+  // one is in it.
+  useEffect(() => {
+    if (feed.isLoading) return;
+    setQuestionId((current) => {
+      if (current && feed.questions.some((question) => question.id === current)) return current;
+      return feed.questions[0]?.id ?? null;
+    });
+  }, [feed.isLoading, feed.questions]);
+
+  const onSearch = useCallback((next: Selection | null) => {
+    setSelection(next ?? ALL_QUESTIONS);
+    setMobilePane('list');
   }, []);
+  const search = useTopicSearch(courseId, onSearch);
+  const { setInput: setSearchInput } = search;
 
-  const handleAnalyticsSend = useCallback(() => {
-    if (analyticsRangeError) {
-      toast.error(analyticsRangeError);
-      return;
-    }
+  const select = (next: Selection) => {
+    setSearchInput('');
+    setSelection(next);
+    setMobilePane('list');
+  };
+  const openQuestion = (id: string) => {
+    setQuestionId(id);
+    setMobilePane('detail');
+  };
+  const changeCourse = (id: string) => {
+    setSelectedCourseId(id);
+    setSearchInput('');
+    setSelection(ALL_QUESTIONS);
+  };
 
-    handleSend();
-  }, [analyticsRangeError, handleSend]);
-
-  if (isLoadingCourses) {
-    return (
-      <MainLayout showFooter={false}>
-        <div className="flex h-[calc(100vh-4rem)] items-center justify-center supports-[height:100dvh]:h-[calc(100dvh-4rem)]">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      </MainLayout>
-    );
-  }
+  const rangeLabel = range ? formatRangeLabel(range) : null;
 
   return (
     <MainLayout showFooter={false}>
-      <div className="flex h-[calc(100vh-4rem)] flex-col supports-[height:100dvh]:h-[calc(100dvh-4rem)]">
-        {/* Header */}
-        <div className="border-b border-border px-4 py-3">
-          <div className="flex flex-col gap-3 sm:px-2 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h1 className="text-lg font-semibold">Course Analytics</h1>
-              <p className="text-xs text-muted-foreground">
-                Ask questions about student activity and course usage
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
-              <Select
-                value={selectedCourseId}
-                onValueChange={setSelectedCourseId}
-                disabled={courses.length === 0}
-              >
-                <SelectTrigger className="col-span-2 w-full sm:w-[200px]">
+      <div className="flex h-[calc(100dvh-4rem-1px)] min-h-[32rem] flex-col">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3">
+          <h1 className="text-lg font-semibold tracking-tight">Course analytics</h1>
+          {courses.length > 0 && (
+            <>
+              <Select value={selectedCourseId} onValueChange={changeCourse}>
+                <SelectTrigger className="h-8 w-full text-left sm:w-[220px]" aria-label="Course">
                   <SelectValue placeholder="Select a course" />
                 </SelectTrigger>
                 <SelectContent>
                   {courses.map((course) => (
                     <SelectItem key={course.id} value={course.id}>
-                      {course.name} {course.code ? `(${course.code})` : ''}
+                      {course.name}{course.code ? ` (${course.code})` : ''}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="analytics-start-at" className="text-xs text-muted-foreground">Start</Label>
-                <Input
-                  id="analytics-start-at"
-                  type="datetime-local"
-                  value={rangeStartInput}
-                  onChange={(event) => setRangeStartInput(event.target.value)}
-                  className="w-full min-w-0 text-sm sm:w-[220px]"
-                />
+              <AnalyticsRangePicker
+                preset={preset}
+                onPresetChange={handlePresetChange}
+                customStart={customStart}
+                customEnd={customEnd}
+                onCustomStartChange={setCustomStart}
+                onCustomEndChange={setCustomEnd}
+                error={rangeError}
+                rangeLabel={rangeLabel}
+              />
+              <p className="text-sm text-muted-foreground">
+                {overview.data ? summary(overview.data, studyOnly) : rangeLabel}
+              </p>
+              <div className="ml-auto">
+                <AskAnalyticsSheet chat={chat} disabledReason={rangeError} rangeLabel={rangeLabel} />
               </div>
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="analytics-end-at" className="text-xs text-muted-foreground">End</Label>
-                <Input
-                  id="analytics-end-at"
-                  type="datetime-local"
-                  value={rangeEndInput}
-                  onChange={(event) => setRangeEndInput(event.target.value)}
-                  className="w-full min-w-0 text-sm sm:w-[220px]"
-                />
-              </div>
-              <div className="col-span-2 flex gap-2">
-                <Button variant="outline" onClick={handleResetDateRange} className="flex-1 sm:flex-none">
-                  Last 30 days
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={clearChat}
-                  title="Clear chat"
-                  disabled={messages.length === 0 && !isLoading}
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
-          {analyticsRangeError ? (
-            <div className="mt-3 flex items-center gap-2 text-xs text-destructive sm:px-2">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>{analyticsRangeError}</span>
-            </div>
-          ) : (
-            <p className="mt-3 text-xs text-muted-foreground sm:px-2">
-              Showing analytics for {formatAnalyticsRangeLabel(analyticsStartAt, analyticsEndAt)}.
-            </p>
+            </>
           )}
         </div>
 
-        {/* Main content: sidebar + chat */}
-        <div className="flex flex-1 overflow-hidden">
-          {/* Stats sidebar */}
-          <aside className="hidden w-[220px] shrink-0 border-r border-border md:block">
-            <div className="space-y-1 p-4">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Overview
-              </h2>
-            </div>
-            <nav className="space-y-1 px-4 pb-4">
-              {statItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div
-                    key={item.key}
-                    className="flex items-center gap-3 rounded-lg px-3 py-3"
-                  >
-                    <div className="rounded-md bg-muted p-2 text-muted-foreground">
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs text-muted-foreground">{item.label}</p>
-                      {isLoadingStats ? (
-                        <Skeleton className="mt-1 h-5 w-10" />
-                      ) : (
-                        <p className="text-lg font-semibold">
-                          {stats ? stats[item.key] : '—'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </nav>
-          </aside>
-
-          {/* Chat area */}
-          <div className="flex flex-1 flex-col overflow-hidden">
-            {/* Mobile stats bar */}
-            <div className="flex gap-4 overflow-x-auto border-b border-border px-4 py-2 md:hidden">
-              {statItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div key={item.key} className="flex shrink-0 items-center gap-2">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">{item.label}:</span>
-                    {isLoadingStats ? (
-                      <Skeleton className="h-4 w-6" />
-                    ) : (
-                      <span className="text-sm font-semibold">
-                        {stats ? stats[item.key] : '—'}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <ScrollArea className="flex-1">
-              <div className="mx-auto max-w-3xl space-y-6 p-4">
-                <AnalyticsChatMessageList
-                  messages={messages}
-                  onSuggestionClick={handleSuggestionClick}
-                />
-                <div ref={messagesEndRef} />
-              </div>
-            </ScrollArea>
-
-            <ChatComposer
-              input={input}
-              isLoading={isLoading}
-              disabled={Boolean(analyticsRangeError)}
-              onInputChange={setInput}
-              onSend={handleAnalyticsSend}
-              onStop={stopGenerating}
-              placeholder="Ask about your course analytics..."
-              footerText={
-                analyticsRangeError
-                  ? 'Fix the analytics date range to ask questions.'
-                  : `Answers are generated from your course's usage data for ${formatAnalyticsRangeLabel(analyticsStartAt, analyticsEndAt)}`
-              }
-            />
+        {isLoadingCourses ? (
+          <div className="flex flex-1 items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-label="Loading courses" />
           </div>
-        </div>
+        ) : courses.length === 0 ? (
+          <p className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            No courses yet. Create a course to see its analytics.
+          </p>
+        ) : !range ? (
+          <p className="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">
+            {rangeError ?? 'Choose the dates to look at.'}
+          </p>
+        ) : (
+          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,380px)_minmax(0,1fr)]">
+            <aside className={cn('min-h-0 overflow-y-auto border-border lg:block lg:border-r', mobilePane !== 'nav' && 'hidden')}>
+              <div className="p-3 pb-0">
+                <QuestionSearch search={search} />
+              </div>
+              <NavPane
+                overview={overview}
+                files={files}
+                labels={labels}
+                selection={selection}
+                studyOnly={studyOnly}
+                onSelect={select}
+              />
+            </aside>
+            <section
+              aria-label="Questions"
+              className={cn('min-h-0 border-border lg:block lg:border-r', mobilePane !== 'list' && 'hidden')}
+            >
+              <QuestionsPane
+                title={selectionTitle(selection)}
+                feed={feed}
+                studyOnly={studyOnly}
+                onStudyOnlyChange={setStudyOnly}
+                selectedId={questionId}
+                onSelectQuestion={openQuestion}
+                onBack={() => setMobilePane('nav')}
+              />
+            </section>
+            <section
+              aria-label="Question detail"
+              className={cn('min-h-0 overflow-y-auto lg:block', mobilePane !== 'detail' && 'hidden')}
+            >
+              <QuestionDetailPane
+                detail={detail}
+                hasSelection={questionId !== null}
+                onSelectQuestion={(id) => setQuestionId(id)}
+                onBack={() => setMobilePane('list')}
+              />
+            </section>
+          </div>
+        )}
       </div>
     </MainLayout>
   );

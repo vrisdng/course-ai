@@ -115,6 +115,10 @@ The migration adds a password-update trigger, restrictive RLS policies for exist
 
 New accounts have confirmed emails and the shared initial password, with server-owned `must_change_password` metadata. Changing the password clears that marker atomically; no recovery email is required. Ordinary forgot-password recovery still depends on SMTP limits. SQL assertions for the migration are in `supabase/tests/student_password_setup.sql` and must run in an isolated database.
 
+### Citation analytics rollout
+
+Apply `20261024120000_citation_analytics.sql` (additive: new `query_events` columns, indexes and admin-only RPCs), then `20261025090000_question_analytics.sql` and `20261025120000_question_detail.sql` (admin-only RPCs; they replace two RPCs added by the first, which nothing else uses). Deploy the new `course-analytics` function, then release the frontend. The function needs `OPENAI_API_KEY` with access to the Decisions API. Inspect hosted migration history first; apply these three migrations one at a time, in order, rather than with `supabase db push`.
+
 ### Stored video rollout
 
 Apply the three video migrations in timestamp order, then regenerate `src/integrations/supabase/types.ts`. Before the scheduling migration, create Vault secrets named `project_url` and `service_role_key`; use the project's current secret API key, not the legacy service-role JWT. Deploy `video-upload-session`, `transcribe-video`, `signed-media`, `assemblyai-video-webhook`, and `reconcile-video-transcriptions`.

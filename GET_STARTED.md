@@ -113,7 +113,28 @@ Two invitation-based enrollment options remain available, both admin-only to cre
 
 ## Admin analytics
 
-`/admin-analytics` — per-course usage metrics: enrolled students, active students, document count, total questions asked, most-referenced documents, top questions asked, and keyword frequency (English stopwords filtered, top 20 keywords).
+`/admin-analytics` — per-course analytics for a date range (7, 30 or 90 days ending now, or custom). The page fits the screen, with three panes that scroll separately (one at a time on phones):
+
+- **Top bar:** course, a date button (presets or a custom range in its menu), a one-line summary (questions, students, share answered from materials), and **Ask a question**, which opens the analytics chat (see below) in a side panel.
+- **Left, search and views:**
+  - **Search all questions,** with a "Search in" switch:
+    - **Both** (default): either of the two below.
+    - **Text:** questions whose text mentions the search, matching word forms ("tables" finds "table").
+    - **Citations:** questions whose answers cited a page or video moment where the materials cover the search. The search text is embedded and matched against every chunk of the course.
+    - Changing the switch re-runs the search. The results become their own view; a search never filters the open view.
+    - If the materials search fails, Both falls back to text and says so; Citations shows nothing and says why.
+  - **All questions.**
+  - **Not from materials:** study questions whose answer didn't come from the materials. This uses the Decisions API label, or for unlabelled questions, "the answer cited nothing".
+  - **Files:** cited files. Copies of a file uploaded more than once are merged by name.
+  - **Question types.**
+- **Middle, questions** for the chosen view, newest first, one compact row each. "Hide greetings and logistics" (on by default) drops questions labelled as not study questions, and the counts in the left pane follow it.
+- **Right, one question in full:**
+  - the answer it got;
+  - what that answer cited, grouped by file;
+  - other questions in the window whose answers cited the same pages or video moments.
+
+- ⏱ **Questions are labelled when an admin opens the page.** Unlabelled questions in the window are sent to the Decisions API in rounds of up to 25 (at most 8 rounds per visit); each question is labelled once. Until then, a question shows its rule-based type.
+- Counts use citations' material, page and time, not chunk IDs, so they survive re-processing a material.
 
 - ⏱ **Default date range is the last 30 days**, computed from "now" — not a fixed calendar window. Admins can pick an arbitrary custom start/end range; the "reset" control re-anchors back to "now minus 30 days" rather than restoring a fixed default.
 - Top-questions and keyword-frequency results are hard-capped server-side (max 10 questions, max 20 keywords) regardless of what the client requests.
