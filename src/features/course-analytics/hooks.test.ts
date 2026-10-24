@@ -101,29 +101,71 @@ describe('useQuestionFeed', () => {
 });
 
 describe('useTopicSearch', () => {
-  it('finds the topic in the materials and sets it with the matched places', async () => {
+  const place = { key: 'm1:page:2', materialId: 'm1', fileName: 'A.pdf', fileType: 'pdf', pageNumber: 2, startMs: null, endMs: null, similarity: 0.5, snippet: '', chunkCount: 1 };
+
+  it('searches both question text and cited pages by default', async () => {
     const onTopic = vi.fn<(selection: Selection | null) => void>();
-    api.matchKeyword.mockResolvedValue([
-      { key: 'm1:page:2', materialId: 'm1', fileName: 'A.pdf', fileType: 'pdf', pageNumber: 2, startMs: null, endMs: null, similarity: 0.5, snippet: '', chunkCount: 1 },
-    ]);
+    api.matchKeyword.mockResolvedValue([place]);
     const { result } = renderHook(() => useTopicSearch(COURSE, onTopic));
+    expect(result.current.mode).toBe('both');
     act(() => result.current.setInput('  hashing '));
     await act(() => result.current.submit());
 
     expect(api.matchKeyword).toHaveBeenCalledWith(COURSE, 'hashing');
-    expect(onTopic).toHaveBeenCalledWith({ kind: 'search', text: 'hashing', places: [{ material_id: 'm1', page_number: 2 }] });
+    expect(onTopic).toHaveBeenCalledWith({ kind: 'search', text: 'hashing', mode: 'both', places: [{ material_id: 'm1', page_number: 2 }] });
     expect(result.current.note).toBeNull();
   });
 
-  it('falls back to matching question text when the materials search fails', async () => {
+  it('searches question text only without searching the materials', async () => {
+    const onTopic = vi.fn();
+    const { result } = renderHook(() => useTopicSearch(COURSE, onTopic));
+    act(() => result.current.setMode('questions'));
+    act(() => result.current.setInput('hashing'));
+    await act(() => result.current.submit());
+
+    expect(api.matchKeyword).not.toHaveBeenCalled();
+    expect(onTopic).toHaveBeenLastCalledWith({ kind: 'search', text: 'hashing', mode: 'questions', places: null });
+  });
+
+  it('re-runs the current search when the mode changes', async () => {
+    const onTopic = vi.fn();
+    api.matchKeyword.mockResolvedValue([place]);
+    const { result } = renderHook(() => useTopicSearch(COURSE, onTopic));
+    act(() => result.current.setInput('hashing'));
+    await act(() => result.current.submit());
+    await act(async () => result.current.setMode('materials'));
+
+    await waitFor(() => expect(onTopic).toHaveBeenLastCalledWith({
+      kind: 'search', text: 'hashing', mode: 'materials', places: [{ material_id: 'm1', page_number: 2 }],
+    }));
+
+    onTopic.mockClear();
+    act(() => result.current.setInput(''));
+    await act(async () => result.current.setMode('both'));
+    expect(onTopic).not.toHaveBeenCalled();
+  });
+
+  it('falls back to question text when the materials search fails', async () => {
     const onTopic = vi.fn();
     api.matchKeyword.mockRejectedValue(new Error('OpenAI is down'));
     const { result } = renderHook(() => useTopicSearch(COURSE, onTopic));
     act(() => result.current.setInput('hashing'));
     await act(() => result.current.submit());
 
-    expect(onTopic).toHaveBeenCalledWith({ kind: 'search', text: 'hashing', places: null });
+    expect(onTopic).toHaveBeenCalledWith({ kind: 'search', text: 'hashing', mode: 'both', places: null });
     expect(result.current.note).toMatch(/OpenAI is down/);
+  });
+
+  it('finds nothing, and says why, when a cited-pages search fails', async () => {
+    const onTopic = vi.fn();
+    api.matchKeyword.mockRejectedValue(new Error('OpenAI is down'));
+    const { result } = renderHook(() => useTopicSearch(COURSE, onTopic));
+    act(() => result.current.setMode('materials'));
+    act(() => result.current.setInput('hashing'));
+    await act(() => result.current.submit());
+
+    expect(onTopic).toHaveBeenLastCalledWith({ kind: 'search', text: 'hashing', mode: 'materials', places: [] });
+    expect(result.current.note).toMatch(/Couldn't search the materials \(OpenAI is down\)\.$/);
   });
 
   it('clears the topic for a blank search', async () => {

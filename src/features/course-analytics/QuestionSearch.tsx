@@ -2,8 +2,16 @@ import type { FormEvent } from 'react';
 import { Loader2, Search } from 'lucide-react';
 
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 
+import type { SearchMode } from './questionFilters';
 import type { TopicSearchState } from './useTopicSearch';
+
+const MODES: ReadonlyArray<{ value: SearchMode; label: string; hint: string }> = [
+  { value: 'both', label: 'Both', hint: 'Questions that mention it, or whose answers cited pages about it' },
+  { value: 'questions', label: 'Text', hint: 'Questions that mention it' },
+  { value: 'materials', label: 'Citations', hint: 'Questions whose answers cited pages or moments about it' },
+];
 
 // Search across every question in the dates, whatever view is open. Sits
 // above the views, since a search replaces the view rather than filtering it.
@@ -34,6 +42,27 @@ export function QuestionSearch({ search }: { search: TopicSearchState }) {
           </span>
         )}
       </form>
+      <div role="radiogroup" aria-label="Search in" className="flex rounded-md bg-muted/60 p-0.5 text-xs">
+        {MODES.map((option) => {
+          const isChecked = search.mode === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={isChecked}
+              title={option.hint}
+              onClick={() => search.setMode(option.value)}
+              className={cn(
+                'flex-1 whitespace-nowrap rounded px-1.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isChecked ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
       {search.note && <p className="text-xs text-muted-foreground">{search.note}</p>}
     </div>
   );

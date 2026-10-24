@@ -73,7 +73,7 @@ function feed(overrides: Partial<QuestionFeedState> = {}): QuestionFeedState {
 }
 
 function search(overrides: Partial<TopicSearchState> = {}): TopicSearchState {
-  return { input: '', setInput: vi.fn(), submit: vi.fn(), isMatching: false, note: null, ...overrides };
+  return { input: '', setInput: vi.fn(), submit: vi.fn(), isMatching: false, note: null, mode: 'both', setMode: vi.fn(), ...overrides };
 }
 
 describe('QuestionsPane', () => {
@@ -132,6 +132,17 @@ describe('QuestionSearch', () => {
     fireEvent.submit(screen.getByRole('search'));
     expect(submit).toHaveBeenCalled();
     expect(screen.getByText('Materials search failed.')).toBeInTheDocument();
+  });
+
+  it('chooses where to search', () => {
+    const setMode = vi.fn();
+    render(<QuestionSearch search={search({ setMode })} />);
+    const group = screen.getByRole('radiogroup', { name: 'Search in' });
+    expect(within(group).getByRole('radio', { name: 'Both' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(within(group).getByRole('radio', { name: 'Text' }));
+    expect(setMode).toHaveBeenCalledWith('questions');
+    fireEvent.click(within(group).getByRole('radio', { name: 'Citations' }));
+    expect(setMode).toHaveBeenCalledWith('materials');
   });
 
   it('shows a spinner while matching the materials', () => {
