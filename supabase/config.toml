@@ -48,6 +48,9 @@ verify_jwt = false
 [functions.analytics-chat]
 verify_jwt = false
 
+[functions.course-analytics]
+verify_jwt = false
+
 [functions.generate-course-code]
 verify_jwt = false
 
