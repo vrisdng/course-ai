@@ -8,9 +8,10 @@ import type { SearchMode } from './questionFilters';
 import type { TopicSearchState } from './useTopicSearch';
 
 const MODES: ReadonlyArray<{ value: SearchMode; label: string; hint: string }> = [
-  { value: 'both', label: 'Both', hint: 'Questions that mention it, or whose answers cited pages about it' },
+  // Both comes last so it reads as "the two above, together".
   { value: 'questions', label: 'Text', hint: 'Questions that mention it' },
   { value: 'materials', label: 'Citations', hint: 'Questions whose answers cited pages or moments about it' },
+  { value: 'both', label: 'Both', hint: 'Questions that mention it, or whose answers cited pages about it' },
 ];
 
 // Search across every question in the dates, whatever view is open. Sits
