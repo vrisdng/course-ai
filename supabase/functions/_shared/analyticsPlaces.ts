@@ -47,6 +47,8 @@ export type PlaceFilter =
 export const KEYWORD_MATCH_THRESHOLD = 0.25;
 export const KEYWORD_MATCH_COUNT = 40;
 
+type TimedChunk = MatchedChunk & { start_ms: number };
+
 // Video chunks of the same material closer than this merge into one place.
 const VIDEO_MERGE_GAP_MS = 30_000;
 
@@ -78,11 +80,7 @@ function absorb(place: AnalyticsPlace, chunk: MatchedChunk): void {
   }
 }
 
-function isTimed(chunk: MatchedChunk): chunk is MatchedChunk & { start_ms: number } {
-  return chunk.start_ms !== null;
-}
-
-function mergeVideoChunks(chunks: Array<MatchedChunk & { start_ms: number }>): AnalyticsPlace[] {
+function mergeVideoChunks(chunks: TimedChunk[]): AnalyticsPlace[] {
   const sorted = [...chunks].sort((a, b) => a.start_ms - b.start_ms);
   const places: AnalyticsPlace[] = [];
   for (const chunk of sorted) {
@@ -102,12 +100,13 @@ function mergeVideoChunks(chunks: Array<MatchedChunk & { start_ms: number }>): A
 // Groups matched chunks into places, best match first.
 export function groupChunksIntoPlaces(chunks: MatchedChunk[]): AnalyticsPlace[] {
   const documentPlaces = new Map<string, AnalyticsPlace>();
-  const videoChunks = new Map<string, Array<MatchedChunk & { start_ms: number }>>();
+  const videoChunks = new Map<string, TimedChunk[]>();
 
   for (const chunk of chunks) {
-    if (isTimed(chunk)) {
+    const startMs = chunk.start_ms;
+    if (startMs !== null) {
       const list = videoChunks.get(chunk.material_id) ?? [];
-      list.push(chunk);
+      list.push({ ...chunk, start_ms: startMs });
       videoChunks.set(chunk.material_id, list);
       continue;
     }
