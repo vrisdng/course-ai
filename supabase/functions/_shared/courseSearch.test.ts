@@ -10,6 +10,8 @@ import {
   type NumberedSource,
   type SearchableChunk,
 } from "./courseSearch.ts";
+import { resolveChatSettings } from "./chatSettings.ts";
+import { selectSearchResults } from "./retrieval.ts";
 
 function chunk(id: string, overrides: Partial<SearchableChunk> = {}): SearchableChunk {
   return {
@@ -163,5 +165,37 @@ describe("sourceLimitForSearches", () => {
 
   it("never goes below one source", () => {
     expect(sourceLimitForSearches(0, 10)).toBe(1);
+  });
+});
+
+describe("runCourseSearch with a course video share", () => {
+  const passage = (id: string, type: "video" | "pdf", score: number) =>
+    chunk(id, { material_type: type, relevance_score: score, chunk_text: `${type} passage ${id} `.repeat(20), start_ms: type === "video" ? Number(id.slice(1)) * 600_000 : null });
+  // A video-heavy corpus: transcripts outscore the slides on similarity.
+  const corpus = [
+    ...Array.from({ length: 8 }, (_, i) => passage(`v${i + 1}`, "video", 0.8 - i * 0.01)),
+    ...Array.from({ length: 8 }, (_, i) => passage(`d${i + 1}`, "pdf", 0.5 - i * 0.01)),
+  ];
+  const settings = resolveChatSettings({ video_share_percent: 25, final_count: 4, semantic_weight: 1 });
+  const retrieval = { matchThreshold: 0.2, matchCount: 18, relevanceFloor: 0.2, finalCount: 4 };
+
+  it("balances every search and keeps a re-found source's number across searches", async () => {
+    const registry = new SourceRegistry<SearchableChunk>(sourceLimitForSearches(4, 4));
+    const deps: CourseSearchDeps<SearchableChunk> = {
+      search: async (query) => selectSearchResults(corpus, query, { retrieval, settings, isSummaryQuery: false }),
+      registry,
+      prepare: vi.fn(async () => {}),
+      renderBody: (source) => source.chunk.chunk_text.slice(0, 20),
+    };
+
+    const first = await runCourseSearch("first query", deps);
+    expect(first.match(/\[video\]/g)).toHaveLength(1);
+    expect(first.match(/\[pdf\]/g)).toHaveLength(3);
+
+    // The same passages come back: they keep their numbers, nothing is added.
+    const second = await runCourseSearch("second query", deps);
+    expect(second).toContain("Source [1]:");
+    expect(registry.size).toBe(4);
+    expect(deps.prepare).toHaveBeenCalledTimes(1);
   });
 });

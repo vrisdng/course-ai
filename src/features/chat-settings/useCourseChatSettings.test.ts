@@ -72,6 +72,38 @@ describe('useCourseChatSettings', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Chat settings saved');
   });
 
+  it('round-trips the video share through the settings row', async () => {
+    mocks.from.mockReturnValueOnce(chain({ data: { video_share_percent: 20 }, error: null }));
+    const { result } = renderHook(() => useCourseChatSettings('course-1', 'admin-1'));
+    await waitFor(() => expect(result.current.settings?.videoSharePercent).toBe(20));
+
+    const saveDb = chain({ data: { video_share_percent: 70 }, error: null });
+    mocks.from.mockReturnValueOnce(saveDb);
+    await act(async () => {
+      await result.current.save({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 70 });
+    });
+    expect(saveDb.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ course_id: 'course-1', video_share_percent: 70 }),
+      { onConflict: 'course_id' },
+    );
+    expect(result.current.settings?.videoSharePercent).toBe(70);
+  });
+
+  it('keeps the stored share when the database refuses the change (e.g. a non-admin blocked by RLS)', async () => {
+    mocks.from.mockReturnValueOnce(chain({ data: { video_share_percent: 20 }, error: null }));
+    const { result } = renderHook(() => useCourseChatSettings('course-1', 'student-1'));
+    await waitFor(() => expect(result.current.settings).not.toBeNull());
+
+    mocks.from.mockReturnValueOnce(chain({ data: null, error: { message: 'new row violates row-level security policy' } }));
+    let saved = true;
+    await act(async () => {
+      saved = await result.current.save({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 90 });
+    });
+    expect(saved).toBe(false);
+    expect(result.current.settings?.videoSharePercent).toBe(20);
+    expect(mocks.toastError).toHaveBeenCalledWith('Could not save chat settings: new row violates row-level security policy');
+  });
+
   it('reports a save failure and keeps the previous settings', async () => {
     mocks.from.mockReturnValueOnce(chain({ data: { final_count: 6 }, error: null }));
     const { result } = renderHook(() => useCourseChatSettings('course-1', 'admin-1'));

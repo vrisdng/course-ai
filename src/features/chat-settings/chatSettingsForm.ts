@@ -126,6 +126,18 @@ export function validateChatSettings(settings: ChatSettings): ChatSettingsErrors
     }
   }
 
+  const videoShare = settings.videoSharePercent;
+  if (videoShare !== null) {
+    const range = CHAT_SETTING_RANGES.videoSharePercent;
+    if (!Number.isFinite(videoShare)) {
+      errors.videoSharePercent = 'Enter a number.';
+    } else if (videoShare < range.min || videoShare > range.max) {
+      errors.videoSharePercent = `Must be between ${range.min} and ${range.max}.`;
+    } else if (!Number.isInteger(videoShare)) {
+      errors.videoSharePercent = 'Must be a whole number.';
+    }
+  }
+
   if (settings.allowedModelTiers.length === 0) {
     errors.allowedModelTiers = 'Allow at least one model.';
   } else if (!settings.allowedModelTiers.includes(settings.defaultModelTier)) {
@@ -165,6 +177,23 @@ export function toSettingsRow(settings: ChatSettings): CourseChatSettingsUpdate 
     history_message_clip: settings.historyMessageClip,
     query_rewrite_enabled: settings.queryRewriteEnabled,
     video_spread_window_ms: settings.videoSpreadWindowMs,
+    video_share_percent: settings.videoSharePercent,
     course_instructions: settings.courseInstructions.trim(),
   };
+}
+
+// Where the share starts when an admin turns the balance on.
+export const VIDEO_SHARE_START_PERCENT = 50;
+export const VIDEO_SHARE_STEP = 5;
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+// A concrete reading of the share for the admin, using the course's own
+// sources-per-search setting.
+export function videoShareExample(videoSharePercent: number | null, finalCount: number): string {
+  if (videoSharePercent === null) {
+    return 'Off: each search keeps the most relevant passages, whatever their type.';
+  }
+  const fromVideo = Math.round((finalCount * videoSharePercent) / 100);
+  return `Example: with ${plural(finalCount, 'source')} per search and passages of similar length, about ${fromVideo} would come from video and ${finalCount - fromVideo} from documents, when both have enough relevant passages.`;
 }

@@ -29,6 +29,11 @@ export interface ChatSettings {
   queryRewriteEnabled: boolean;
   // Video chunks in a summary closer together than this are treated as overlapping.
   videoSpreadWindowMs: number;
+  // Target share (0-100) of each search's source text that comes from video
+  // transcripts rather than documents, among passages that pass the relevance
+  // floor. null = off: sources are ranked by relevance alone. See
+  // balanceByVideoShare in retrieval.ts.
+  videoSharePercent: number | null;
   courseInstructions: string;
 }
 
@@ -53,6 +58,7 @@ export interface CourseChatSettingsRow {
   history_message_clip?: number | null;
   query_rewrite_enabled?: boolean | null;
   video_spread_window_ms?: number | null;
+  video_share_percent?: number | null;
   course_instructions?: string | null;
 }
 
@@ -84,6 +90,7 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   historyMessageClip: 850,
   queryRewriteEnabled: true,
   videoSpreadWindowMs: 60_000,
+  videoSharePercent: null,
   courseInstructions: "",
 };
 
@@ -98,7 +105,10 @@ type NumericSettingKey = {
 }[keyof ChatSettings];
 
 // Kept in step with the CHECK constraints on public.course_chat_settings.
-export const CHAT_SETTING_RANGES: Record<NumericSettingKey, NumberRange> & { courseInstructionsMaxChars: number } = {
+export const CHAT_SETTING_RANGES: Record<NumericSettingKey, NumberRange> & {
+  videoSharePercent: NumberRange;
+  courseInstructionsMaxChars: number;
+} = {
   matchThreshold: { min: 0, max: 1, integer: false },
   summaryMatchThreshold: { min: 0, max: 1, integer: false },
   matchCount: { min: 1, max: 100, integer: true },
@@ -115,16 +125,26 @@ export const CHAT_SETTING_RANGES: Record<NumericSettingKey, NumberRange> & { cou
   historyCharBudget: { min: 0, max: 40000, integer: true },
   historyMessageClip: { min: 100, max: 5000, integer: true },
   videoSpreadWindowMs: { min: 0, max: 600_000, integer: true },
+  videoSharePercent: { min: 0, max: 100, integer: true },
   courseInstructionsMaxChars: 4000,
 };
+
+function clampToRange(value: number, range: NumberRange): number {
+  const clamped = Math.min(range.max, Math.max(range.min, value));
+  return range.integer ? Math.round(clamped) : clamped;
+}
 
 function resolveNumber(raw: unknown, key: NumericSettingKey): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return DEFAULT_CHAT_SETTINGS[key];
   }
-  const range = CHAT_SETTING_RANGES[key];
-  const clamped = Math.min(range.max, Math.max(range.min, raw));
-  return range.integer ? Math.round(clamped) : clamped;
+  return clampToRange(raw, CHAT_SETTING_RANGES[key]);
+}
+
+// Anything but a stored number leaves the balance off.
+function resolveVideoSharePercent(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  return clampToRange(raw, CHAT_SETTING_RANGES.videoSharePercent);
 }
 
 function isModelTier(value: unknown): value is ChatModelTier {
@@ -167,6 +187,7 @@ export function resolveChatSettings(row: CourseChatSettingsRow | null): ChatSett
       ? row.query_rewrite_enabled
       : DEFAULT_CHAT_SETTINGS.queryRewriteEnabled,
     videoSpreadWindowMs: resolveNumber(row.video_spread_window_ms, "videoSpreadWindowMs"),
+    videoSharePercent: resolveVideoSharePercent(row.video_share_percent),
     courseInstructions: instructions.slice(0, CHAT_SETTING_RANGES.courseInstructionsMaxChars),
   };
 }

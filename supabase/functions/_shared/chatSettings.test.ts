@@ -34,6 +34,7 @@ describe("resolveChatSettings", () => {
       history_message_clip: 600,
       query_rewrite_enabled: false,
       video_spread_window_ms: 30_000,
+      video_share_percent: 35,
       course_instructions: "Answer in British English.",
     };
 
@@ -57,6 +58,7 @@ describe("resolveChatSettings", () => {
       historyMessageClip: 600,
       queryRewriteEnabled: false,
       videoSpreadWindowMs: 30_000,
+      videoSharePercent: 35,
       courseInstructions: "Answer in British English.",
     });
   });
@@ -100,6 +102,31 @@ describe("resolveChatSettings", () => {
   it("keeps the default query-rewrite flag unless a boolean is stored", () => {
     expect(resolveChatSettings({ query_rewrite_enabled: null }).queryRewriteEnabled).toBe(true);
     expect(resolveChatSettings({ query_rewrite_enabled: false }).queryRewriteEnabled).toBe(false);
+  });
+});
+
+describe("resolveChatSettings video share", () => {
+  it("is off (pure relevance ranking) by default and when nothing is stored", () => {
+    expect(DEFAULT_CHAT_SETTINGS.videoSharePercent).toBeNull();
+    expect(resolveChatSettings({}).videoSharePercent).toBeNull();
+    expect(resolveChatSettings({ video_share_percent: null }).videoSharePercent).toBeNull();
+  });
+
+  it("keeps the endpoints and a midpoint", () => {
+    expect(resolveChatSettings({ video_share_percent: 0 }).videoSharePercent).toBe(0);
+    expect(resolveChatSettings({ video_share_percent: 50 }).videoSharePercent).toBe(50);
+    expect(resolveChatSettings({ video_share_percent: 100 }).videoSharePercent).toBe(100);
+  });
+
+  it("clamps to 0-100 and rounds to whole percents", () => {
+    expect(resolveChatSettings({ video_share_percent: -5 }).videoSharePercent).toBe(0);
+    expect(resolveChatSettings({ video_share_percent: 140 }).videoSharePercent).toBe(100);
+    expect(resolveChatSettings({ video_share_percent: 32.6 }).videoSharePercent).toBe(33);
+  });
+
+  it("treats a non-numeric value as off rather than guessing a share", () => {
+    expect(resolveChatSettings({ video_share_percent: Number.NaN }).videoSharePercent).toBeNull();
+    expect(resolveChatSettings({ video_share_percent: "40" as unknown as number }).videoSharePercent).toBeNull();
   });
 });
 
