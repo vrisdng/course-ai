@@ -137,9 +137,9 @@ export function QuestionDetailPane({ detail, hasSelection, onSelectQuestion, onB
         )}
       </Block>
 
-      <Block title="Also asked about the same places">
+      <Block title="Also asked about the same subject">
         {question.related.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No other questions cited the same places.</p>
+          <p className="text-sm text-muted-foreground">No other questions on the same subject.</p>
         ) : (
           <>
             <ul className="divide-y divide-border rounded-lg border border-border">
