@@ -5,12 +5,16 @@ import type { PlaceFilter } from '../../../supabase/functions/_shared/analyticsP
 
 import { categoryLabel } from './questionCategories';
 
+// Where a search looks: question text, pages and moments the answers cited
+// (where the materials cover the search), or either.
+export type SearchMode = 'both' | 'questions' | 'materials';
+
 export type Selection =
   | { kind: 'all' }
   | { kind: 'attention' }
-  // A typed search: question text, or answers citing where the materials
-  // cover it (places; null when the materials search failed).
-  | { kind: 'search'; text: string; places: PlaceFilter[] | null }
+  // A typed search. places: where the materials cover it; null when the
+  // materials weren't searched (mode 'questions', or the search failed).
+  | { kind: 'search'; text: string; mode: SearchMode; places: PlaceFilter[] | null }
   // Copies of a file share its name, so a file is the set of their ids.
   | { kind: 'file'; name: string; fileType: string; ids: string[] }
   | { kind: 'type'; category: string };
@@ -29,8 +33,8 @@ export interface QuestionFilters {
 
 export function filtersFor(selection: Selection, studyOnly: boolean): QuestionFilters {
   return {
-    topicText: selection.kind === 'search' ? selection.text : null,
-    topicPlaces: selection.kind === 'search' ? selection.places : null,
+    topicText: selection.kind === 'search' && selection.mode !== 'materials' ? selection.text : null,
+    topicPlaces: selection.kind === 'search' && selection.mode !== 'questions' ? selection.places : null,
     materialIds: selection.kind === 'file' ? selection.ids : null,
     category: selection.kind === 'type' ? selection.category : null,
     needsAttention: selection.kind === 'attention',
@@ -66,7 +70,10 @@ export function selectionTitle(selection: Selection): string {
   switch (selection.kind) {
     case 'all': return 'All questions';
     case 'attention': return 'Not answered from materials';
-    case 'search': return `About “${selection.text}”`;
+    case 'search':
+      if (selection.mode === 'questions') return `Mentions “${selection.text}”`;
+      if (selection.mode === 'materials') return `Cited pages about “${selection.text}”`;
+      return `About “${selection.text}”`;
     case 'file': return `Cited ${selection.name}`;
     case 'type': return categoryLabel(selection.category);
   }
@@ -74,7 +81,7 @@ export function selectionTitle(selection: Selection): string {
 
 function selectionKey(selection: Selection): string {
   switch (selection.kind) {
-    case 'search': return `search:${selection.text}`;
+    case 'search': return `search:${selection.mode}:${selection.text}`;
     case 'file': return `file:${selection.name}`;
     case 'type': return `type:${selection.category}`;
     default: return selection.kind;

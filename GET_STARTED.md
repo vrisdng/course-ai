@@ -117,7 +117,12 @@ Two invitation-based enrollment options remain available, both admin-only to cre
 
 - **Top bar:** course, a date button (presets or a custom range in its menu), a one-line summary (questions, students, share answered from materials), and **Ask a question**, which opens the analytics chat (see below) in a side panel.
 - **Left, search and views:**
-  - **Search all questions:** matches question text, or answers that cited where the materials cover the search (the text is embedded and matched against every chunk of the course). The results become their own view; a search never filters the open view.
+  - **Search all questions,** with a "Search in" switch:
+    - **Both** (default): either of the two below.
+    - **Text:** questions whose text mentions the search, matching word forms ("tables" finds "table").
+    - **Citations:** questions whose answers cited a page or video moment where the materials cover the search. The search text is embedded and matched against every chunk of the course.
+    - Changing the switch re-runs the search. The results become their own view; a search never filters the open view.
+    - If the materials search fails, Both falls back to text and says so; Citations shows nothing and says why.
   - **All questions.**
   - **Not from materials:** study questions whose answer didn't come from the materials. This uses the Decisions API label, or for unlabelled questions, "the answer cited nothing".
   - **Files:** cited files. Copies of a file uploaded more than once are merged by name.

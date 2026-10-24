@@ -130,6 +130,11 @@ describe('AdminAnalytics', () => {
     fireEvent.submit(screen.getByRole('search'));
     await waitFor(() => expect(lastFilters()).toMatchObject({ topicText: 'probing', topicPlaces: [{ material_id: 'm1', page_number: 2 }] }));
     expect(screen.getByRole('heading', { name: 'About “probing”' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Text' }));
+    await waitFor(() => expect(lastFilters()).toMatchObject({ topicText: 'probing', topicPlaces: null }));
+    expect(screen.getByRole('heading', { name: 'Mentions “probing”' })).toBeInTheDocument();
+    expect(api.matchKeyword).toHaveBeenCalledTimes(1);
   });
 
   it('switches presets and validates a custom range', async () => {
