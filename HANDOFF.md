@@ -195,6 +195,16 @@ The analytics page counts what answers *cited* rather than grouping questions in
 - **Keyword search** (`course-analytics` → `match_course_chunks_for_analytics`) searches every material of the course regardless of term or access scope, never student documents, admins only. The floor is `KEYWORD_MATCH_THRESHOLD = 0.2` in `_shared/analyticsPlaces.ts`, measured on real notes: covered topics scored 0.37–0.65, a rare covered term 0.24, off-topic words ≤ 0.17. Video chunks within 30 s merge into one place.
 - **"Cited" is not "asked about":** an answer can cite a background page. The page says so.
 - **Labels** (`_shared/questionLabels.ts`): one Decisions API request per question with three questions (category choice, two predicates; "yes" from probability 0.5). Refusals are saved as NULL with `ai_labeled_at` set, so nothing is re-sent; failed calls are left unlabelled and retried on the next visit. `query_category` (regex) remains the fallback. Labelling runs when an admin opens the page (`useQuestionLabels`), not from `rag-chat`, so no chat path changed and no schedule is needed.
+- **Question-first page (2026-10-25):**
+  - Migrations `20261025090000_question_analytics.sql` and `20261025120000_question_detail.sql` add four functions:
+    - `get_course_question_overview`;
+    - `get_course_questions`, a filterable, paged list;
+    - `get_course_question_terms`;
+    - `get_course_question_detail`, which returns the answer text and related questions.
+  - They also add `get_course_cited_files` and drop `get_course_questions_at_places`. Tests are in `supabase/tests/question_analytics.sql`.
+  - Copies of a file are merged **by file name** (the cited-files list, answer sources, related questions). Two different files with the same name in one course would also merge.
+  - Terms are computed per request with Postgres text search: one `to_tsvector` pass over the course's chunks, about 20 ms on the local test course. If large courses get slow, precompute chunk vocabularies.
+  - "Not from materials" is the Decisions API label when one exists. Unlabelled questions count when their answer cited nothing.
 - The Decisions API has no AI SDK binding: `_shared/decisions.ts` is a small fetch client (retries 429/5xx), exposed through `llm.ts#createOpenAIDecisionsClient`. Only `gpt-6-luna` is supported.
 
 ## Student chat telemetry (2026-10-22)

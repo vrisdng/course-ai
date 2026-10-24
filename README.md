@@ -117,7 +117,7 @@ New accounts have confirmed emails and the shared initial password, with server-
 
 ### Citation analytics rollout
 
-Apply `20261024120000_citation_analytics.sql` (additive: new `query_events` columns, indexes and admin-only RPCs), deploy the new `course-analytics` function, then release the frontend. The function needs `OPENAI_API_KEY` with access to the Decisions API. Inspect hosted migration history first; apply this one migration on its own rather than with `supabase db push`.
+Apply `20261024120000_citation_analytics.sql` (additive: new `query_events` columns, indexes and admin-only RPCs), then `20261025090000_question_analytics.sql` and `20261025120000_question_detail.sql` (admin-only RPCs; they replace two RPCs added by the first, which nothing else uses). Deploy the new `course-analytics` function, then release the frontend. The function needs `OPENAI_API_KEY` with access to the Decisions API. Inspect hosted migration history first; apply this one migration on its own rather than with `supabase db push`.
 
 ### Stored video rollout
 

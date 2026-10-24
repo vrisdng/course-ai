@@ -28,7 +28,7 @@ export function AskAnalyticsSheet({ chat, disabledReason, rangeLabel }: AskAnaly
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" className="w-full">
+        <Button variant="outline" size="sm">
           <MessageSquare className="h-4 w-4" aria-hidden="true" />
           Ask a question
         </Button>

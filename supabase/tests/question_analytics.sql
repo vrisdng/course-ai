@@ -1,6 +1,6 @@
--- Run after migration 20261025090000; all fixtures roll back.
+-- Run after migrations 20261025090000 and 20261025120000; all fixtures roll back.
 -- Covers the question-first analytics RPCs: the overview numbers, the
--- filterable question list and the common question terms.
+-- filterable question list, one question's detail and the common terms.
 BEGIN;
 INSERT INTO auth.users (id, email, raw_app_meta_data, raw_user_meta_data) VALUES
   ('cb000000-0000-4000-8000-000000000001', 'question-admin@example.test', '{}', '{}'),
@@ -17,7 +17,9 @@ INSERT INTO public.courses (id, name) VALUES
 INSERT INTO public.materials (id, course_id, academic_term_id, file_name, file_path, file_type) VALUES
   ('cb000000-0000-4000-8000-000000000030', 'cb000000-0000-4000-8000-000000000020', 'cb000000-0000-4000-8000-000000000010', 'Hashing.pdf', 'test/hashing.pdf', 'pdf'),
   ('cb000000-0000-4000-8000-000000000031', 'cb000000-0000-4000-8000-000000000020', 'cb000000-0000-4000-8000-000000000010', 'Lecture 4.mp4', 'test/lecture4.mp4', 'video'),
-  ('cb000000-0000-4000-8000-000000000032', 'cb000000-0000-4000-8000-000000000021', 'cb000000-0000-4000-8000-000000000010', 'Elsewhere.pdf', 'test/elsewhere.pdf', 'pdf');
+  ('cb000000-0000-4000-8000-000000000032', 'cb000000-0000-4000-8000-000000000021', 'cb000000-0000-4000-8000-000000000010', 'Elsewhere.pdf', 'test/elsewhere.pdf', 'pdf'),
+  -- A second upload of the same file: its citations merge with the first's.
+  ('cb000000-0000-4000-8000-000000000033', 'cb000000-0000-4000-8000-000000000020', 'cb000000-0000-4000-8000-000000000010', 'Hashing.pdf', 'test/hashing-copy.pdf', 'pdf');
 
 -- The course vocabulary. "explain" is in the materials but is a filler
 -- word; "midterm" and "red" only appear in the other course.
@@ -56,6 +58,7 @@ INSERT INTO public.query_events (id, user_id, course_id, assistant_message_id, q
 
 INSERT INTO public.citations (id, message_id, material_id, page_number, start_ms, end_ms) VALUES
   ('cb000000-0000-4000-8000-000000000081', 'cb000000-0000-4000-8000-000000000061', 'cb000000-0000-4000-8000-000000000030', 2, NULL, NULL),
+  ('cb000000-0000-4000-8000-000000000088', 'cb000000-0000-4000-8000-000000000061', 'cb000000-0000-4000-8000-000000000033', 2, NULL, NULL),
   ('cb000000-0000-4000-8000-000000000082', 'cb000000-0000-4000-8000-000000000062', 'cb000000-0000-4000-8000-000000000030', 2, NULL, NULL),
   -- A duplicate citation of the same page: listed once as a source.
   ('cb000000-0000-4000-8000-000000000083', 'cb000000-0000-4000-8000-000000000062', 'cb000000-0000-4000-8000-000000000030', 2, NULL, NULL),
@@ -82,6 +85,7 @@ BEGIN
   ASSERT row.question_count = 5 AND row.student_count = 2, format('Overview counts: %s', row);
   ASSERT row.labeled_count = 3 AND row.answered_from_materials_count = 1, format('Overview labels: %s', row);
   ASSERT row.needs_attention_count = 2, format('Gaps are q3 and q5: %s', row);
+  ASSERT row.non_study_count = 1, format('q4 is logistics: %s', row);
   ASSERT row.cited_question_count = 3 AND row.document_question_count = 2 AND row.video_question_count = 2,
     format('Source split: %s', row);
 
@@ -128,8 +132,36 @@ BEGIN
   ASSERT (result->>'total_count')::int = 2, format('Page 2: q1 and q2: %s', result);
 
   -- File, source kind, type and gaps.
-  result := public.get_course_questions(course, s, e, in_material_id => video);
+  result := public.get_course_questions(course, s, e, in_material_ids => ARRAY[video]);
   ASSERT (result->>'total_count')::int = 2;
+  result := public.get_course_questions(course, s, e, in_material_ids => ARRAY['cb000000-0000-4000-8000-000000000033'::uuid, pdf]);
+  ASSERT (result->>'total_count')::int = 2, 'Either copy of Hashing.pdf';
+  SELECT q INTO result FROM jsonb_array_elements((public.get_course_questions(course, s, e))->'questions') q
+    WHERE q->>'id' = 'cb000000-0000-4000-8000-000000000071';
+  ASSERT jsonb_array_length(result->'sources') = 1, format('Page 2 of both copies is one source: %s', result);
+
+  -- Cited files: copies merged, each question counted once.
+  SELECT * INTO STRICT row FROM public.get_course_cited_files(course, s, e) WHERE file_name = 'Hashing.pdf';
+  ASSERT row.question_count = 2 AND row.student_count = 2 AND cardinality(row.material_ids) = 2,
+    format('Hashing.pdf across both copies: %s', row);
+  ASSERT (SELECT count(*) = 2 FROM public.get_course_cited_files(course, s, e)), 'Hashing.pdf and Lecture 4.mp4';
+
+  -- Study questions only: drops q4, the logistics question.
+  result := public.get_course_questions(course, s, e, in_study_only => true);
+  ASSERT (result->>'total_count')::int = 4, format('Study only: %s', result);
+
+  -- One question in full: its answer, sources and related questions.
+  result := public.get_course_question_detail(course, 'cb000000-0000-4000-8000-000000000072', s, e);
+  ASSERT result->>'query_text' = 'How does linear probing handle a collision in a hash table', format('Detail: %s', result);
+  ASSERT result->>'answer_text' = 'Answer 2';
+  ASSERT jsonb_array_length(result->'sources') = 2;
+  ASSERT (result->>'related_count')::int = 1 AND result->'related'->0->>'id' = 'cb000000-0000-4000-8000-000000000071',
+    format('q1 cites the same page (in either copy); the old question is outside the window: %s', result);
+  ASSERT NOT (result ? 'user_id');
+  result := public.get_course_question_detail(course, 'cb000000-0000-4000-8000-000000000075', s, e);
+  ASSERT (result->>'related_count')::int = 0 AND jsonb_array_length(result->'sources') = 0;
+  ASSERT public.get_course_question_detail('cb000000-0000-4000-8000-000000000021', 'cb000000-0000-4000-8000-000000000072', s, e) IS NULL,
+    'A question from another course is not found';
   result := public.get_course_questions(course, s, e, in_source_kind => 'video');
   ASSERT (result->>'total_count')::int = 2;
   result := public.get_course_questions(course, s, e, in_source_kind => 'document');
@@ -185,6 +217,16 @@ BEGIN
   BEGIN
     PERFORM public.get_course_question_terms(course, NULL, NULL);
     ASSERT false, 'Students cannot read terms';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.get_course_cited_files(course, NULL, NULL);
+    ASSERT false, 'Students cannot read cited files';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.get_course_question_detail(course, 'cb000000-0000-4000-8000-000000000071', NULL, NULL);
+    ASSERT false, 'Students cannot read question details';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
   BEGIN

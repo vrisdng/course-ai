@@ -9,7 +9,9 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('./analyticsApi', () => api);
 
-import { NO_FILTERS, type TopicFilter } from './questionFilters';
+import { ALL_QUESTIONS, filtersFor, type Selection } from './questionFilters';
+
+const NO_FILTERS = filtersFor(ALL_QUESTIONS, false);
 import { useLoader } from './useLoader';
 import { QUESTIONS_PER_PAGE, useQuestionFeed } from './useQuestionFeed';
 import { useQuestionLabels, MAX_LABEL_ROUNDS } from './useQuestionLabels';
@@ -55,7 +57,7 @@ describe('useLoader', () => {
 
 describe('useQuestionFeed', () => {
   it('loads the first page for the filters and appends more', async () => {
-    const filters = { ...NO_FILTERS, needsAttention: true };
+    const filters = filtersFor({ kind: 'attention' }, true);
     api.fetchQuestions
       .mockResolvedValueOnce({ totalCount: 30, studentCount: 4, questions: [question('q1'), question('q2')] })
       .mockResolvedValueOnce({ totalCount: 30, studentCount: 4, questions: [question('q3')] });
@@ -78,11 +80,11 @@ describe('useQuestionFeed', () => {
     await waitFor(() => expect(result.current.questions).toHaveLength(1));
     expect(result.current.hasMore).toBe(false);
 
-    rerender({ filters: { ...NO_FILTERS, category: 'comparison' }, version: 0 });
+    rerender({ filters: filtersFor({ kind: 'type', category: 'comparison' }, false), version: 0 });
     await waitFor(() => expect(api.fetchQuestions).toHaveBeenCalledTimes(2));
-    rerender({ filters: { ...NO_FILTERS, category: 'comparison' }, version: 1 });
+    rerender({ filters: filtersFor({ kind: 'type', category: 'comparison' }, false), version: 1 });
     await waitFor(() => expect(api.fetchQuestions).toHaveBeenCalledTimes(3));
-    rerender({ filters: { ...NO_FILTERS, category: 'comparison' }, version: 1 });
+    rerender({ filters: filtersFor({ kind: 'type', category: 'comparison' }, false), version: 1 });
     expect(api.fetchQuestions).toHaveBeenCalledTimes(3);
   });
 
@@ -100,7 +102,7 @@ describe('useQuestionFeed', () => {
 
 describe('useTopicSearch', () => {
   it('finds the topic in the materials and sets it with the matched places', async () => {
-    const onTopic = vi.fn<(topic: TopicFilter | null) => void>();
+    const onTopic = vi.fn<(selection: Selection | null) => void>();
     api.matchKeyword.mockResolvedValue([
       { key: 'm1:page:2', materialId: 'm1', fileName: 'A.pdf', fileType: 'pdf', pageNumber: 2, startMs: null, endMs: null, similarity: 0.5, snippet: '', chunkCount: 1 },
     ]);
@@ -109,7 +111,7 @@ describe('useTopicSearch', () => {
     await act(() => result.current.submit());
 
     expect(api.matchKeyword).toHaveBeenCalledWith(COURSE, 'hashing');
-    expect(onTopic).toHaveBeenCalledWith({ text: 'hashing', places: [{ material_id: 'm1', page_number: 2 }], source: 'search' });
+    expect(onTopic).toHaveBeenCalledWith({ kind: 'search', text: 'hashing', places: [{ material_id: 'm1', page_number: 2 }] });
     expect(result.current.note).toBeNull();
   });
 
@@ -120,7 +122,7 @@ describe('useTopicSearch', () => {
     act(() => result.current.setInput('hashing'));
     await act(() => result.current.submit());
 
-    expect(onTopic).toHaveBeenCalledWith({ text: 'hashing', places: null, source: 'search' });
+    expect(onTopic).toHaveBeenCalledWith({ kind: 'search', text: 'hashing', places: null });
     expect(result.current.note).toMatch(/OpenAI is down/);
   });
 

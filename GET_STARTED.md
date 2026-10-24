@@ -113,12 +113,20 @@ Two invitation-based enrollment options remain available, both admin-only to cre
 
 ## Admin analytics
 
-`/admin-analytics` — per-course analytics for a date range (7, 30 or 90 days ending now, or custom). One scrolling page:
+`/admin-analytics` — per-course analytics for a date range (7, 30 or 90 days ending now, or custom). The page fits the screen, with three panes that scroll separately (one at a time on phones):
 
-- **Summary tiles:** questions, active students (of enrolled), share of labelled questions answered from the materials, and materials cited (of all materials).
-- **What students asked about** (main card): the materials students' answers cited, most-asked first; opening one lists its cited pages, or 5-minute stretches for videos. Searching a topic swaps the list for keyword results: the keyword is embedded and matched against every chunk of the course's materials (any term, any access scope), matches are grouped into places (pages, merged video stretches) and ticked, and the card counts the distinct questions whose answers cited a ticked place, listing the newest 50. Unticking a wrong match recounts; "Back to all materials" returns to the list.
-- **Question types** (side card): questions bucketed by type (concept, how-to, calculation, comparison, troubleshooting, fact lookup, course logistics, other), with how many were study questions and how many were answered from the materials. Labels come from OpenAI's Decisions API.
-- **Ask about this data** (side card): opens the analytics chat (see below) in a side panel.
+- **Top bar:** course, dates, a one-line summary (questions, students, share answered from materials), and **Ask a question**, which opens the analytics chat (see below) in a side panel.
+- **Left, views:**
+  - **All questions.**
+  - **Not from materials:** study questions whose answer didn't come from the materials. This uses the Decisions API label, or for unlabelled questions, "the answer cited nothing".
+  - **Topics:** words and two-word phrases that come up in at least two questions and also appear in the course materials.
+  - **Files:** cited files. Copies of a file uploaded more than once are merged by name.
+  - **Question types.**
+- **Middle, questions** for the chosen view, newest first, one compact row each. The search box matches question text, or answers that cited where the materials cover the search (the text is embedded and matched against every chunk of the course). "Hide greetings and logistics" (on by default) drops questions labelled as not study questions.
+- **Right, one question in full:**
+  - the answer it got;
+  - what that answer cited, grouped by file;
+  - other questions in the window whose answers cited the same pages or video moments.
 
 - ⏱ **Questions are labelled when an admin opens the page.** Unlabelled questions in the window are sent to the Decisions API in rounds of up to 25 (at most 8 rounds per visit); each question is labelled once. Until then, a question shows its rule-based type.
 - Counts use citations' material, page and time, not chunk IDs, so they survive re-processing a material.

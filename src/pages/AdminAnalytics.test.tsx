@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   fetchQuestionOverview: vi.fn(),
   fetchQuestions: vi.fn(),
+  fetchQuestionDetail: vi.fn(),
   fetchQuestionTerms: vi.fn(),
-  fetchCitedMaterials: vi.fn(),
-  fetchCitedPlaces: vi.fn(),
+  fetchCitedFiles: vi.fn(),
   fetchQuestionBuckets: vi.fn(),
   labelQuestions: vi.fn(),
   matchKeyword: vi.fn(),
@@ -30,7 +30,6 @@ vi.mock('@/features/course-analytics/AskAnalyticsSheet', () => ({
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from } }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
 import AdminAnalytics from './AdminAnalytics';
-import { NO_FILTERS } from '@/features/course-analytics/questionFilters';
 
 function chain(result: unknown) { const q: Record<string, unknown> = {}; for (const m of ['select', 'order']) q[m] = vi.fn(() => q); q.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve); return q; }
 
@@ -38,20 +37,15 @@ const DAY = 24 * 3600 * 1000;
 type Range = { startAt: string; endAt: string };
 const lastRange = () => api.fetchQuestionOverview.mock.lastCall?.[1] as Range;
 const lastFilters = () => api.fetchQuestions.mock.lastCall?.[2];
-// fetchQuestions also loads the three needs-attention examples; this finds
-// the calls made by the main question list.
-const listCalls = () => api.fetchQuestions.mock.calls.filter(([, , , page]) => page.limit !== 3);
-const lastListFilters = () => listCalls().at(-1)?.[2];
 
 const OVERVIEW = {
   questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21,
-  needsAttentionCount: 8, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
+  needsAttentionCount: 8, nonStudyCount: 4, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
 };
-const QUESTION = {
-  id: 'q1', queryText: 'What is double hashing?', createdAt: '2026-10-17T11:10:35Z', category: 'definition_concept',
-  isStudyQuestion: true, answeredFromMaterials: true, needsAttention: false,
-  sources: [{ materialId: 'm1', fileName: 'Hashing.pdf', fileType: 'pdf', pageNumber: 2, startMs: null, endMs: null }],
-};
+const question = (id: string, queryText: string) => ({
+  id, queryText, createdAt: '2026-10-17T11:10:35Z', category: 'definition_concept',
+  isStudyQuestion: true, answeredFromMaterials: true, needsAttention: false, sources: [],
+});
 
 describe('AdminAnalytics', () => {
   beforeEach(() => {
@@ -60,20 +54,20 @@ describe('AdminAnalytics', () => {
     mocks.from.mockImplementation(() =>
       chain({ data: [{ id: 'c1', name: 'Algorithms', code: 'CS101' }, { id: 'c2', name: 'Databases', code: null }], error: null }));
     api.fetchQuestionOverview.mockResolvedValue(OVERVIEW);
-    api.fetchQuestions.mockImplementation(async (_course, _range, filters, page) => ({
-      totalCount: page.limit === 3 ? 8 : 1,
+    api.fetchQuestions.mockImplementation(async (_course, _range, filters) => ({
+      totalCount: 2,
       studentCount: 1,
-      questions: page.limit === 3
-        ? [{ ...QUESTION, id: 'g1', queryText: 'what is photosynthesis', needsAttention: true, sources: [] }]
-        : [{ ...QUESTION, queryText: filters.needsAttention ? 'a gap question' : QUESTION.queryText }],
+      questions: filters.needsAttention
+        ? [question('g1', 'what is photosynthesis')]
+        : [question('q1', 'What is double hashing?'), question('q2', 'when is double hashing used')],
+    }));
+    api.fetchQuestionDetail.mockImplementation(async (_course, _range, id) => ({
+      ...question(id, id === 'q9' ? 'a related question' : `question ${id}`),
+      answerText: `Answer for ${id}`, relatedCount: 1,
+      related: [{ id: 'q9', queryText: 'a related question', createdAt: '2026-10-09T00:00:00Z', needsAttention: false }],
     }));
     api.fetchQuestionTerms.mockResolvedValue([{ key: 'hash', term: 'hashing', wordCount: 1, questionCount: 8, studentCount: 2 }]);
-    api.fetchCitedMaterials.mockResolvedValue([
-      { materialId: 'm1', fileName: 'Hashing.pdf', fileType: 'pdf', questionCount: 20, studentCount: 2, citationCount: 30, lastCitedAt: null },
-    ]);
-    api.fetchCitedPlaces.mockResolvedValue([
-      { key: 'm1:page:2', materialId: 'm1', fileName: 'Hashing.pdf', fileType: 'pdf', pageNumber: 2, startMs: null, endMs: null, questionCount: 6, citationCount: 9 },
-    ]);
+    api.fetchCitedFiles.mockResolvedValue([{ fileName: 'Hashing.pdf', fileType: 'pdf', materialIds: ['m1', 'm2'], questionCount: 20, studentCount: 2 }]);
     api.fetchQuestionBuckets.mockResolvedValue([
       { category: 'comparison', questionCount: 3, labeledCount: 3, studyQuestionCount: 3, answeredFromMaterialsCount: 3 },
     ]);
@@ -82,58 +76,54 @@ describe('AdminAnalytics', () => {
 
   async function renderLoaded() {
     render(<AdminAnalytics />);
-    await screen.findByText('What is double hashing?');
+    await screen.findByText('Answer for q1');
   }
 
-  it('leads with questions and loads every view for the first course and the last 30 days', async () => {
+  it('opens on all study questions with the newest one shown in full', async () => {
     await renderLoaded();
-    expect(screen.getByRole('heading', { name: 'Course analytics' })).toBeInTheDocument();
-
     const range = lastRange();
     expect(new Date(range.endAt).getTime() - new Date(range.startAt).getTime()).toBe(30 * DAY);
-    expect(api.fetchQuestionOverview).toHaveBeenLastCalledWith('c1', range);
-    expect(lastListFilters()).toEqual(NO_FILTERS);
-    expect(api.fetchQuestions).toHaveBeenCalledWith('c1', range, { ...NO_FILTERS, needsAttention: true }, { limit: 3, offset: 0 });
+    expect(lastFilters()).toMatchObject({ needsAttention: false, studyOnly: true, topicText: null });
+    expect(api.fetchQuestionDetail).toHaveBeenLastCalledWith('c1', range, 'q1');
     expect(api.fetchQuestionTerms).toHaveBeenLastCalledWith('c1', range);
-    expect(api.fetchCitedMaterials).toHaveBeenLastCalledWith('c1', range);
-    expect(api.fetchCitedPlaces).toHaveBeenLastCalledWith('c1', range);
+    expect(api.fetchCitedFiles).toHaveBeenLastCalledWith('c1', range);
     expect(api.labelQuestions).toHaveBeenCalledWith('c1', range);
     expect(mocks.useAnalyticsChat).toHaveBeenLastCalledWith('c1', range.startAt, range.endAt);
 
-    expect(within(screen.getByRole('group', { name: 'Questions' })).getByText('31')).toBeInTheDocument();
-    expect(await screen.findByText('what is photosynthesis')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'hashing, 8 questions' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Comparison.*3 questions/ })).toBeInTheDocument();
+    expect(screen.getByText(/27 questions · 2 students/)).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation', { name: 'Question views' })).getByRole('button', { name: 'All questions, 27' })).toBeInTheDocument();
+    expect(screen.getByText(/70% answered from materials/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'All questions' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /What is double hashing\?/ })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('button', { name: 'ask sheet' })).toHaveAttribute('data-same-chat', 'true');
   });
 
-  it('filters the questions from every side view, and toggles a filter off', async () => {
+  it('opens another question, including a related one', async () => {
     await renderLoaded();
+    fireEvent.click(screen.getByRole('button', { name: /when is double hashing used/ }));
+    expect(await screen.findByText('Answer for q2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /a related question/ }));
+    expect(await screen.findByText('Answer for q9')).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'hashing, 8 questions' }));
-    await waitFor(() => expect(lastListFilters()).toMatchObject({ topic: { text: 'hashing', places: null, source: 'term' } }));
-    expect(screen.getByRole('button', { name: 'Remove filter: Mentions “hashing”' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'hashing, 8 questions' }));
-    await waitFor(() => expect(lastListFilters()).toEqual(NO_FILTERS));
+  it('switches views from the left pane and shows the first question of each', async () => {
+    await renderLoaded();
+    const nav = screen.getByRole('navigation', { name: 'Question views' });
 
-    fireEvent.click(await screen.findByRole('button', { name: /^Hashing\.pdf.*20 questions/ }));
-    await waitFor(() => expect(lastListFilters()).toMatchObject({ material: { id: 'm1', name: 'Hashing.pdf' } }));
-    fireEvent.click(screen.getByRole('button', { name: /Videos.*3 questions/ }));
-    await waitFor(() => expect(lastListFilters()).toMatchObject({ sourceKind: 'video', material: { id: 'm1' } }));
-    fireEvent.click(screen.getByRole('button', { name: /Comparison.*3 questions/ }));
-    await waitFor(() => expect(lastListFilters()).toMatchObject({ category: 'comparison' }));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
-    await waitFor(() => expect(lastListFilters()).toEqual(NO_FILTERS));
-
-    fireEvent.click(screen.getByRole('button', { name: /Hashing\.pdf · Page 2.*6 questions/ }));
-    await waitFor(() => expect(lastListFilters()).toMatchObject({ place: { filter: { material_id: 'm1', page_number: 2 } } }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Cited Hashing.pdf · Page 2' }));
-    await waitFor(() => expect(lastListFilters()).toEqual(NO_FILTERS));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show all 8' }));
-    expect(await screen.findByText('a gap question')).toBeInTheDocument();
+    fireEvent.click(within(nav).getByRole('button', { name: 'Not from materials, 8' }));
+    expect(await screen.findByText('Answer for g1')).toBeInTheDocument();
     expect(lastFilters()).toMatchObject({ needsAttention: true });
+    expect(screen.getByRole('heading', { name: 'Not answered from materials' })).toBeInTheDocument();
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'hashing, 8' }));
+    await waitFor(() => expect(lastFilters()).toMatchObject({ topicText: 'hashing', topicPlaces: null }));
+    fireEvent.click(within(nav).getByRole('button', { name: 'Hashing.pdf, 20' }));
+    await waitFor(() => expect(lastFilters()).toMatchObject({ materialIds: ['m1', 'm2'] }));
+    fireEvent.click(await within(nav).findByRole('button', { name: 'Comparison, 3' }));
+    await waitFor(() => expect(lastFilters()).toMatchObject({ category: 'comparison' }));
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Hide greetings and logistics' }));
+    await waitFor(() => expect(lastFilters()).toMatchObject({ category: 'comparison', studyOnly: false }));
   });
 
   it('searches a topic in the materials and the questions', async () => {
@@ -143,16 +133,12 @@ describe('AdminAnalytics', () => {
     await renderLoaded();
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search questions' }), { target: { value: 'probing' } });
     fireEvent.submit(screen.getByRole('search'));
-    await waitFor(() => expect(lastListFilters()).toMatchObject({
-      topic: { text: 'probing', places: [{ material_id: 'm1', page_number: 2 }], source: 'search' },
-    }));
-    expect(api.matchKeyword).toHaveBeenCalledWith('c1', 'probing');
-    expect(screen.getByRole('button', { name: 'Remove filter: About “probing”' })).toBeInTheDocument();
+    await waitFor(() => expect(lastFilters()).toMatchObject({ topicText: 'probing', topicPlaces: [{ material_id: 'm1', page_number: 2 }] }));
+    expect(screen.getByRole('heading', { name: 'About “probing”' })).toBeInTheDocument();
   });
 
   it('switches presets and validates a custom range', async () => {
     await renderLoaded();
-
     fireEvent.click(screen.getByRole('radio', { name: '7 days' }));
     await waitFor(() => {
       const range = lastRange();
@@ -163,7 +149,7 @@ describe('AdminAnalytics', () => {
     expect((screen.getByLabelText('Start') as HTMLInputElement).value).not.toBe('');
     fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2030-01-02T00:00' } });
     fireEvent.change(screen.getByLabelText('End'), { target: { value: '2030-01-01T00:00' } });
-    expect(screen.getByText('Start date and time must be earlier than or equal to the end date and time.')).toBeInTheDocument();
+    expect(screen.getAllByText('Start date and time must be earlier than or equal to the end date and time.').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'ask sheet' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('End'), { target: { value: '2030-01-03T00:00' } });

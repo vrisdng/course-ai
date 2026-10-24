@@ -1,98 +1,91 @@
-// Filters for the analytics question list, and how they map to the
-// get_course_questions RPC (migration 20261025090000).
-import {
-  formatPlaceLabel,
-  placeKey,
-  type PlaceFilter,
-} from '../../../supabase/functions/_shared/analyticsPlaces.ts';
+// What the analytics page shows: one selection from the left pane (all
+// questions, a topic, a file, ...), mapped to get_course_questions filters
+// (migrations 20261025090000 and 20261025120000).
+import type { PlaceFilter } from '../../../supabase/functions/_shared/analyticsPlaces.ts';
 
 import { categoryLabel } from './questionCategories';
 
-export type SourceKind = 'document' | 'video';
+export type Selection =
+  | { kind: 'all' }
+  | { kind: 'attention' }
+  | { kind: 'term'; term: string }
+  // A typed search: question text, or answers citing where the materials
+  // cover it (places; null when the materials search failed).
+  | { kind: 'search'; text: string; places: PlaceFilter[] | null }
+  // Copies of a file share its name, so a file is the set of their ids.
+  | { kind: 'file'; name: string; fileType: string; ids: string[] }
+  | { kind: 'type'; category: string };
 
-export interface TopicFilter {
-  text: string;
-  // Pages and moments the topic was found in; null for a term picked from
-  // the term list, which only matches question text.
-  places: PlaceFilter[] | null;
-  source: 'search' | 'term';
-}
-
-export interface PlaceChoice {
-  key: string;
-  label: string;
-  filter: PlaceFilter;
-}
+export const ALL_QUESTIONS: Selection = { kind: 'all' };
 
 export interface QuestionFilters {
-  topic: TopicFilter | null;
-  material: { id: string; name: string } | null;
-  place: PlaceChoice | null;
-  sourceKind: SourceKind | null;
+  topicText: string | null;
+  topicPlaces: PlaceFilter[] | null;
+  materialIds: string[] | null;
   category: string | null;
   needsAttention: boolean;
+  // Hide greetings and logistics (questions labelled not study questions).
+  studyOnly: boolean;
 }
 
-export const NO_FILTERS: QuestionFilters = {
-  topic: null,
-  material: null,
-  place: null,
-  sourceKind: null,
-  category: null,
-  needsAttention: false,
-};
-
-export type FilterName = keyof QuestionFilters;
+export function filtersFor(selection: Selection, studyOnly: boolean): QuestionFilters {
+  return {
+    topicText: selection.kind === 'term' ? selection.term : selection.kind === 'search' ? selection.text : null,
+    topicPlaces: selection.kind === 'search' ? selection.places : null,
+    materialIds: selection.kind === 'file' ? selection.ids : null,
+    category: selection.kind === 'type' ? selection.category : null,
+    needsAttention: selection.kind === 'attention',
+    studyOnly,
+  };
+}
 
 export interface QuestionArgs {
   in_topic_text: string | null;
   in_topic_places: PlaceFilter[] | null;
   in_places: PlaceFilter[] | null;
-  in_material_id: string | null;
-  in_source_kind: SourceKind | null;
+  in_material_ids: string[] | null;
+  in_source_kind: 'document' | 'video' | null;
   in_category: string | null;
   in_needs_attention: boolean;
+  in_study_only: boolean;
 }
 
 export function toQuestionArgs(filters: QuestionFilters): QuestionArgs {
   return {
-    in_topic_text: filters.topic?.text ?? null,
-    in_topic_places: filters.topic?.places ?? null,
-    in_places: filters.place ? [filters.place.filter] : null,
-    in_material_id: filters.material?.id ?? null,
-    in_source_kind: filters.sourceKind,
+    in_topic_text: filters.topicText,
+    in_topic_places: filters.topicPlaces,
+    in_places: null,
+    in_material_ids: filters.materialIds,
+    in_source_kind: null,
     in_category: filters.category,
     in_needs_attention: filters.needsAttention,
+    in_study_only: filters.studyOnly,
   };
 }
 
-export function hasFilters(filters: QuestionFilters): boolean {
-  return activeFilters(filters).length > 0;
-}
-
-export interface ActiveFilter {
-  name: FilterName;
-  label: string;
-}
-
-export function activeFilters(filters: QuestionFilters): ActiveFilter[] {
-  const active: ActiveFilter[] = [];
-  if (filters.topic) {
-    const verb = filters.topic.source === 'term' ? 'Mentions' : 'About';
-    active.push({ name: 'topic', label: `${verb} “${filters.topic.text}”` });
+export function selectionTitle(selection: Selection): string {
+  switch (selection.kind) {
+    case 'all': return 'All questions';
+    case 'attention': return 'Not answered from materials';
+    case 'term': return `Mentions “${selection.term}”`;
+    case 'search': return `About “${selection.text}”`;
+    case 'file': return `Cited ${selection.name}`;
+    case 'type': return categoryLabel(selection.category);
   }
-  if (filters.needsAttention) active.push({ name: 'needsAttention', label: 'Needs attention' });
-  if (filters.material) active.push({ name: 'material', label: `Cited ${filters.material.name}` });
-  if (filters.place) active.push({ name: 'place', label: `Cited ${filters.place.label}` });
-  if (filters.sourceKind) {
-    active.push({ name: 'sourceKind', label: filters.sourceKind === 'video' ? 'Cited a video' : 'Cited a document' });
-  }
-  if (filters.category) active.push({ name: 'category', label: categoryLabel(filters.category) });
-  return active;
 }
 
-export function withoutFilter(filters: QuestionFilters, name: FilterName): QuestionFilters {
-  return { ...filters, [name]: NO_FILTERS[name] };
+function selectionKey(selection: Selection): string {
+  switch (selection.kind) {
+    case 'term': return `term:${selection.term}`;
+    case 'search': return `search:${selection.text}`;
+    case 'file': return `file:${selection.name}`;
+    case 'type': return `type:${selection.category}`;
+    default: return selection.kind;
+  }
+}
+
+export function isSameSelection(a: Selection, b: Selection): boolean {
+  return selectionKey(a) === selectionKey(b);
 }
 
 // What an answer cited: one page of a document, or a moment of a video.
@@ -106,24 +99,42 @@ export interface QuestionSource {
 }
 
 function formatMoment(ms: number): string {
-  // formatPlaceLabel prints a range; a citation tag only needs its start.
-  return formatPlaceLabel({ pageNumber: null, startMs: ms, endMs: ms }).split('–')[0];
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
 }
 
-// "Hashing.pdf · Page 2", "Lecture 4.mp4 · 1:05" or just the file name.
-export function sourceLabel(source: QuestionSource): string {
-  if (source.startMs !== null) return `${source.fileName} · ${formatMoment(source.startMs)}`;
-  if (source.pageNumber !== null) return `${source.fileName} · Page ${source.pageNumber}`;
-  return source.fileName;
+export interface SourceGroup {
+  fileName: string;
+  fileType: string;
+  // "Page 2" or "1:05", in order; empty when the whole file was cited.
+  places: string[];
 }
 
-// The place filter that finds questions citing this source.
-export function sourceToPlace(source: QuestionSource): PlaceChoice {
-  const filter: PlaceFilter = source.startMs !== null
-    ? { material_id: source.materialId, start_ms: source.startMs, end_ms: source.endMs ?? source.startMs }
-    : { material_id: source.materialId, page_number: source.pageNumber };
-  const location = source.startMs !== null
-    ? { pageNumber: null, startMs: source.startMs, endMs: source.endMs ?? source.startMs }
-    : { pageNumber: source.pageNumber, startMs: null, endMs: null };
-  return { key: placeKey({ materialId: source.materialId, ...location }), label: sourceLabel(source), filter };
+export function groupSourcesByFile(sources: ReadonlyArray<QuestionSource>): SourceGroup[] {
+  const groups = new Map<string, { fileType: string; pages: number[]; moments: number[] }>();
+  for (const source of sources) {
+    const group = groups.get(source.fileName) ?? { fileType: source.fileType, pages: [], moments: [] };
+    if (source.startMs !== null) group.moments.push(source.startMs);
+    else if (source.pageNumber !== null) group.pages.push(source.pageNumber);
+    groups.set(source.fileName, group);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([fileName, group]) => ({
+      fileName,
+      fileType: group.fileType,
+      places: [
+        ...[...new Set(group.pages)].sort((a, b) => a - b).map((page) => `Page ${page}`),
+        ...[...new Set(group.moments)].sort((a, b) => a - b).map(formatMoment),
+      ],
+    }));
+}
+
+// Answers carry <<cite:n>> markers for the student chat's citation chips;
+// the analytics page lists sources separately.
+export function stripCitationMarkers(text: string): string {
+  return text.replace(/[ \t]*<<cite:[\d+]+>>/g, '');
 }
