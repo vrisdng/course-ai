@@ -57,6 +57,7 @@ describe('VideoTranscript sidebar preview', () => {
     const { container } = render(<VideoTranscript source={source} onOpenVideo={onOpenVideo} />);
 
     expect(container.querySelector('video')).toBeNull();
+    expect(container.querySelector('img')).toHaveAttribute('src', '/click-on-me.svg');
     fireEvent.click(screen.getByRole('button', { name: 'Open video preview for Lecture' }));
     fireEvent.click(screen.getByRole('button', { name: 'View video with transcription' }));
     expect(onOpenVideo).toHaveBeenCalledTimes(2);

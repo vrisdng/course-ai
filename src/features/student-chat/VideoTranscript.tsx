@@ -81,7 +81,13 @@ export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
             onClick={onOpenVideo}
             className="relative block aspect-video w-full overflow-hidden rounded-md bg-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
-            <span className="absolute inset-0 flex items-center justify-center bg-black/20">
+            <img
+              src="/click-on-me.svg"
+              alt=""
+              className="h-full w-full object-cover"
+              draggable={false}
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/20 transition-colors duration-200 hover:bg-black/35">
               <PlayCircle className="h-12 w-12 drop-shadow" aria-hidden="true" />
             </span>
           </button>
