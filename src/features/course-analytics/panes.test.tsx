@@ -181,7 +181,7 @@ describe('QuestionDetailPane', () => {
     render(<QuestionDetailPane detail={loaded({ ...detail, needsAttention: true, answeredFromMaterials: false, sources: [], relatedCount: 0, related: [] })} hasSelection onSelectQuestion={vi.fn()} />);
     expect(screen.getByText('Not answered from the materials')).toBeInTheDocument();
     expect(screen.getByText('The answer cited nothing.')).toBeInTheDocument();
-    expect(screen.getByText('No other questions cited the same places.')).toBeInTheDocument();
+    expect(screen.getByText('No other questions on the same subject.')).toBeInTheDocument();
   });
 
   it('explains no selection, a missing question, loading and errors', () => {
