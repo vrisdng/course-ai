@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 
+import { CitationPerfBadge } from './CitationPerfBadge';
 import { HighlightedPageImage } from './HighlightedPageImage';
 import { PdfReader } from './PdfReader';
 import { PdfThumbnail } from './PdfThumbnail';
@@ -114,6 +115,7 @@ export function SourcesPanel({
                   Sources
                 </h3>
                 <div className="flex items-center gap-1">
+                  <CitationPerfBadge />
                   {isPdf && (
                     <Button
                       variant="outline"
@@ -188,7 +190,6 @@ export function SourcesPanel({
                     <VideoTranscript
                       source={activeVideoSource}
                       onOpenVideo={() => setVideoDialogOpen(true)}
-                      previewVisible={!videoDialogOpen}
                     />
                   </div>
                 ) : (
@@ -223,7 +224,8 @@ export function SourcesPanel({
       </Dialog>
 
       <VideoSourceDialog
-        source={videoDialogOpen ? activeVideoSource ?? null : null}
+        source={activeVideoSource ?? null}
+        open={videoDialogOpen && Boolean(activeVideoSource)}
         onClose={() => setVideoDialogOpen(false)}
       />
     </>

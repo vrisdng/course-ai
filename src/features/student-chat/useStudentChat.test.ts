@@ -41,6 +41,11 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+const signedMediaMocks = vi.hoisted(() => ({ prefetchSignedMediaUrl: vi.fn() }));
+vi.mock('./signedMedia', () => ({
+  prefetchSignedMediaUrl: signedMediaMocks.prefetchSignedMediaUrl,
+}));
+
 import { toast } from 'sonner';
 import { useStudentChat } from './useStudentChat';
 
@@ -73,9 +78,10 @@ describe('useStudentChat', () => {
     createSignedUrl.mockClear();
     vi.mocked(toast.error).mockClear();
     vi.mocked(toast.success).mockClear();
+    signedMediaMocks.prefetchSignedMediaUrl.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal('fetch', vi.fn());
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `id-${Math.random()}`) });
-    localStorage.clear();
+    try { window.localStorage.clear(); } catch { /* jsdom storage may be unavailable */ }
   });
 
   afterEach(() => {
@@ -503,7 +509,7 @@ describe('useStudentChat', () => {
       if (table === 'material_pages') return createQueryChain({ data: null, error: null });
       return createQueryChain(emptyResult);
     });
-    const citation = { id: 'c1', chunkId: 'chunk-1', excerpt: 'Relevant passage',
+    const citation = { id: 'c1', chunkId: 'chunk-1', materialId: 'mat-1', excerpt: 'Relevant passage',
       documentName: 'Notes', documentType: 'pdf', relevanceScore: 0.9, startMs: 40_000, endMs: 45_000 };
 
     await act(async () => { await result.current.openCitationSource(citation, 'm1-1'); });
@@ -511,12 +517,17 @@ describe('useStudentChat', () => {
     expect(storageFrom).toHaveBeenCalledTimes(1);
 
     type = 'video';
+    from.mockClear();
+    signedMediaMocks.prefetchSignedMediaUrl.mockClear();
     await act(async () => { await result.current.openCitationSource({ ...citation, documentType: 'video' }, 'm1-2'); });
     expect(result.current.activeViewerSource).toBeNull();
     expect(result.current.activeVideoSource).toMatchObject({
       title: 'Lecture', materialId: 'mat-1', filePath: 'course/lecture.mp4', startMs: 40_000,
+      signedUrl: null,
     });
     expect(storageFrom).toHaveBeenCalledTimes(1);
+    expect(from).not.toHaveBeenCalledWith('chunks');
+    expect(signedMediaMocks.prefetchSignedMediaUrl).toHaveBeenCalledWith('mat-1');
   });
 
   it('hydrates saved evidence after the cited chunk has been replaced', async () => {

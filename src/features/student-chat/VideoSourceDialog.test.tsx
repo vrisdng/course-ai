@@ -9,6 +9,7 @@ vi.mock('./signedMedia', () => ({
 }));
 
 import { VideoSourceDialog, type ActiveVideoSource } from './VideoSourceDialog';
+import { clearTranscriptCache } from './transcriptCache';
 
 function query(data: unknown, error: unknown = null) {
   const chain: Record<string, unknown> = {};
@@ -29,6 +30,7 @@ const segments = [
 
 describe('VideoSourceDialog', () => {
   beforeEach(() => {
+    clearTranscriptCache();
     mocks.from.mockReset().mockImplementation(() => query(segments));
     mocks.resolveSignedMediaUrl.mockReset().mockResolvedValue('https://r2.test/lecture.mp4');
     HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -36,7 +38,7 @@ describe('VideoSourceDialog', () => {
   });
 
   it('places a seekable video beside the full transcript and plays clicked timestamps', async () => {
-    render(<VideoSourceDialog source={source} onClose={vi.fn()} />);
+    render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
     expect(video).toHaveAttribute('controls');
     fireEvent.loadedMetadata(video);
@@ -56,8 +58,12 @@ describe('VideoSourceDialog', () => {
   it('highlights only verified evidence IDs in the full transcript', async () => {
     render(<VideoSourceDialog source={{ ...source, evidenceSegments: [
       { id: 's2', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Relevant explanation.' },
-    ] }} onClose={vi.fn()} />);
+    ] }} open onClose={vi.fn()} />);
     await screen.findByText('More context.');
+    expect(screen.getByText('Source interval: 0:35-0:42')).toBeInTheDocument();
+    const video = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(35);
     expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
     expect(screen.getByText('More context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');
   });
@@ -65,7 +71,7 @@ describe('VideoSourceDialog', () => {
   it('shows saved evidence when re-transcription has replaced its segment IDs', async () => {
     render(<VideoSourceDialog source={{ ...source, evidenceSegments: [
       { id: 'old-id', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Original supporting line.' },
-    ] }} onClose={vi.fn()} />);
+    ] }} open onClose={vi.fn()} />);
     await screen.findByText('More context.');
     expect(screen.getByText(/Original supporting line\./)).toBeInTheDocument();
     expect(screen.getByText(/earlier transcript/i)).toBeInTheDocument();
@@ -80,14 +86,14 @@ describe('VideoSourceDialog', () => {
     const firstQuery = query(firstPage);
     const secondQuery = query([{ id: 's500', segment_index: 500, start_ms: 500_000, end_ms: 500_800, text: 'Final segment' }]);
     mocks.from.mockReturnValueOnce(firstQuery).mockReturnValueOnce(secondQuery);
-    render(<VideoSourceDialog source={source} onClose={vi.fn()} />);
+    render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     await screen.findByText('Final segment');
     expect(firstQuery.range).toHaveBeenCalledWith(0, 499);
     expect(secondQuery.range).toHaveBeenCalledWith(500, 999);
   });
 
   it('keeps a transcript-only fallback for old videos without stored media', async () => {
-    render(<VideoSourceDialog source={{ ...source, filePath: null, linkedUrl: 'https://video.test/watch?v=1' }} onClose={vi.fn()} />);
+    render(<VideoSourceDialog source={{ ...source, filePath: null, linkedUrl: 'https://video.test/watch?v=1' }} open onClose={vi.fn()} />);
     expect(screen.queryByLabelText('Video playback')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Go to original video/ })).toHaveAttribute('href', 'https://video.test/watch?v=1&t=40');
     expect(await screen.findByText('Relevant explanation.')).toBeInTheDocument();
@@ -96,8 +102,41 @@ describe('VideoSourceDialog', () => {
   it('reports transcript loading failures separately from an empty transcript', async () => {
     mocks.from.mockReturnValueOnce(query(null, { message: 'offline' }));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    render(<VideoSourceDialog source={source} onClose={vi.fn()} />);
+    render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Unable to load transcript.'));
     consoleError.mockRestore();
+  });
+
+  it('keeps the video and transcript mounted and seeks back to the citation time when reopened', async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const { rerender } = render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
+    const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
+    fireEvent.loadedMetadata(video);
+    await screen.findByText('Relevant explanation.');
+    video.currentTime = 123;
+    const queryCount = mocks.from.mock.calls.length;
+
+    rerender(<VideoSourceDialog source={source} open={false} onClose={vi.fn()} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(pause).toHaveBeenCalled();
+
+    rerender(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByLabelText('Video playback')).toBe(video);
+    expect(video.currentTime).toBe(40);
+    expect(screen.getByText('Relevant explanation.')).toBeInTheDocument();
+    expect(mocks.from).toHaveBeenCalledTimes(queryCount);
+    pause.mockRestore();
+  });
+
+  it('seeks to a newly cited interval when the source changes while open', async () => {
+    const { rerender } = render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
+    const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
+    fireEvent.loadedMetadata(video);
+    await screen.findByText('Relevant explanation.');
+    video.currentTime = 123;
+
+    rerender(<VideoSourceDialog source={{ ...source, startMs: 70_000, endMs: 75_000 }} open onClose={vi.fn()} />);
+    expect(video.currentTime).toBe(70);
   });
 });

@@ -6,8 +6,8 @@ import { usePersistedCollapse } from './use-persisted-collapse';
 type Handle = ReturnType<typeof usePersistedCollapse>;
 
 describe('usePersistedCollapse', () => {
-  beforeEach(() => localStorage.clear());
-  afterEach(() => localStorage.clear());
+  beforeEach(() => { try { window.localStorage.clear(); } catch { /* jsdom storage may be unavailable */ } });
+  afterEach(() => { try { window.localStorage.clear(); } catch { /* jsdom storage may be unavailable */ } });
 
   it('defaults to collapsed when nothing is stored', () => {
     const { result } = renderHook(() => usePersistedCollapse('key:default'));

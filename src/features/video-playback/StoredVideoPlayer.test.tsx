@@ -62,6 +62,39 @@ describe('StoredVideoPlayer', () => {
     play.mockRestore();
   });
 
+  it('seeks immediately when the cited start changes without reloading the source', async () => {
+    const { rerender } = render(<StoredVideoPlayer materialId="material-1" startMs={0} />);
+    const player = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    await waitFor(() => expect(player).toHaveAttribute('src', 'https://r2.test/video?token=new'));
+    fireEvent.loadedMetadata(player);
+    Object.defineProperty(player, 'readyState', { value: 1, configurable: true });
+    player.currentTime = 10;
+
+    rerender(<StoredVideoPlayer materialId="material-1" startMs={45_000} />);
+    expect(player.currentTime).toBe(45);
+    expect(player).toHaveAttribute('src', 'https://r2.test/video?token=new');
+    expect(mocks.resolveSignedMediaUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses without re-signing or reloading when deactivated', async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const { rerender } = render(<StoredVideoPlayer materialId="material-1" startMs={0} active />);
+    const player = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    await waitFor(() => expect(player).toHaveAttribute('src', 'https://r2.test/video?token=new'));
+    fireEvent.loadedMetadata(player);
+    player.currentTime = 120;
+
+    rerender(<StoredVideoPlayer materialId="material-1" startMs={0} active={false} />);
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(player.currentTime).toBe(120);
+    expect(mocks.resolveSignedMediaUrl).toHaveBeenCalledTimes(1);
+
+    rerender(<StoredVideoPlayer materialId="material-1" startMs={0} active />);
+    expect(screen.getByLabelText('Video playback')).toBe(player);
+    expect(player.currentTime).toBe(120);
+    pause.mockRestore();
+  });
+
   it('renews an expired URL and restores playback position', async () => {
     mocks.createSignedUrl
       .mockResolvedValueOnce({ data: { signedUrl: 'https://storage.test/old' }, error: null })

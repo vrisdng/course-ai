@@ -51,7 +51,7 @@ describe('uploadVideoForTranscription', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.clients.length = 0;
-    localStorage.clear();
+    try { window.localStorage.clear(); } catch { /* jsdom storage may be unavailable */ }
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => '00000000-0000-4000-8000-000000000001') });
     mocks.send.mockResolvedValue({ ETag: '"etag"' });
     mocks.invoke.mockImplementation(async (_name, { body }) => {
