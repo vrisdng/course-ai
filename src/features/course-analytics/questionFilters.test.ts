@@ -24,7 +24,6 @@ describe('filtersFor', () => {
       in_study_only: true,
     });
     expect(filtersFor({ kind: 'attention' }, false)).toMatchObject({ needsAttention: true, studyOnly: false });
-    expect(filtersFor({ kind: 'term', term: 'hashing' }, true)).toMatchObject({ topicText: 'hashing', topicPlaces: null });
     expect(filtersFor({ kind: 'search', text: 'probing', places: [{ material_id: 'm1', page_number: 2 }] }, true))
       .toMatchObject({ topicText: 'probing', topicPlaces: [{ material_id: 'm1', page_number: 2 }] });
     expect(filtersFor({ kind: 'file', name: 'A.pdf', fileType: 'pdf', ids: ['m1', 'm2'] }, true)).toMatchObject({ materialIds: ['m1', 'm2'] });
@@ -38,7 +37,6 @@ describe('selections', () => {
   it('names each selection', () => {
     expect(selectionTitle(ALL_QUESTIONS)).toBe('All questions');
     expect(selectionTitle({ kind: 'attention' })).toBe('Not answered from materials');
-    expect(selectionTitle({ kind: 'term', term: 'hashing' })).toBe('Mentions “hashing”');
     expect(selectionTitle({ kind: 'search', text: 'probing', places: null })).toBe('About “probing”');
     expect(selectionTitle(file)).toBe('Cited A.pdf');
     expect(selectionTitle({ kind: 'type', category: 'comparison' })).toBe('Comparison');
@@ -47,8 +45,8 @@ describe('selections', () => {
   it('compares selections by what they pick', () => {
     expect(isSameSelection(file, { ...file, ids: ['m1'] })).toBe(true);
     expect(isSameSelection(file, { ...file, name: 'B.pdf' })).toBe(false);
-    expect(isSameSelection({ kind: 'term', term: 'a' }, { kind: 'term', term: 'a' })).toBe(true);
-    expect(isSameSelection({ kind: 'term', term: 'a' }, { kind: 'search', text: 'a', places: null })).toBe(false);
+    expect(isSameSelection({ kind: 'search', text: 'a', places: null }, { kind: 'search', text: 'a', places: [] })).toBe(true);
+    expect(isSameSelection({ kind: 'type', category: 'a' }, { kind: 'search', text: 'a', places: null })).toBe(false);
   });
 });
 

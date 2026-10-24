@@ -1682,13 +1682,18 @@ export type Database = {
             }[]
           }
       get_course_question_buckets: {
-        Args: { in_start_at?: string; in_end_at?: string; in_course_id: string }
+        Args: {
+          in_study_only?: boolean
+          in_end_at?: string
+          in_start_at?: string
+          in_course_id: string
+        }
         Returns: {
+          question_count: number
+          labeled_count: number
           study_question_count: number
           answered_from_materials_count: number
           category: string
-          question_count: number
-          labeled_count: number
         }[]
       }
       get_course_question_detail: {

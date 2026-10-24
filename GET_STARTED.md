@@ -115,14 +115,14 @@ Two invitation-based enrollment options remain available, both admin-only to cre
 
 `/admin-analytics` — per-course analytics for a date range (7, 30 or 90 days ending now, or custom). The page fits the screen, with three panes that scroll separately (one at a time on phones):
 
-- **Top bar:** course, dates, a one-line summary (questions, students, share answered from materials), and **Ask a question**, which opens the analytics chat (see below) in a side panel.
-- **Left, views:**
+- **Top bar:** course, a date button (presets or a custom range in its menu), a one-line summary (questions, students, share answered from materials), and **Ask a question**, which opens the analytics chat (see below) in a side panel.
+- **Left, search and views:**
+  - **Search all questions:** matches question text, or answers that cited where the materials cover the search (the text is embedded and matched against every chunk of the course). The results become their own view; a search never filters the open view.
   - **All questions.**
   - **Not from materials:** study questions whose answer didn't come from the materials. This uses the Decisions API label, or for unlabelled questions, "the answer cited nothing".
-  - **Topics:** words and two-word phrases that come up in at least two questions and also appear in the course materials.
   - **Files:** cited files. Copies of a file uploaded more than once are merged by name.
   - **Question types.**
-- **Middle, questions** for the chosen view, newest first, one compact row each. The search box matches question text, or answers that cited where the materials cover the search (the text is embedded and matched against every chunk of the course). "Hide greetings and logistics" (on by default) drops questions labelled as not study questions.
+- **Middle, questions** for the chosen view, newest first, one compact row each. "Hide greetings and logistics" (on by default) drops questions labelled as not study questions, and the counts in the left pane follow it.
 - **Right, one question in full:**
   - the answer it got;
   - what that answer cited, grouped by file;

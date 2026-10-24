@@ -6,13 +6,11 @@ import { cn } from '@/lib/utils';
 import type { CitedFile, QuestionOverview } from './analyticsApi';
 import { categoryLabel } from './questionCategories';
 import { ALL_QUESTIONS, isSameSelection, type Selection } from './questionFilters';
-import type { QuestionTerm } from './questionTerms';
 import type { LoadState } from './useLoader';
 import type { QuestionLabelsState } from './useQuestionLabels';
 
 interface NavPaneProps {
   overview: LoadState<QuestionOverview>;
-  terms: LoadState<QuestionTerm[]>;
   files: LoadState<CitedFile[]>;
   labels: QuestionLabelsState;
   selection: Selection;
@@ -77,7 +75,7 @@ const iconClass = 'h-4 w-4 shrink-0 text-muted-foreground';
 
 // The left pane: what to look at. Each item selects the questions shown in
 // the middle pane.
-export function NavPane({ overview, terms, files, labels, selection, studyOnly, onSelect }: NavPaneProps) {
+export function NavPane({ overview, files, labels, selection, studyOnly, onSelect }: NavPaneProps) {
   const pick = (next: Selection) => () => onSelect(next);
   const current = (candidate: Selection) => isSameSelection(selection, candidate);
   const bucketState: LoadState<QuestionLabelsState['buckets']> = {
@@ -104,15 +102,6 @@ export function NavPane({ overview, terms, files, labels, selection, studyOnly, 
           onClick={pick({ kind: 'attention' })}
         />
       </ul>
-
-      <Section title="Topics">
-        <SectionBody state={terms} label="Loading topics" empty="No topic came up twice yet.">
-          {(items) => items.map((term) => {
-            const next: Selection = { kind: 'term', term: term.term };
-            return <NavItem key={term.key} label={term.term} count={term.questionCount} isCurrent={current(next)} onClick={pick(next)} />;
-          })}
-        </SectionBody>
-      </Section>
 
       <Section title="Files">
         <SectionBody state={files} label="Loading files" empty="No answers cited your materials.">

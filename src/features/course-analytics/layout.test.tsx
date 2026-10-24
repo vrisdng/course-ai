@@ -5,32 +5,50 @@ import { AnalyticsRangePicker } from './AnalyticsRangePicker';
 import { AskAnalyticsSheet } from './AskAnalyticsSheet';
 
 describe('AnalyticsRangePicker', () => {
-  it('switches presets and reveals the custom inputs', () => {
-    const onPresetChange = vi.fn();
-    const { rerender } = render(
-      <AnalyticsRangePicker
-        preset="30d" onPresetChange={onPresetChange}
-        customStart="" customEnd="" onCustomStartChange={vi.fn()} onCustomEndChange={vi.fn()}
-        error={null}
-      />,
-    );
-    expect(screen.getByRole('radio', { name: '30 days' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.queryByLabelText('Start')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('radio', { name: '7 days' }));
-    expect(onPresetChange).toHaveBeenCalledWith('7d');
+  const base = {
+    customStart: '', customEnd: '', onCustomStartChange: vi.fn(), onCustomEndChange: vi.fn(), error: null, rangeLabel: '1 Oct 2026 – 24 Oct 2026',
+  };
 
+  it('shows the range on one button and picks a preset from its menu', async () => {
+    const onPresetChange = vi.fn();
+    render(<AnalyticsRangePicker {...base} preset="30d" onPresetChange={onPresetChange} />);
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Last 30 days/ }));
+    const menu = await screen.findByRole('radiogroup', { name: 'Date range' });
+    expect(within(menu).getByRole('radio', { name: 'Last 30 days' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByLabelText('Start')).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole('radio', { name: 'Last 7 days' }));
+    expect(onPresetChange).toHaveBeenCalledWith('7d');
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+  });
+
+  it('edits a custom range inside the menu', async () => {
+    const onPresetChange = vi.fn();
     const onCustomStartChange = vi.fn();
+    const { rerender } = render(<AnalyticsRangePicker {...base} preset="30d" onPresetChange={onPresetChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /Last 30 days/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Custom range' }));
+    expect(onPresetChange).toHaveBeenCalledWith('custom');
+
     rerender(
       <AnalyticsRangePicker
-        preset="custom" onPresetChange={onPresetChange}
-        customStart="2026-10-01T00:00" customEnd="2026-10-02T00:00"
-        onCustomStartChange={onCustomStartChange} onCustomEndChange={vi.fn()}
+        {...base} preset="custom" onPresetChange={onPresetChange}
+        customStart="2026-10-01T00:00" customEnd="2026-10-02T00:00" onCustomStartChange={onCustomStartChange}
         error="Start date and time must be earlier than or equal to the end date and time."
       />,
     );
+    expect(screen.getByRole('radiogroup', { name: 'Date range' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Start'), { target: { value: '2026-09-01T00:00' } });
     expect(onCustomStartChange).toHaveBeenCalledWith('2026-09-01T00:00');
     expect(screen.getByRole('alert')).toHaveTextContent('Start date and time must be earlier');
+  });
+
+  it('labels the button with the custom dates, or asks for them', () => {
+    const { rerender } = render(<AnalyticsRangePicker {...base} preset="custom" onPresetChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /1 Oct 2026 – 24 Oct 2026/ })).toBeInTheDocument();
+    rerender(<AnalyticsRangePicker {...base} preset="custom" rangeLabel={null} onPresetChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Custom range/ })).toBeInTheDocument();
   });
 });
 

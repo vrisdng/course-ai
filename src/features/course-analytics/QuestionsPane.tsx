@@ -1,19 +1,15 @@
-import type { FormEvent } from 'react';
-import { AlertTriangle, ArrowLeft, Loader2, Search } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
 import { categoryLabel, plural } from './questionCategories';
 import type { QuestionFeedState } from './useQuestionFeed';
-import type { TopicSearchState } from './useTopicSearch';
 
 interface QuestionsPaneProps {
   title: string;
   feed: QuestionFeedState;
-  search: TopicSearchState;
   studyOnly: boolean;
   onStudyOnlyChange(studyOnly: boolean): void;
   selectedId: string | null;
@@ -32,13 +28,8 @@ function formatDay(value: string): string {
 // The middle pane: the questions for the current selection, one compact row
 // each.
 export function QuestionsPane({
-  title, feed, search, studyOnly, onStudyOnlyChange, selectedId, onSelectQuestion, onBack,
+  title, feed, studyOnly, onStudyOnlyChange, selectedId, onSelectQuestion, onBack,
 }: QuestionsPaneProps) {
-  const onSubmit = (event: FormEvent) => {
-    event.preventDefault();
-    void search.submit();
-  };
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="space-y-3 border-b border-border p-3">
@@ -56,22 +47,6 @@ export function QuestionsPane({
             </span>
           )}
         </div>
-        <form role="search" onSubmit={onSubmit} className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-          <Input
-            type="search"
-            aria-label="Search questions"
-            value={search.input}
-            maxLength={100}
-            placeholder="Search a topic…"
-            onChange={(event) => search.setInput(event.target.value)}
-            className="h-8 pl-8 pr-8 text-sm"
-          />
-          {search.isMatching && (
-            <Loader2 className="absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label="Searching" />
-          )}
-        </form>
-        {search.note && <p className="text-xs text-muted-foreground">{search.note}</p>}
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <Checkbox
             checked={studyOnly}

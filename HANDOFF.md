@@ -199,11 +199,11 @@ The analytics page counts what answers *cited* rather than grouping questions in
   - Migrations `20261025090000_question_analytics.sql` and `20261025120000_question_detail.sql` add four functions:
     - `get_course_question_overview`;
     - `get_course_questions`, a filterable, paged list;
-    - `get_course_question_terms`;
+    - `get_course_question_terms` (common words and phrases; the page no longer shows them, but the function is kept);
     - `get_course_question_detail`, which returns the answer text and related questions.
   - They also add `get_course_cited_files` and drop `get_course_questions_at_places`. Tests are in `supabase/tests/question_analytics.sql`.
   - Copies of a file are merged **by file name** (the cited-files list, answer sources, related questions). Two different files with the same name in one course would also merge.
-  - Terms are computed per request with Postgres text search: one `to_tsvector` pass over the course's chunks, about 20 ms on the local test course. If large courses get slow, precompute chunk vocabularies.
+  - Terms are computed per request with Postgres text search: one `to_tsvector` pass over the course's chunks, about 20 ms on the local test course. A topics list was tried in the left pane and removed: next to the search box it looked like search was scoped to it.
   - "Not from materials" is the Decisions API label when one exists. Unlabelled questions count when their answer cited nothing.
 - The Decisions API has no AI SDK binding: `_shared/decisions.ts` is a small fetch client (retries 429/5xx), exposed through `llm.ts#createOpenAIDecisionsClient`. Only `gpt-6-luna` is supported.
 

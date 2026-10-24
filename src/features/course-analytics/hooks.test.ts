@@ -172,6 +172,20 @@ describe('useQuestionLabels', () => {
     expect(api.labelQuestions).toHaveBeenCalledTimes(MAX_LABEL_ROUNDS);
   });
 
+  it('reloads question types for study questions only without labelling again', async () => {
+    api.fetchQuestionBuckets.mockResolvedValue([]);
+    api.labelQuestions.mockResolvedValue({ labeled: 0, failed: 0, remaining: 0 });
+    const { result, rerender } = renderHook(({ studyOnly }) => useQuestionLabels(COURSE, RANGE, studyOnly), {
+      initialProps: { studyOnly: false },
+    });
+    await waitFor(() => expect(result.current.isLabelling).toBe(false));
+    expect(api.fetchQuestionBuckets).toHaveBeenLastCalledWith(COURSE, RANGE, false);
+
+    rerender({ studyOnly: true });
+    await waitFor(() => expect(api.fetchQuestionBuckets).toHaveBeenLastCalledWith(COURSE, RANGE, true));
+    expect(api.labelQuestions).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a failed labelling call without losing the buckets', async () => {
     api.fetchQuestionBuckets.mockResolvedValue([{ category: 'other', questionCount: 1 }]);
     api.labelQuestions.mockRejectedValue(new Error('Failed to send a request'));

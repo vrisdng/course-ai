@@ -12,7 +12,6 @@ import {
   fetchCitedFiles,
   fetchQuestionDetail,
   fetchQuestionOverview,
-  fetchQuestionTerms,
   type AnalyticsRange,
   type QuestionOverview,
 } from '@/features/course-analytics/analyticsApi';
@@ -30,6 +29,7 @@ import { AskAnalyticsSheet } from '@/features/course-analytics/AskAnalyticsSheet
 import { NavPane } from '@/features/course-analytics/NavPane';
 import { plural } from '@/features/course-analytics/questionCategories';
 import { QuestionDetailPane } from '@/features/course-analytics/QuestionDetailPane';
+import { QuestionSearch } from '@/features/course-analytics/QuestionSearch';
 import {
   ALL_QUESTIONS,
   filtersFor,
@@ -78,7 +78,8 @@ export default function AdminAnalytics() {
   const [selection, setSelection] = useState<Selection>(ALL_QUESTIONS);
   const [studyOnly, setStudyOnly] = useState(true);
   const [questionId, setQuestionId] = useState<string | null>(null);
-  const [mobilePane, setMobilePane] = useState<MobilePane>('list');
+  // Phones start on the views, the top of the drill-down.
+  const [mobilePane, setMobilePane] = useState<MobilePane>('nav');
 
   const custom = useMemo(() => resolveCustomRange(customStart, customEnd), [customStart, customEnd]);
   const range: AnalyticsRange | null = preset === 'custom' ? custom.range : presetWindow;
@@ -114,12 +115,11 @@ export default function AdminAnalytics() {
   const chat = useAnalyticsChat(courseId, range?.startAt ?? null, range?.endAt ?? null);
   // Opening the page labels unlabelled questions; version goes up when that
   // changed something, so the views that use labels reload.
-  const labels = useQuestionLabels(courseId, range);
+  const labels = useQuestionLabels(courseId, range, studyOnly);
 
   const rangeKey = courseId && range ? `${courseId}|${range.startAt}|${range.endAt}` : null;
   const labelledKey = rangeKey && `${rangeKey}|${labels.version}`;
   const overview = useLoader(labelledKey && `overview|${labelledKey}`, () => fetchQuestionOverview(courseId!, range!));
-  const terms = useLoader(labelledKey && `terms|${labelledKey}`, () => fetchQuestionTerms(courseId!, range!));
   const files = useLoader(rangeKey && `files|${rangeKey}`, () => fetchCitedFiles(courseId!, range!));
 
   const filters = useMemo(() => filtersFor(selection, studyOnly), [selection, studyOnly]);
@@ -171,7 +171,7 @@ export default function AdminAnalytics() {
           {courses.length > 0 && (
             <>
               <Select value={selectedCourseId} onValueChange={changeCourse}>
-                <SelectTrigger className="h-8 w-full sm:w-[220px]" aria-label="Course">
+                <SelectTrigger className="h-8 w-full text-left sm:w-[220px]" aria-label="Course">
                   <SelectValue placeholder="Select a course" />
                 </SelectTrigger>
                 <SelectContent>
@@ -190,6 +190,7 @@ export default function AdminAnalytics() {
                 onCustomStartChange={setCustomStart}
                 onCustomEndChange={setCustomEnd}
                 error={rangeError}
+                rangeLabel={rangeLabel}
               />
               <p className="text-sm text-muted-foreground">
                 {overview.data ? summary(overview.data, studyOnly) : rangeLabel}
@@ -216,9 +217,11 @@ export default function AdminAnalytics() {
         ) : (
           <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_minmax(0,380px)_minmax(0,1fr)]">
             <aside className={cn('min-h-0 overflow-y-auto border-border lg:block lg:border-r', mobilePane !== 'nav' && 'hidden')}>
+              <div className="p-3 pb-0">
+                <QuestionSearch search={search} />
+              </div>
               <NavPane
                 overview={overview}
-                terms={terms}
                 files={files}
                 labels={labels}
                 selection={selection}
@@ -233,7 +236,6 @@ export default function AdminAnalytics() {
               <QuestionsPane
                 title={selectionTitle(selection)}
                 feed={feed}
-                search={search}
                 studyOnly={studyOnly}
                 onStudyOnlyChange={setStudyOnly}
                 selectedId={questionId}
