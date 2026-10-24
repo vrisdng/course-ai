@@ -8,6 +8,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
+import { TourHelpButton } from '@/features/onboarding/TourContext';
 import { BarChart3, LayoutDashboard, LogOut, MessageSquare, Settings } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -56,6 +57,8 @@ export function Header() {
                   </Button>
                 </Link>
               ))}
+
+              <TourHelpButton />
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

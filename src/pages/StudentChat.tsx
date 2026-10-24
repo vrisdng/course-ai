@@ -20,6 +20,7 @@ import { DocumentViewerDialog } from '@/features/student-chat/DocumentViewerDial
 import { MessageList } from '@/features/student-chat/MessageList';
 import { SourcesPanel } from '@/features/student-chat/SourcesPanel';
 import { useStudentChat } from '@/features/student-chat/useStudentChat';
+import { useStudentChatTour } from '@/features/onboarding/useStudentChatTour';
 
 export default function StudentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -76,6 +77,14 @@ export default function StudentChat() {
   } = useStudentChat(routeConversationId || null);
 
   const courseModelTiers = useCourseModelTiers(selectedCourseId);
+
+  useStudentChatTour({
+    isReady: !isLoadingCourses,
+    // The tour points at the sidebar's course and New Chat buttons, so open it first.
+    prepare: () => {
+      if (isSidebarCollapsed) toggleSidebarCollapse();
+    },
+  });
   useEffect(() => {
     if (courseModelTiers.isLoaded) setSelectedModel(courseModelTiers.defaultTier);
   }, [courseModelTiers, setSelectedModel]);
@@ -194,6 +203,7 @@ export default function StudentChat() {
                 size="icon"
                 className="h-8 w-8 shrink-0 md:hidden"
                 aria-label="Open conversations"
+                data-tour="mobile-nav"
                 onClick={() => setIsMobileNavOpen(true)}
               >
                 <PanelLeft className="h-4 w-4" />
@@ -229,6 +239,7 @@ export default function StudentChat() {
             onModelChange={setSelectedModel}
             modelOptions={courseModelTiers.allowedTiers}
             documentSelector={(
+              <div className="max-w-full" data-tour="document-scope">
               <DocumentScopeSelector
                 documents={availableDocuments}
                 selectedDocumentIds={selectedDocumentIds}
@@ -239,6 +250,7 @@ export default function StudentChat() {
                 onClearSelection={clearSelectedDocuments}
                 onApplySelection={applySelectedDocuments}
               />
+              </div>
             )}
             documentHint={selectedCourseId && !isLoadingDocuments && availableDocuments.length === 0
               ? 'No processed documents are available for this course yet.'
