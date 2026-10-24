@@ -1,13 +1,9 @@
 // Typed calls for the admin analytics page: the RPCs from migrations
-// 20261024120000 and 20261025090000, and the course-analytics edge function.
+// 20261024120000, 20261025090000 and 20261025120000, and the
+// course-analytics edge function.
 import { supabase } from '@/integrations/supabase/client';
 
-import {
-  placeKey,
-  type AnalyticsPlace,
-  type PlaceFilter,
-  type PlaceLocation,
-} from '../../../supabase/functions/_shared/analyticsPlaces.ts';
+import type { AnalyticsPlace, PlaceFilter } from '../../../supabase/functions/_shared/analyticsPlaces.ts';
 import type { LabelQuestionsResponse } from '../../../supabase/functions/course-analytics/handler.ts';
 
 import { toQuestionArgs, type QuestionFilters, type QuestionSource } from './questionFilters';
@@ -20,23 +16,26 @@ export interface AnalyticsRange {
   endAt: string;
 }
 
-export interface CitedMaterial {
-  materialId: string;
-  fileName: string;
-  fileType: string;
+export interface QuestionOverview {
   questionCount: number;
   studentCount: number;
-  citationCount: number;
-  lastCitedAt: string | null;
+  labeledCount: number;
+  answeredFromMaterialsCount: number;
+  needsAttentionCount: number;
+  // Greetings and logistics: hidden when the list shows study questions only.
+  nonStudyCount: number;
+  citedQuestionCount: number;
+  documentQuestionCount: number;
+  videoQuestionCount: number;
 }
 
-export interface CitedPlace extends PlaceLocation {
-  key: string;
-  materialId: string;
+// A cited file, with copies of it (same name) merged.
+export interface CitedFile {
   fileName: string;
   fileType: string;
+  materialIds: string[];
   questionCount: number;
-  citationCount: number;
+  studentCount: number;
 }
 
 export interface QuestionBucket {
@@ -45,17 +44,6 @@ export interface QuestionBucket {
   labeledCount: number;
   studyQuestionCount: number;
   answeredFromMaterialsCount: number;
-}
-
-export interface QuestionOverview {
-  questionCount: number;
-  studentCount: number;
-  labeledCount: number;
-  answeredFromMaterialsCount: number;
-  needsAttentionCount: number;
-  citedQuestionCount: number;
-  documentQuestionCount: number;
-  videoQuestionCount: number;
 }
 
 export interface AnalyticsQuestion {
@@ -76,8 +64,18 @@ export interface QuestionPage {
   questions: AnalyticsQuestion[];
 }
 
-// Most-asked places shown when no material is chosen.
-const TOP_PLACES = 5;
+export interface RelatedQuestion {
+  id: string;
+  queryText: string;
+  createdAt: string;
+  needsAttention: boolean;
+}
+
+export interface QuestionDetail extends AnalyticsQuestion {
+  answerText: string | null;
+  relatedCount: number;
+  related: RelatedQuestion[];
+}
 
 function rangeArgs(courseId: string, range: AnalyticsRange) {
   return { in_course_id: courseId, in_start_at: range.startAt, in_end_at: range.endAt };
@@ -86,81 +84,6 @@ function rangeArgs(courseId: string, range: AnalyticsRange) {
 function unwrap<T>(result: { data: T | null; error: { message: string } | null }): T {
   if (result.error) throw new Error(result.error.message);
   return result.data as T;
-}
-
-// Generated RPC types mark every returned column non-null; these rows say
-// which ones can be null.
-interface CitedMaterialRow {
-  material_id: string;
-  file_name: string;
-  file_type: string;
-  question_count: number;
-  student_count: number;
-  citation_count: number;
-  last_cited_at: string | null;
-}
-
-interface CitedPlaceRow {
-  material_id: string;
-  file_name: string;
-  file_type: string;
-  page_number: number | null;
-  start_ms: number | null;
-  end_ms: number | null;
-  question_count: number;
-  citation_count: number;
-}
-
-export async function fetchCitedMaterials(courseId: string, range: AnalyticsRange): Promise<CitedMaterial[]> {
-  const rows = unwrap(await supabase.rpc('get_course_cited_materials', rangeArgs(courseId, range))) as CitedMaterialRow[] | null;
-  return (rows ?? []).map((row) => ({
-    materialId: row.material_id,
-    fileName: row.file_name,
-    fileType: row.file_type,
-    questionCount: Number(row.question_count),
-    studentCount: Number(row.student_count),
-    citationCount: Number(row.citation_count),
-    lastCitedAt: row.last_cited_at,
-  }));
-}
-
-export async function fetchCitedPlaces(
-  courseId: string,
-  range: AnalyticsRange,
-  options: { materialId?: string; limit?: number } = {},
-): Promise<CitedPlace[]> {
-  const rows = unwrap(await supabase.rpc('get_course_cited_places', {
-    ...rangeArgs(courseId, range),
-    in_material_id: options.materialId ?? null,
-    in_limit: options.limit ?? TOP_PLACES,
-  })) as CitedPlaceRow[] | null;
-  return (rows ?? []).map((row) => {
-    const location: PlaceLocation = {
-      pageNumber: row.page_number,
-      startMs: row.start_ms === null ? null : Number(row.start_ms),
-      endMs: row.end_ms === null ? null : Number(row.end_ms),
-    };
-    return {
-      ...location,
-      key: placeKey({ materialId: row.material_id, ...location }),
-      materialId: row.material_id,
-      fileName: row.file_name,
-      fileType: row.file_type,
-      questionCount: Number(row.question_count),
-      citationCount: Number(row.citation_count),
-    };
-  });
-}
-
-export async function fetchQuestionBuckets(courseId: string, range: AnalyticsRange): Promise<QuestionBucket[]> {
-  const rows = unwrap(await supabase.rpc('get_course_question_buckets', rangeArgs(courseId, range)));
-  return (rows ?? []).map((row) => ({
-    category: row.category,
-    questionCount: Number(row.question_count),
-    labeledCount: Number(row.labeled_count),
-    studyQuestionCount: Number(row.study_question_count),
-    answeredFromMaterialsCount: Number(row.answered_from_materials_count),
-  }));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -180,10 +103,33 @@ export async function fetchQuestionOverview(courseId: string, range: AnalyticsRa
     labeledCount: Number(row.labeled_count),
     answeredFromMaterialsCount: Number(row.answered_from_materials_count),
     needsAttentionCount: Number(row.needs_attention_count),
+    nonStudyCount: Number(row.non_study_count),
     citedQuestionCount: Number(row.cited_question_count),
     documentQuestionCount: Number(row.document_question_count),
     videoQuestionCount: Number(row.video_question_count),
   };
+}
+
+export async function fetchCitedFiles(courseId: string, range: AnalyticsRange): Promise<CitedFile[]> {
+  const rows = unwrap(await supabase.rpc('get_course_cited_files', rangeArgs(courseId, range)));
+  return (rows ?? []).map((row) => ({
+    fileName: row.file_name,
+    fileType: row.file_type,
+    materialIds: row.material_ids ?? [],
+    questionCount: Number(row.question_count),
+    studentCount: Number(row.student_count),
+  }));
+}
+
+export async function fetchQuestionBuckets(courseId: string, range: AnalyticsRange): Promise<QuestionBucket[]> {
+  const rows = unwrap(await supabase.rpc('get_course_question_buckets', rangeArgs(courseId, range)));
+  return (rows ?? []).map((row) => ({
+    category: row.category,
+    questionCount: Number(row.question_count),
+    labeledCount: Number(row.labeled_count),
+    studyQuestionCount: Number(row.study_question_count),
+    answeredFromMaterialsCount: Number(row.answered_from_materials_count),
+  }));
 }
 
 function parseSource(value: Record<string, unknown>): QuestionSource {
@@ -234,6 +180,35 @@ export async function fetchQuestions(
     in_offset: page.offset,
   }));
   return parseQuestionPage(data);
+}
+
+// null when the question isn't in this course and window.
+export async function fetchQuestionDetail(
+  courseId: string,
+  range: AnalyticsRange,
+  questionId: string,
+): Promise<QuestionDetail | null> {
+  const data = unwrap(await supabase.rpc('get_course_question_detail', {
+    ...rangeArgs(courseId, range),
+    in_question_id: questionId,
+  }));
+  const value: unknown = data;
+  if (value === null) return null;
+  if (!isRecord(value) || typeof value.id !== 'string') {
+    throw new Error('Unexpected response from get_course_question_detail');
+  }
+  const related: unknown[] = Array.isArray(value.related) ? value.related : [];
+  return {
+    ...parseQuestion(value),
+    answerText: typeof value.answer_text === 'string' ? value.answer_text : null,
+    relatedCount: typeof value.related_count === 'number' ? value.related_count : 0,
+    related: related.filter(isRecord).map((item) => ({
+      id: String(item.id),
+      queryText: String(item.query_text ?? ''),
+      createdAt: String(item.created_at ?? ''),
+      needsAttention: item.needs_attention === true,
+    })),
+  };
 }
 
 export async function fetchQuestionTerms(courseId: string, range: AnalyticsRange): Promise<QuestionTerm[]> {
