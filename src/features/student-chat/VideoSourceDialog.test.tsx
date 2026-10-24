@@ -60,6 +60,10 @@ describe('VideoSourceDialog', () => {
       { id: 's2', segmentIndex: 1, startMs: 35_000, endMs: 42_000, text: 'Relevant explanation.' },
     ] }} open onClose={vi.fn()} />);
     await screen.findByText('More context.');
+    expect(screen.getByText('Source interval: 0:35-0:42')).toBeInTheDocument();
+    const video = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(35);
     expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
     expect(screen.getByText('More context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');
   });
@@ -103,7 +107,7 @@ describe('VideoSourceDialog', () => {
     consoleError.mockRestore();
   });
 
-  it('keeps the video and transcript mounted when the panel closes and reopens', async () => {
+  it('keeps the video and transcript mounted and seeks back to the citation time when reopened', async () => {
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     const { rerender } = render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
@@ -119,9 +123,20 @@ describe('VideoSourceDialog', () => {
     rerender(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByLabelText('Video playback')).toBe(video);
-    expect(video.currentTime).toBe(123);
+    expect(video.currentTime).toBe(40);
     expect(screen.getByText('Relevant explanation.')).toBeInTheDocument();
     expect(mocks.from).toHaveBeenCalledTimes(queryCount);
     pause.mockRestore();
+  });
+
+  it('seeks to a newly cited interval when the source changes while open', async () => {
+    const { rerender } = render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
+    const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
+    fireEvent.loadedMetadata(video);
+    await screen.findByText('Relevant explanation.');
+    video.currentTime = 123;
+
+    rerender(<VideoSourceDialog source={{ ...source, startMs: 70_000, endMs: 75_000 }} open onClose={vi.fn()} />);
+    expect(video.currentTime).toBe(70);
   });
 });

@@ -99,6 +99,7 @@ describe('VideoTranscript sidebar preview', () => {
       { id: 'context', segmentIndex: 2, startMs: 42_000, endMs: 48_000, text: 'More context.' },
     ] }} onOpenVideo={vi.fn()} />);
     await screen.findByText('More context.');
+    expect(screen.getByText('Source interval: 0:35-0:48')).toBeInTheDocument();
     expect(screen.getByText('Relevant explanation.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
     expect(screen.getByText('More context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'true');
     expect(screen.getByText('Earlier context.').closest('[data-cited]')).toHaveAttribute('data-cited', 'false');

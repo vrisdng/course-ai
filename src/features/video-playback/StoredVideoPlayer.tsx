@@ -25,6 +25,7 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
   const pendingSeekRef = useRef<number | null>(null);
   const resumePlayingRef = useRef(false);
   const errorRetryRef = useRef(0);
+  const previousSourceKeyRef = useRef<string | null>(null);
   const [url, setUrl] = useState<string | null>(initialUrl ?? null);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,8 +65,6 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
 
   useEffect(() => {
     generationRef.current += 1;
-    pendingSeekRef.current = Math.max(0, startMs / 1000);
-    resumePlayingRef.current = false;
     errorRetryRef.current = 0;
     setError(null);
     setUrl(initialUrl ?? null);
@@ -75,7 +74,24 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
       generationRef.current += 1;
       if (renewalTimerRef.current) clearTimeout(renewalTimerRef.current);
     };
-  }, [filePath, initialUrl, materialId, startMs, renewUrl]);
+  }, [filePath, initialUrl, materialId, renewUrl]);
+
+  useEffect(() => {
+    const sourceKey = `${materialId ?? ''}|${filePath ?? ''}|${initialUrl ?? ''}`;
+    const sourceChanged = previousSourceKeyRef.current !== sourceKey;
+    previousSourceKeyRef.current = sourceKey;
+
+    const target = Math.max(0, startMs / 1000);
+    resumePlayingRef.current = false;
+    pendingSeekRef.current = target;
+
+    if (sourceChanged) return;
+    const video = videoRef.current;
+    if (video && video.readyState >= 1) {
+      video.currentTime = Number.isFinite(video.duration) ? Math.min(target, video.duration) : target;
+      pendingSeekRef.current = null;
+    }
+  }, [filePath, initialUrl, materialId, startMs]);
 
   useEffect(() => {
     if (active) return;

@@ -8,6 +8,7 @@ import { StoredVideoPlayer } from '@/features/video-playback/StoredVideoPlayer';
 import { formatCitationLocator, formatTimestamp } from './time';
 import { getCachedTranscript, peekCachedTranscript, type TranscriptSegment } from './transcriptCache';
 import type { VideoEvidenceSegment } from './types';
+import { getVideoInterval } from './videoIntervals';
 
 export interface ActiveVideoSource {
   title: string;
@@ -166,11 +167,12 @@ export function VideoSourceDialog({ source, open, onClose }: VideoSourceDialogPr
 
   if (!shownSource) return null;
 
+  const interval = getVideoInterval(shownSource);
   const hasPlayback = Boolean(shownSource.signedUrl || shownSource.filePath);
   const externalUrl = shownSource.linkedUrl ? (() => {
     try {
       const url = new URL(shownSource.linkedUrl);
-      url.searchParams.set('t', String(Math.floor(shownSource.startMs / 1000)));
+      url.searchParams.set('t', String(Math.floor(interval.startMs / 1000)));
       return url.toString();
     } catch {
       return shownSource.linkedUrl;
@@ -195,7 +197,7 @@ export function VideoSourceDialog({ source, open, onClose }: VideoSourceDialogPr
             {shownSource.title}
           </h2>
           <p id={descriptionId} className="text-sm text-muted-foreground">
-            Source interval: {formatCitationLocator({ startMs: shownSource.startMs, endMs: shownSource.endMs })}
+            Source interval: {formatCitationLocator(interval)}
           </p>
         </div>
 
@@ -216,7 +218,8 @@ export function VideoSourceDialog({ source, open, onClose }: VideoSourceDialogPr
                 materialId={shownSource.materialId}
                 filePath={shownSource.filePath}
                 initialUrl={shownSource.signedUrl}
-                startMs={evidence?.[0]?.startMs ?? shownSource.startMs}
+                startMs={interval.startMs}
+                seekMs={open ? interval.startMs : undefined}
                 seekRequest={seekRequest ?? undefined}
                 active={open}
               />

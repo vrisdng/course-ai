@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { markCitationStep, markCitationTranscriptPainted } from './citationPerf';
 import { formatCitationLocator, formatTimestamp } from './time';
 import { useTranscriptWindow } from './useTranscriptWindow';
+import { getVideoInterval } from './videoIntervals';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 
 interface VideoTranscriptProps {
@@ -15,9 +16,10 @@ interface VideoTranscriptProps {
 
 export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
   const highlightRef = useRef<HTMLDivElement | null>(null);
-  const { segments, isLoading } = useTranscriptWindow(source.materialId, source.startMs, source.endMs);
+  const interval = getVideoInterval(source);
+  const { segments, isLoading } = useTranscriptWindow(source.materialId, interval.startMs, interval.endMs);
   const hasPlayback = Boolean(source.signedUrl || source.filePath);
-  const citedEndMs = source.endMs ?? source.startMs;
+  const citedEndMs = interval.endMs ?? interval.startMs;
   const evidence = source.evidenceSegments?.length ? source.evidenceSegments : null;
   const evidenceRows = evidence?.map((segment) => ({
     id: segment.id,
@@ -33,12 +35,12 @@ export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
   const visibleSegments = segments.length > 0 ? segments : evidenceRows;
   const transcriptSource = segments.length > 0 ? 'window' : evidenceRows.length > 0 ? 'evidence' : 'empty';
   const firstCitedIndex = visibleSegments.findIndex((segment) =>
-    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs
+    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= interval.startMs
   );
 
   useLayoutEffect(() => {
     markCitationStep('placeholder_visible');
-  }, [source.materialId, source.startMs, source.endMs]);
+  }, [source.materialId, interval.startMs, interval.endMs]);
 
   useLayoutEffect(() => {
     if (visibleSegments.length === 0) return;
@@ -49,7 +51,7 @@ export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
     }
     const timeout = window.setTimeout(mark, 0);
     return () => window.clearTimeout(timeout);
-  }, [source.materialId, source.startMs, source.endMs, transcriptSource, visibleSegments.length]);
+  }, [source.materialId, interval.startMs, interval.endMs, transcriptSource, visibleSegments.length]);
 
   useEffect(() => {
     if (!highlightRef.current || isLoading) return;
@@ -63,7 +65,7 @@ export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">{source.title}</p>
           <p className="text-xs text-muted-foreground">
-            Source interval: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
+            Source interval: {formatCitationLocator(interval)}
           </p>
           <p className="text-xs text-muted-foreground">
             {evidence ? 'Exact supporting segments' : 'Approximate citation interval'}
@@ -106,7 +108,7 @@ export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
         ) : visibleSegments.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted-foreground">No transcript segments available.</div>
         ) : visibleSegments.map((segment, index) => {
-          const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
+          const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= interval.startMs;
           return (
             <div
               key={`${segment.start_ms}-${segment.end_ms}-${index}`}
