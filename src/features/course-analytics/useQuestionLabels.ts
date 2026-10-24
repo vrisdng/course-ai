@@ -14,6 +14,8 @@ export interface QuestionLabelsState {
   // Questions in the window still without an AI label, once known.
   remaining: number | null;
   labelError: string | null;
+  // Goes up each time labelling changed some labels, so views can reload.
+  version: number;
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong');
@@ -29,6 +31,7 @@ export function useQuestionLabels(courseId: string | null, range: AnalyticsRange
   const [isLabelling, setIsLabelling] = useState(false);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [labelError, setLabelError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
   const startAt = range?.startAt ?? null;
   const endAt = range?.endAt ?? null;
 
@@ -77,7 +80,10 @@ export function useQuestionLabels(courseId: string | null, range: AnalyticsRange
       } finally {
         if (!cancelled) setIsLabelling(false);
       }
-      if (labelledAny && !cancelled) await loadBuckets();
+      if (labelledAny && !cancelled) {
+        await loadBuckets();
+        if (!cancelled) setVersion((current) => current + 1);
+      }
     };
 
     void loadBuckets().then(label);
@@ -86,5 +92,5 @@ export function useQuestionLabels(courseId: string | null, range: AnalyticsRange
     };
   }, [courseId, startAt, endAt]);
 
-  return { buckets, isLoadingBuckets, bucketError, isLabelling, remaining, labelError };
+  return { buckets, isLoadingBuckets, bucketError, isLabelling, remaining, labelError, version };
 }

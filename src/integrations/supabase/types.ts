@@ -1465,6 +1465,31 @@ export type Database = {
       }
     }
     Functions: {
+      analytics_citation_at_places: {
+        Args: {
+          in_end_ms: number
+          in_places: Json
+          in_start_ms: number
+          in_page_number: number
+          in_material_id: string
+        }
+        Returns: boolean
+      }
+      analytics_counted_questions: {
+        Args: { in_course_id: string; in_start_at: string; in_end_at: string }
+        Returns: {
+          assistant_message_id: string
+          id: string
+          user_id: string
+          query_text: string
+          created_at: string
+          category: string
+          is_labeled: boolean
+          is_study_question: boolean
+          answered_from_materials: boolean
+          needs_attention: boolean
+        }[]
+      }
       chunk_visible_for_search: {
         Args: {
           active_term_id: string
@@ -1557,6 +1582,38 @@ export type Database = {
             }
             Returns: number
           }
+      get_course_cited_materials: {
+        Args: { in_course_id: string; in_end_at?: string; in_start_at?: string }
+        Returns: {
+          file_type: string
+          citation_count: number
+          last_cited_at: string
+          student_count: number
+          question_count: number
+          file_name: string
+          material_id: string
+        }[]
+      }
+      get_course_cited_places: {
+        Args: {
+          in_start_at?: string
+          in_course_id: string
+          in_end_at?: string
+          in_material_id?: string
+          in_video_bucket_ms?: number
+          in_limit?: number
+        }
+        Returns: {
+          material_id: string
+          file_name: string
+          file_type: string
+          page_number: number
+          start_ms: number
+          end_ms: number
+          question_count: number
+          citation_count: number
+        }[]
+      }
       get_course_document_reference_stats:
         | {
             Args: { in_course_id: string; in_start_at?: string }
@@ -1610,6 +1667,62 @@ export type Database = {
               keyword: string
             }[]
           }
+      get_course_question_buckets: {
+        Args: { in_start_at?: string; in_end_at?: string; in_course_id: string }
+        Returns: {
+          study_question_count: number
+          answered_from_materials_count: number
+          category: string
+          question_count: number
+          labeled_count: number
+        }[]
+      }
+      get_course_question_overview: {
+        Args: { in_course_id: string; in_end_at?: string; in_start_at?: string }
+        Returns: {
+          answered_from_materials_count: number
+          video_question_count: number
+          document_question_count: number
+          cited_question_count: number
+          needs_attention_count: number
+          labeled_count: number
+          student_count: number
+          question_count: number
+        }[]
+      }
+      get_course_question_terms: {
+        Args: {
+          in_limit?: number
+          in_min_questions?: number
+          in_end_at?: string
+          in_start_at?: string
+          in_course_id: string
+        }
+        Returns: {
+          word_count: number
+          term: string
+          term_key: string
+          student_count: number
+          question_count: number
+        }[]
+      }
+      get_course_questions: {
+        Args: {
+          in_limit?: number
+          in_category?: string
+          in_source_kind?: string
+          in_material_id?: string
+          in_places?: Json
+          in_topic_places?: Json
+          in_topic_text?: string
+          in_end_at?: string
+          in_start_at?: string
+          in_course_id: string
+          in_offset?: number
+          in_needs_attention?: boolean
+        }
+        Returns: Json
+      }
       get_course_top_questions:
         | {
             Args: {
@@ -1638,58 +1751,6 @@ export type Database = {
               unique_student_count: number
             }[]
           }
-      get_course_cited_materials: {
-        Args: { in_course_id: string; in_end_at?: string; in_start_at?: string }
-        Returns: {
-          file_type: string
-          citation_count: number
-          last_cited_at: string
-          student_count: number
-          question_count: number
-          file_name: string
-          material_id: string
-        }[]
-      }
-      get_course_cited_places: {
-        Args: {
-          in_start_at?: string
-          in_course_id: string
-          in_end_at?: string
-          in_material_id?: string
-          in_video_bucket_ms?: number
-          in_limit?: number
-        }
-        Returns: {
-          material_id: string
-          file_name: string
-          file_type: string
-          page_number: number
-          start_ms: number
-          end_ms: number
-          question_count: number
-          citation_count: number
-        }[]
-      }
-      get_course_question_buckets: {
-        Args: { in_start_at?: string; in_end_at?: string; in_course_id: string }
-        Returns: {
-          study_question_count: number
-          answered_from_materials_count: number
-          category: string
-          question_count: number
-          labeled_count: number
-        }[]
-      }
-      get_course_questions_at_places: {
-        Args: {
-          in_question_limit?: number
-          in_places: Json
-          in_end_at: string
-          in_start_at: string
-          in_course_id: string
-        }
-        Returns: Json
-      }
       get_material_course_id: {
         Args: { check_material_id: string }
         Returns: string

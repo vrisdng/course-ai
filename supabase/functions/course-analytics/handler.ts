@@ -3,10 +3,10 @@
 // wires the real clients. Admins only.
 //
 // Actions:
-//   match-keyword    Embed a teacher's keyword, search the course's chunks and
+//   match-keyword    Embed a teacher's topic, search the course's chunks and
 //                    return the places (pages, video stretches) it matched.
-//                    The page then counts questions at the chosen places
-//                    through the get_course_questions_at_places RPC.
+//                    The page then lists questions whose answers cited them
+//                    through the get_course_questions RPC.
 //   label-questions  Label up to `limit` not-yet-labelled questions in the
 //                    window with the Decisions API (questionLabels.ts). The
 //                    admin page calls this when it opens, so each question is

@@ -81,7 +81,7 @@ describe("groupChunksIntoPlaces", () => {
 });
 
 describe("toPlaceFilters", () => {
-  it("builds the JSON the get_course_questions_at_places RPC takes", () => {
+  it("builds the place JSON the get_course_questions RPC takes", () => {
     const places = groupChunksIntoPlaces([
       chunk({ page_number: 3 }),
       chunk({ material_id: VIDEO, file_type: "video", page_number: null, start_ms: 1000, end_ms: 5000 }),

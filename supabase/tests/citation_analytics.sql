@@ -1,6 +1,6 @@
 -- Run after migration 20261024120000; all fixtures roll back.
 -- Covers the citation-based analytics RPCs: cited materials, cited places,
--- questions at chosen places, question buckets and the admin chunk search.
+-- question buckets and the admin chunk search.
 BEGIN;
 INSERT INTO auth.users (id, email, raw_app_meta_data, raw_user_meta_data) VALUES
   ('ca000000-0000-4000-8000-000000000001', 'citation-admin@example.test', '{}', '{}'),
@@ -105,36 +105,6 @@ BEGIN
   ASSERT (SELECT count(*) = 1 FROM public.get_course_cited_places(course, window_start, window_end, NULL, 300000, 1)),
     'The limit applies';
 
-  -- Questions at chosen places.
-  result := public.get_course_questions_at_places(course, window_start, window_end,
-    jsonb_build_array(jsonb_build_object('material_id', pdf, 'page_number', 3)));
-  ASSERT (result->>'question_count')::int = 2 AND (result->>'student_count')::int = 1, format('PDF page 3: %s', result);
-  ASSERT jsonb_array_length(result->'questions') = 2;
-  ASSERT result->'questions'->0->>'query_text' = 'how do i trace a recursive call', 'Newest question first';
-  ASSERT result->'questions'->0->>'category' = 'how_to_process', 'Unlabelled questions fall back to the rule category';
-
-  result := public.get_course_questions_at_places(course, window_start, window_end,
-    jsonb_build_array(jsonb_build_object('material_id', video, 'start_ms', 60000, 'end_ms', 120000)));
-  ASSERT (result->>'question_count')::int = 1, format('Video 1-2 min overlaps the 65-80 s citation only: %s', result);
-
-  result := public.get_course_questions_at_places(course, window_start, window_end, jsonb_build_array(
-    jsonb_build_object('material_id', pdf, 'page_number', 3),
-    jsonb_build_object('material_id', video, 'start_ms', 0, 'end_ms', 600000)));
-  ASSERT (result->>'question_count')::int = 3 AND (result->>'student_count')::int = 2,
-    format('Two places count each question once: %s', result);
-
-  result := public.get_course_questions_at_places(course, window_start, window_end,
-    jsonb_build_array(jsonb_build_object('material_id', pdf, 'page_number', 4)));
-  ASSERT (result->>'question_count')::int = 0 AND jsonb_array_length(result->'questions') = 0, 'Uncited page';
-
-  result := public.get_course_questions_at_places(course, window_start, window_end, '[]'::jsonb);
-  ASSERT (result->>'question_count')::int = 0, 'No places, no questions';
-
-  result := public.get_course_questions_at_places(course, window_start, window_end,
-    jsonb_build_array(jsonb_build_object('material_id', pdf, 'page_number', 3)), 1);
-  ASSERT (result->>'question_count')::int = 2 AND jsonb_array_length(result->'questions') = 1,
-    'The question list is capped but the count is exact';
-
   -- Question buckets: AI label when present, otherwise the rule category.
   SELECT * INTO STRICT row FROM public.get_course_question_buckets(course, window_start, window_end) WHERE category = 'definition_concept';
   ASSERT row.question_count = 1 AND row.labeled_count = 1 AND row.study_question_count = 1 AND row.answered_from_materials_count = 1;
@@ -165,9 +135,6 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN PERFORM public.get_course_cited_places(course, NULL, NULL);
     RAISE EXCEPTION 'Students must not read cited places';
-  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN PERFORM public.get_course_questions_at_places(course, NULL, NULL, '[]'::jsonb);
-    RAISE EXCEPTION 'Students must not read questions at places';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN PERFORM public.get_course_question_buckets(course, NULL, NULL);
     RAISE EXCEPTION 'Students must not read question buckets';
