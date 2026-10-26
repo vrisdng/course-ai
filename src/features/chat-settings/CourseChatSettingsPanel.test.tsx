@@ -122,6 +122,59 @@ describe('CourseChatSettingsPanel', () => {
     expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ matchThreshold: 0.21 }));
   });
 
+  it('leaves the video/document balance off by default and explains it', () => {
+    renderPanel();
+    const toggle = screen.getByRole('checkbox', { name: 'Balance video and document sources' });
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole('slider', { name: 'Video share of source text' })).not.toBeInTheDocument();
+    expect(screen.getByText('Off: each search keeps the most relevant passages, whatever their type.')).toBeInTheDocument();
+  });
+
+  it('turns the balance on at 50%, shows an example, and saves the chosen share', () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Balance video and document sources' }));
+
+    const slider = screen.getByRole('slider', { name: 'Video share of source text' });
+    expect(slider).toHaveAttribute('aria-valuenow', '50');
+    expect(slider).toHaveAttribute('aria-valuemin', '0');
+    expect(slider).toHaveAttribute('aria-valuemax', '100');
+    // Endpoints say "first", not "only": the other type still fills in when one runs out.
+    expect(screen.getByText('0% · documents first')).toBeInTheDocument();
+    expect(screen.getByText('100% · video first')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Video share of source text' }), { target: { value: '30' } });
+    expect(slider).toHaveAttribute('aria-valuenow', '30');
+    expect(screen.getByText(/about 3 would come from video and 7 from documents/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ videoSharePercent: 30 }));
+  });
+
+  it('moves the share in 5% steps from the slider', () => {
+    mockSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 40 });
+    renderPanel();
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Video share of source text' }), { key: 'ArrowRight' });
+    expect(screen.getByRole('spinbutton', { name: 'Video share of source text' })).toHaveValue(45);
+  });
+
+  it('shows a stored share and saves null when the balance is turned off', () => {
+    mockSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 25 });
+    renderPanel();
+    expect(screen.getByRole('spinbutton', { name: 'Video share of source text' })).toHaveValue(25);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Balance video and document sources' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ videoSharePercent: null }));
+  });
+
+  it('blocks saving a share outside 0-100', () => {
+    mockSettings({ ...DEFAULT_CHAT_SETTINGS, videoSharePercent: 25 });
+    renderPanel();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Video share of source text' }), { target: { value: '120' } });
+    expect(screen.getByText('Must be between 0 and 100.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
   it('shows load errors and the empty state', () => {
     mockSettings(null, { loadError: 'denied' });
     const { unmount } = renderPanel();

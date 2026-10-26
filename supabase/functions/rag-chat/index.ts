@@ -27,10 +27,9 @@ import {
 } from "../_shared/citations.ts";
 import { citedBlockIds, citedExcerpt, loadSourceBlocks, type SourceBlock } from "../_shared/sourceBlocks.ts";
 import {
-  dedupeRetrievedChunksByBestScore,
+  candidateCountForSearch,
   getRetrievalSettings,
-  rerankRetrievedChunks,
-  spreadAcrossTimeline,
+  selectSearchResults,
 } from "../_shared/retrieval.ts";
 import {
   buildConversationHistoryTurns,
@@ -882,37 +881,28 @@ ${retrievalScopeInstruction}`;
     }
 
     // One course search, as run by the search tool: embed the query, match
-    // chunks within the course and document filter, rerank with the course's
-    // settings, and keep the relevant ones.
+    // chunks within the course and document filter, then rerank, apply the
+    // relevance floor and the course's video/document balance.
     const searchCourse = async (query: string): Promise<RetrievedChunk[]> => {
       throwIfAborted(requestAbortController.signal);
       chatTelemetry.recordSearch();
       const embedding = await chatTelemetry.measure("embedding", () =>
         embeddingService.embedQuery(query, requestAbortController.signal));
-      const { matchThreshold, matchCount, relevanceFloor, finalCount } = getRetrievalSettings(
-        { isSummaryQuery, hasSelectedDocumentFilter },
-        chatSettings,
-      );
+      const retrieval = getRetrievalSettings({ isSummaryQuery, hasSelectedDocumentFilter }, chatSettings);
       return chatTelemetry.measure("retrieval", async () => {
         const candidates = await retrieveChunkCandidates({
           supabaseClient,
           userId: user.id,
           courseId: activeCourseId,
           embedding,
-          threshold: matchThreshold,
-          count: matchCount,
+          threshold: retrieval.matchThreshold,
+          count: candidateCountForSearch(retrieval.matchCount, chatSettings),
           selectedMaterialIds,
         });
-        let ranked = rerankRetrievedChunks(
-          dedupeRetrievedChunksByBestScore(candidates),
-          query,
-          finalCount,
-          chatSettings.semanticWeight,
-        );
-        if (isSummaryQuery) ranked = spreadAcrossTimeline(ranked, chatSettings.videoSpreadWindowMs);
-        const relevant = ranked.filter((chunk) => chunk.relevance_score >= relevanceFloor);
-        console.log(`Search "${query.substring(0, 60)}": ${candidates.length} candidates, ${relevant.length} above relevance floor.`);
-        return relevant;
+        const selected = selectSearchResults(candidates, query, { retrieval, settings: chatSettings, isSummaryQuery });
+        const share = chatSettings.videoSharePercent === null ? "off" : `${chatSettings.videoSharePercent}%`;
+        console.log(`Search "${query.substring(0, 60)}": ${candidates.length} candidates, ${selected.length} selected (video share ${share}).`);
+        return selected;
       });
     };
 
