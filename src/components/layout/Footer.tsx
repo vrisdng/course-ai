@@ -9,11 +9,11 @@ export function Footer() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
               <GraduationCap className="h-4 w-4 text-primary-foreground" />
             </div>
-            <span className="font-semibold text-foreground">CEEChat</span>
+            <span className="font-semibold text-foreground">CEEGPT</span>
           </div>
 
           <p className="text-sm text-muted-foreground">
-            © {new Date().getFullYear()} CEEChat. All rights reserved.
+            © {new Date().getFullYear()} CEEGPT. All rights reserved.
           </p>
         </div>
       </div>

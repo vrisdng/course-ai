@@ -178,7 +178,7 @@ export default function ResetPassword() {
         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
           <GraduationCap className="h-6 w-6 text-primary-foreground" />
         </div>
-        <span className="text-2xl font-bold text-foreground">CEEChat</span>
+        <span className="text-2xl font-bold text-foreground">CEEGPT</span>
       </Link>
 
       <Card className="w-full max-w-md">
@@ -188,7 +188,7 @@ export default function ResetPassword() {
           <form onSubmit={passwordForm.handleSubmit(handleUpdatePassword)}>
             <CardHeader>
               <CardTitle>Choose a new password</CardTitle>
-              <CardDescription>{mustChangePassword ? 'You must replace your initial password before using CEEChat. No email code is needed.' : 'Enter and confirm the new password for your account.'}</CardDescription>
+              <CardDescription>{mustChangePassword ? 'You must replace your initial password before using CEEGPT. No email code is needed.' : 'Enter and confirm the new password for your account.'}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {error && (

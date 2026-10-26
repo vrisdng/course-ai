@@ -37,7 +37,7 @@ export function ChatComposer({
   onSend,
   onStop,
   placeholder = 'Ask a question about your course materials...',
-  footerText = 'CEEChat uses RAG to ground answers in your course materials',
+  footerText = 'CEEGPT uses RAG to ground answers in your course materials',
   documentSelector,
   documentHint,
   selectedModel,
