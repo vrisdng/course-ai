@@ -1,67 +1,62 @@
 import { FileText, Loader2, PlayCircle } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { Button } from '@/components/ui/button';
 
-import { resolveSignedMediaUrl } from './signedMedia';
+import { markCitationStep, markCitationTranscriptPainted } from './citationPerf';
 import { formatCitationLocator, formatTimestamp } from './time';
 import { useTranscriptWindow } from './useTranscriptWindow';
+import { getVideoInterval } from './videoIntervals';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 
 interface VideoTranscriptProps {
   source: ActiveVideoSource;
   onOpenVideo: () => void;
-  previewVisible?: boolean;
 }
 
-export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: VideoTranscriptProps) {
+export function VideoTranscript({ source, onOpenVideo }: VideoTranscriptProps) {
   const highlightRef = useRef<HTMLDivElement | null>(null);
-  const previewRef = useRef<HTMLVideoElement | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(source.signedUrl);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const { segments, isLoading } = useTranscriptWindow(source.materialId, source.startMs, source.endMs);
+  const interval = getVideoInterval(source);
+  const { segments, isLoading } = useTranscriptWindow(source.materialId, interval.startMs, interval.endMs);
   const hasPlayback = Boolean(source.signedUrl || source.filePath);
-  const citedEndMs = source.endMs ?? source.startMs;
+  const citedEndMs = interval.endMs ?? interval.startMs;
   const evidence = source.evidenceSegments?.length ? source.evidenceSegments : null;
+  const evidenceRows = evidence?.map((segment) => ({
+    id: segment.id,
+    start_ms: segment.startMs,
+    end_ms: segment.endMs,
+    text: segment.text,
+  })) ?? [];
   const evidenceIds = new Set(evidence?.map((segment) => segment.id));
   const visibleIds = new Set(segments.map((segment) => segment.id));
   const missingEvidence = evidence?.filter((segment) => !visibleIds.has(segment.id)) ?? [];
-  const playbackStartMs = evidence?.[0]?.startMs ?? source.startMs;
-  const firstCitedIndex = segments.findIndex((segment) =>
-    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs
+  // Persisted evidence is already in memory, so show it before the window query
+  // returns instead of making the sidebar wait for another round trip.
+  const visibleSegments = segments.length > 0 ? segments : evidenceRows;
+  const transcriptSource = segments.length > 0 ? 'window' : evidenceRows.length > 0 ? 'evidence' : 'empty';
+  const firstCitedIndex = visibleSegments.findIndex((segment) =>
+    evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= interval.startMs
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!previewVisible || !hasPlayback) {
-      setPreviewUrl(null);
-      setPreviewLoading(false);
-      return;
-    }
-    if (source.signedUrl) {
-      setPreviewUrl(source.signedUrl);
-      setPreviewLoading(false);
-      return;
-    }
+  useLayoutEffect(() => {
+    markCitationStep('placeholder_visible');
+  }, [source.materialId, interval.startMs, interval.endMs]);
 
-    setPreviewUrl(null);
-    setPreviewLoading(true);
-    void resolveSignedMediaUrl(source.materialId).then((url) => {
-      if (cancelled) return;
-      setPreviewUrl(url);
-      setPreviewLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [hasPlayback, previewVisible, source.materialId, source.signedUrl]);
-
-  useEffect(() => {
-    if (previewRef.current) previewRef.current.currentTime = Math.max(0, playbackStartMs / 1000);
-  }, [playbackStartMs]);
+  useLayoutEffect(() => {
+    if (visibleSegments.length === 0) return;
+    const mark = () => markCitationTranscriptPainted(transcriptSource);
+    if (typeof requestAnimationFrame === 'function') {
+      const frame = requestAnimationFrame(mark);
+      return () => cancelAnimationFrame(frame);
+    }
+    const timeout = window.setTimeout(mark, 0);
+    return () => window.clearTimeout(timeout);
+  }, [source.materialId, interval.startMs, interval.endMs, transcriptSource, visibleSegments.length]);
 
   useEffect(() => {
     if (!highlightRef.current || isLoading) return;
     highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [firstCitedIndex, isLoading, segments]);
+  }, [firstCitedIndex, isLoading, visibleSegments.length]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -70,7 +65,7 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">{source.title}</p>
           <p className="text-xs text-muted-foreground">
-            Source interval: {formatCitationLocator({ startMs: source.startMs, endMs: source.endMs })}
+            Source interval: {formatCitationLocator(interval)}
           </p>
           <p className="text-xs text-muted-foreground">
             {evidence ? 'Exact supporting segments' : 'Approximate citation interval'}
@@ -86,24 +81,13 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
             onClick={onOpenVideo}
             className="relative block aspect-video w-full overflow-hidden rounded-md bg-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
-            {previewVisible && previewUrl ? (
-              <video
-                ref={previewRef}
-                aria-label="Video thumbnail"
-                className="pointer-events-none h-full w-full object-contain"
-                src={previewUrl}
-                preload="metadata"
-                muted
-                playsInline
-                onLoadedMetadata={(event) => {
-                  event.currentTarget.currentTime = Math.max(0, playbackStartMs / 1000);
-                }}
-                onError={() => setPreviewUrl(null)}
-              />
-            ) : previewVisible && !previewLoading ? (
-              <span className="absolute inset-0 flex items-center justify-center text-sm">Preview unavailable</span>
-            ) : null}
-            <span className="absolute inset-0 flex items-center justify-center bg-black/20">
+            <img
+              src="/click-on-me.svg"
+              alt=""
+              className="h-full w-full object-cover"
+              draggable={false}
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/20 transition-colors duration-200 hover:bg-black/35">
               <PlayCircle className="h-12 w-12 drop-shadow" aria-hidden="true" />
             </span>
           </button>
@@ -122,15 +106,15 @@ export function VideoTranscript({ source, onOpenVideo, previewVisible = true }: 
             ))}
           </div>
         ) : null}
-        {isLoading ? (
+        {isLoading && visibleSegments.length === 0 ? (
           <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Loading transcript...
           </div>
-        ) : segments.length === 0 ? (
+        ) : visibleSegments.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted-foreground">No transcript segments available.</div>
-        ) : segments.map((segment, index) => {
-          const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= source.startMs;
+        ) : visibleSegments.map((segment, index) => {
+          const cited = evidence ? evidenceIds.has(segment.id) : segment.start_ms <= citedEndMs && segment.end_ms >= interval.startMs;
           return (
             <div
               key={`${segment.start_ms}-${segment.end_ms}-${index}`}

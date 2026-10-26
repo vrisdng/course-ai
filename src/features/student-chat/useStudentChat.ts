@@ -5,6 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 
 import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
 
+import { beginCitationOpen, finishCitationOpen, markCitationStep } from './citationPerf';
 import { getCitationKey } from './citations';
 import {
   type ActiveViewerSource,
@@ -19,6 +20,7 @@ import {
   sanitizeSelectedDocumentIds,
 } from './documentScope';
 import { loadBlockBoxes, loadPageImage } from './pageImage';
+import { prefetchSignedMediaUrl } from './signedMedia';
 import { parseMaybeJson, parseSseEventBlock, type ParsedSseEvent } from './sse';
 import type { ActiveVideoSource } from './VideoSourceDialog';
 import type { Citation, Conversation, Message } from './types';
@@ -84,9 +86,13 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
   let studentDocumentId = citation.studentDocumentId ?? null;
   let highlightBox: HighlightBox | null = null;
 
+  // Videos never use the chunk's page highlight box, so a citation that already
+  // carries its material id can skip the extra round trip.
+  const skipChunkLookup = Boolean(citation.materialId && citation.documentType === 'video');
+
   // The chunk holds the highlight box. It may be gone (re-transcription replaces
   // it), in which case the citation's saved source IDs still open the file.
-  if (citation.chunkId) {
+  if (citation.chunkId && !skipChunkLookup) {
     const { data: chunkRow, error: chunkError } = await supabase
       .from('chunks')
       .select('material_id, student_document_id, highlight_box')
@@ -1052,11 +1058,21 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   const openCitationSource = useCallback(async (citation: Citation, citationKey: string) => {
     const requestId = ++sourceOpenRequestIdRef.current;
+    const kind = classifyCitation(citation);
+    let outcome: 'success' | 'error' = 'success';
+    beginCitationOpen(kind);
     setOpeningCitationKey(citationKey);
+
+    // Warm the signed-media cache while the source lookup runs; the sidebar no
+    // longer mounts a video, so this only makes the dialog open faster.
+    const earlyPrefetch = citation.materialId && kind === 'video'
+      ? prefetchSignedMediaUrl(citation.materialId)
+      : null;
 
     try {
       const resolved = await resolveCitationSource(citation);
       if (requestId !== sourceOpenRequestIdRef.current) return;
+      markCitationStep('source_resolved');
 
       // The player resolves either Supabase Storage or R2 through signed-media.
       if (resolved.fileType === 'video') {
@@ -1073,6 +1089,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
           linkedUrl: resolved.linkedUrl,
           evidenceSegments: citation.evidenceSegments,
         });
+        markCitationStep('panel_state');
+        void (earlyPrefetch ?? prefetchSignedMediaUrl(resolved.materialId));
         return;
       }
 
@@ -1089,11 +1107,11 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       // PDFs/images render in-app; raw/binary files fall back to a new tab (the
       // "no new tab" rule was scoped to PDFs).
-      const kind = resolved.previewAsPdf ? 'pdf' : classifyCitation(citation);
+      const viewerKind = resolved.previewAsPdf ? 'pdf' : kind;
 
       // Cited blocks decide the page and the outlines; without them the
       // chunk's own page and box are used.
-      const blockHighlight = kind === 'pdf' && citation.blockIds?.length
+      const blockHighlight = viewerKind === 'pdf' && citation.blockIds?.length
         ? await loadBlockBoxes(citation.blockIds)
         : null;
       const pageNumber = blockHighlight?.pageNumber ?? ensureStartingPage(citation.pageNumber);
@@ -1103,13 +1121,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
       // A page rendered at ingestion shows as an image with the cited boxes,
       // without downloading the PDF; otherwise the viewer renders the PDF.
-      const pageImage = kind === 'pdf' && resolved.materialId
+      const pageImage = viewerKind === 'pdf' && resolved.materialId
         ? await loadPageImage(resolved.materialId, pageNumber)
         : null;
       if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const viewerSource: ActiveViewerSource = {
-        kind,
+        kind: viewerKind,
         documentName: resolved.fileName,
         pageNumber,
         signedUrl,
@@ -1121,21 +1139,27 @@ export function useStudentChat(routeConversationId: string | null = null) {
       };
 
       // PDFs render in the side-panel gallery, scrolled to the cited page.
-      if (kind === 'pdf') {
+      if (viewerKind === 'pdf') {
         setActiveVideoSource(null);
         setActiveViewerSource(viewerSource);
         setShowSidePanel(true);
+        markCitationStep('panel_state');
         return;
       }
 
       // Images and raw/binary files open directly in the clear-view dialog.
       setClearViewSource(viewerSource);
+      markCitationStep('panel_state');
     } catch (error) {
       if (requestId !== sourceOpenRequestIdRef.current) return;
+      outcome = 'error';
       const message = error instanceof Error ? error.message : 'Failed to open source context';
       toast.error(message);
     } finally {
-      if (requestId === sourceOpenRequestIdRef.current) setOpeningCitationKey(null);
+      if (requestId === sourceOpenRequestIdRef.current) {
+        finishCitationOpen(outcome);
+        setOpeningCitationKey(null);
+      }
     }
   }, [setShowSidePanel]);
 
