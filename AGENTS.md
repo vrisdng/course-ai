@@ -1,4 +1,4 @@
-# AGENTS.md — CEEChat
+# AGENTS.md — CEEGPT
 
 RAG-based course companion: students chat over course materials with cited answers; lecturers/admins upload and manage materials. React + Vite frontend, Supabase (Postgres + `pgvector`, Auth, Storage, Deno Edge Functions) backend.
 

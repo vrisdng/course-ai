@@ -778,7 +778,7 @@ serve(async (req: Request) => {
       // ── No-RAG path: answer from model knowledge only ─────────────────
       console.log(`Processing no-RAG chat for user ${user.id}: "${trimmedMessage.substring(0, 50)}..." in conversation ${activeConversationId}`);
 
-      systemPrompt = `You are CEEChat, an AI learning assistant for university students.
+      systemPrompt = `You are CEEGPT, an AI learning assistant for university students.
 
 The user has chosen to chat without grounding the answer in any uploaded course documents. Answer using your general knowledge.
 
@@ -812,7 +812,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
         ? "\nSUMMARY MODE: The student wants a broad summary or overview. Search several times to cover the different topics of the material, and organise your response with clear ## sections for each major topic, citing across all the sources you found.\n"
         : "";
 
-      systemPrompt = `You are CEEChat, an AI learning assistant for university students.
+      systemPrompt = `You are CEEGPT, an AI learning assistant for university students.
 
 Answer questions using the course materials, which you find with the ${COURSE_SEARCH_TOOL} tool. Format responses in clean markdown. Start with a direct answer, then elaborate with structure if needed.
 ${summaryInstruction}
