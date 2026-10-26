@@ -911,6 +911,7 @@ export type Database = {
           email: string
           full_name: string | null
           id: string
+          onboarding_completed_at: string | null
           role: Database["public"]["Enums"]["user_role"]
           updated_at: string
           user_id: string
@@ -923,6 +924,7 @@ export type Database = {
           email: string
           full_name?: string | null
           id?: string
+          onboarding_completed_at?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           updated_at?: string
           user_id: string
@@ -935,6 +937,7 @@ export type Database = {
           email?: string
           full_name?: string | null
           id?: string
+          onboarding_completed_at?: string | null
           role?: Database["public"]["Enums"]["user_role"]
           updated_at?: string
           user_id?: string
@@ -1521,6 +1524,7 @@ export type Database = {
           transcript_id: string
         }[]
       }
+      complete_onboarding_tour: { Args: never; Returns: undefined }
       find_student_import_profile: {
         Args: { p_email: string }
         Returns: {

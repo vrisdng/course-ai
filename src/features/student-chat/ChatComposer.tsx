@@ -74,7 +74,7 @@ export function ChatComposer({
           </div>
         ) : null}
 
-        <div className="relative">
+        <div className="relative" data-tour="composer">
           <Textarea
             ref={textareaRef}
             value={input}
@@ -86,7 +86,7 @@ export function ChatComposer({
             disabled={isLoading || disabled}
           />
           {onModelChange ? (
-            <div className="absolute bottom-2 left-2">
+            <div className="absolute bottom-2 left-2" data-tour="model-picker">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button

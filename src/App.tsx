@@ -11,6 +11,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { PasswordChangeGate } from "@/components/auth/PasswordChangeGate";
+import { TourProvider } from "@/features/onboarding/TourContext";
 
 // Pages
 import Landing from "./pages/Landing";
@@ -25,6 +26,7 @@ import NotFound from "./pages/NotFound";
 
 const App = () => (
   <AuthProvider>
+    <TourProvider>
     <TooltipProvider>
       <Sonner />
       {import.meta.env.VITE_MAINTENANCE_MODE === "true" && (
@@ -98,6 +100,7 @@ const App = () => (
         </PasswordChangeGate>
       </BrowserRouter>
     </TooltipProvider>
+    </TourProvider>
   </AuthProvider>
 );
 

@@ -1,0 +1,67 @@
+/* Restyles driver.js popovers to match the app's shadcn theme (light and dark). */
+.driver-popover.ceechat-tour {
+  font-family: inherit;
+  color: hsl(var(--popover-foreground));
+  background-color: hsl(var(--popover));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px -10px rgb(0 0 0 / 0.35);
+  padding: 16px;
+  max-width: min(340px, calc(100vw - 32px));
+}
+
+.ceechat-tour .driver-popover-title {
+  font-size: 15px;
+  font-weight: 600;
+  padding-right: 24px;
+}
+
+.ceechat-tour .driver-popover-description {
+  font-size: 13.5px;
+  color: hsl(var(--muted-foreground));
+}
+
+.ceechat-tour .driver-popover-progress-text {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+
+.ceechat-tour .driver-popover-close-btn {
+  color: hsl(var(--muted-foreground));
+}
+
+.ceechat-tour .driver-popover-close-btn:hover,
+.ceechat-tour .driver-popover-close-btn:focus {
+  color: hsl(var(--foreground));
+}
+
+.ceechat-tour .driver-popover-footer-btn {
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--background));
+  text-shadow: none;
+}
+
+.ceechat-tour .driver-popover-footer-btn:hover,
+.ceechat-tour .driver-popover-footer-btn:focus-visible {
+  background-color: hsl(var(--accent));
+}
+
+.ceechat-tour .driver-popover-next-btn {
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  background-color: hsl(var(--primary));
+}
+
+.ceechat-tour .driver-popover-next-btn:hover,
+.ceechat-tour .driver-popover-next-btn:focus-visible {
+  background-color: hsl(var(--primary) / 0.9);
+}
+
+.ceechat-tour .driver-popover-arrow {
+  border-color: hsl(var(--popover));
+}

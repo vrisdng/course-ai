@@ -148,7 +148,7 @@ export function ConversationsSidebar({
         <div className="flex h-full flex-col">
           {/* Header row: New Chat + collapse button (the drawer closes via the sheet instead) */}
           <div className={cn('flex items-center gap-2 p-3', isDrawer && 'pr-14')}>
-            <Button className="h-9 flex-1 gap-2" variant="outline" onClick={onStartNewConversation}>
+            <Button className="h-9 flex-1 gap-2" variant="outline" onClick={onStartNewConversation} data-tour="new-chat">
               <Plus className="h-4 w-4" />
               New Chat
             </Button>
@@ -194,6 +194,7 @@ export function ConversationsSidebar({
               className="h-8 w-full justify-start gap-2 px-3 text-sm font-normal"
               disabled={isLoadingCourses}
               onClick={() => setIsCourseDialogOpen(true)}
+              data-tour="course-picker"
             >
               <CourseIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="flex-1 truncate text-left">{courseButtonLabel}</span>
