@@ -103,7 +103,7 @@ export function StoredVideoPlayer({ materialId, filePath, initialUrl, startMs, s
     if (seekMs === undefined) return;
     const target = Math.max(0, seekMs / 1000);
     const video = videoRef.current;
-    if (video) {
+    if (video && video.readyState >= 1) {
       video.currentTime = target;
     }
     if (!video || video.readyState < 1) {

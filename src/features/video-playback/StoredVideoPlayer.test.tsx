@@ -44,8 +44,21 @@ describe('StoredVideoPlayer', () => {
     const player = screen.getByLabelText('Video playback') as HTMLVideoElement;
     await waitFor(() => expect(player).toHaveAttribute('src', 'https://storage.test/video?token=new'));
     fireEvent.loadedMetadata(player);
+    Object.defineProperty(player, 'readyState', { value: 1, configurable: true });
     rerender(<StoredVideoPlayer filePath="course/video.mp4" startMs={0} seekMs={75_000} />);
     expect(player.currentTime).toBe(75);
+  });
+
+  it('waits for metadata before seeking to the initial citation', async () => {
+    const setCurrentTime = vi.spyOn(HTMLMediaElement.prototype, 'currentTime', 'set');
+    render(<StoredVideoPlayer materialId="material-1" startMs={42_000} seekMs={42_000} />);
+    const player = screen.getByLabelText('Video playback') as HTMLVideoElement;
+    await waitFor(() => expect(player).toHaveAttribute('src', 'https://r2.test/video?token=new'));
+
+    expect(setCurrentTime).not.toHaveBeenCalled();
+    fireEvent.loadedMetadata(player);
+    expect(setCurrentTime).toHaveBeenCalledExactlyOnceWith(42);
+    setCurrentTime.mockRestore();
   });
 
   it('seeks and plays on each transcript timestamp click, including repeated clicks', async () => {

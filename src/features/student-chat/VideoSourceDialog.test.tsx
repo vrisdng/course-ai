@@ -112,6 +112,7 @@ describe('VideoSourceDialog', () => {
     const { rerender } = render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
     fireEvent.loadedMetadata(video);
+    Object.defineProperty(video, 'readyState', { value: 1, configurable: true });
     await screen.findByText('Relevant explanation.');
     video.currentTime = 123;
     const queryCount = mocks.from.mock.calls.length;
@@ -133,6 +134,7 @@ describe('VideoSourceDialog', () => {
     const { rerender } = render(<VideoSourceDialog source={source} open onClose={vi.fn()} />);
     const video = await screen.findByLabelText('Video playback') as HTMLVideoElement;
     fireEvent.loadedMetadata(video);
+    Object.defineProperty(video, 'readyState', { value: 1, configurable: true });
     await screen.findByText('Relevant explanation.');
     video.currentTime = 123;
 
