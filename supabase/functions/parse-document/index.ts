@@ -1,25 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { corsHeaders } from "../_shared/cors.ts";
-
-interface ParseRequest {
-  materialId: string;
-  filePath: string;
-  fileType: string;
-  bucketName?: string;
-}
-
-const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
-  "pdf",
-  "png",
-  "jpg",
-  "jpeg",
-  "webp",
-  "gif",
-  "doc",
-  "docx",
-  "pptx",
-]);
+import { readStoredObjectHead } from "../_shared/storageHead.ts";
+import { handleParseDocument, type AuthorizationResult } from "./handler.ts";
 
 declare const EdgeRuntime:
   | {
@@ -28,144 +10,129 @@ declare const EdgeRuntime:
   | undefined;
 
 serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const adminClient = createClient(supabaseUrl, supabaseKey);
 
-  try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Missing authorization header" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+  return handleParseDocument(req, {
+    async authorize(authHeader: string): Promise<AuthorizationResult> {
+      const supabaseClient = createClient(supabaseUrl, supabaseKey, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const {
+        data: { user },
+        error: userError,
+      } = await supabaseClient.auth.getUser(authHeader.replace("Bearer ", ""));
+      if (userError || !user) return "unauthorized";
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const { data: profile } = await supabaseClient
+        .from("profiles")
+        .select("role")
+        .eq("user_id", user.id)
+        .single();
+      return profile?.role === "admin" ? "admin" : "forbidden";
+    },
 
-    const supabaseClient = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const adminClient = createClient(supabaseUrl, supabaseKey);
+    async findMaterial(id: string) {
+      const { data: material, error } = await adminClient
+        .from("materials")
+        .select("id, file_name, file_path, processing_status")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(`Failed to load material: ${error.message}`);
+      if (!material) return null;
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabaseClient.auth.getUser(authHeader.replace("Bearer ", ""));
+      const { data: job, error: jobError } = await adminClient
+        .from("material_processing_jobs")
+        .select("id")
+        .eq("material_id", id)
+        .eq("job_type", "parse_document")
+        .maybeSingle();
+      if (jobError) throw new Error(`Failed to load processing job: ${jobError.message}`);
 
-    if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+      return {
+        id: material.id,
+        fileName: material.file_name,
+        filePath: material.file_path,
+        processingStatus: material.processing_status,
+        hasProcessingJob: Boolean(job),
+      };
+    },
 
-    const { data: profile } = await supabaseClient
-      .from("profiles")
-      .select("role")
-      .eq("user_id", user.id)
-      .single();
+    readObjectHead(bucket: string, path: string) {
+      return readStoredObjectHead({ supabaseUrl, serviceKey: supabaseKey, bucket, path });
+    },
 
-    if (!profile || profile.role !== "admin") {
-      return new Response(
-        JSON.stringify({ error: "Forbidden — admins only" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    async rejectMaterial(id: string, message: string) {
+      const { error } = await adminClient
+        .from("materials")
+        .update({
+          processing_status: "failed",
+          processing_error: message,
+          processing_stage: "failed",
+          processing_progress: null,
+        })
+        .eq("id", id);
+      if (error) console.error("Failed to record upload rejection:", error.message);
+    },
 
-    const { materialId, filePath, fileType, bucketName } =
-      (await req.json()) as ParseRequest;
+    async markQueued(id: string) {
+      await adminClient
+        .from("materials")
+        .update({
+          processing_status: "processing",
+          processing_error: null,
+          processing_stage: "queueing",
+          processing_progress: 10,
+        })
+        .eq("id", id);
+    },
 
-    if (!materialId || !filePath) {
-      return new Response(
-        JSON.stringify({ error: "materialId and filePath are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    async enqueueJob(id, payload) {
+      const { error: jobError } = await adminClient
+        .from("material_processing_jobs")
+        .upsert(
+          {
+            material_id: id,
+            job_type: "parse_document",
+            status: "pending",
+            attempt_count: 0,
+            last_error: null,
+            locked_at: null,
+            locked_by: null,
+            payload,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "material_id,job_type" }
+        );
 
-    const extension = filePath.split(".").pop()?.toLowerCase() || fileType;
-    if (!SUPPORTED_DOCUMENT_EXTENSIONS.has(extension)) {
-      return new Response(
-        JSON.stringify({ error: `Unsupported file type: ${extension || "unknown"}` }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    await adminClient
-      .from("materials")
-      .update({
-        processing_status: "processing",
-        processing_error: null,
-        processing_stage: "queueing",
-        processing_progress: 10,
-      })
-      .eq("id", materialId);
-
-    const payload = {
-      filePath,
-      fileType: extension,
-      bucketName: bucketName || "course-materials",
-    };
-
-    const { error: jobError } = await adminClient
-      .from("material_processing_jobs")
-      .upsert(
-        {
-          material_id: materialId,
-          job_type: "parse_document",
-          status: "pending",
-          attempt_count: 0,
-          last_error: null,
-          locked_at: null,
-          locked_by: null,
-          payload,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "material_id,job_type" }
-      );
-
-    if (jobError) {
-      throw new Error(`Failed to enqueue parse job: ${jobError.message}`);
-    }
-
-    const workerTrigger = fetch(`${supabaseUrl}/functions/v1/process-material-job`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${supabaseKey}`,
-        apikey: supabaseKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ materialId }),
-    }).then(async (response) => {
-      if (!response.ok) {
-        console.error("Failed to trigger process-material-job:", response.status, await response.text());
+      if (jobError) {
+        throw new Error(`Failed to enqueue parse job: ${jobError.message}`);
       }
-    }).catch((error) => {
-      console.error("Failed to schedule process-material-job:", error);
-    });
+    },
 
-    if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
-      EdgeRuntime.waitUntil(workerTrigger);
-    } else {
-      void workerTrigger;
-    }
+    triggerWorker(id: string) {
+      const workerTrigger = fetch(`${supabaseUrl}/functions/v1/process-material-job`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${supabaseKey}`,
+          apikey: supabaseKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ materialId: id }),
+      }).then(async (response) => {
+        if (!response.ok) {
+          console.error("Failed to trigger process-material-job:", response.status, await response.text());
+        }
+      }).catch((error) => {
+        console.error("Failed to schedule process-material-job:", error);
+      });
 
-    return new Response(
-      JSON.stringify({
-        queued: true,
-        materialId,
-        message: "Document queued for background processing.",
-      }),
-      { status: 202, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "An unexpected error occurred";
-    console.error("Parse document enqueue error:", message);
-
-    return new Response(
-      JSON.stringify({ error: message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  }
+      if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+        EdgeRuntime.waitUntil(workerTrigger);
+      } else {
+        void workerTrigger;
+      }
+    },
+  });
 });

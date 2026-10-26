@@ -66,6 +66,70 @@ describe('video upload session', () => {
     expect(db.createMaterial).not.toHaveBeenCalled();
   });
 
+  describe.each(['create', 'create-multipart'])('upload policy on %s', (action) => {
+    const body = action === 'create' ? createBody : createMultipartBody;
+
+    it.each([
+      ['notes.pdf', 'application/pdf'],
+      ['slides.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+      ['notes.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['photo.png', 'image/png'],
+      ['clip.mov', 'video/quicktime'],
+    ])('refuses %s before reserving a material, storage path or credentials', async (fileName, contentType) => {
+      const db = store();
+      const response = await handleUploadSession({ ...body, fileName, contentType }, USER, db, () => ID);
+      expect(response.status).toBe(415);
+      expect(response.body).toMatchObject({ code: expect.stringMatching(/unsupported_type|type_mismatch/) });
+      expect(String(response.body.error)).toContain('Only PDF documents and MP4 or WebM videos are accepted.');
+      expect(db.createMaterial).not.toHaveBeenCalled();
+      expect(db.createR2MultipartUpload).not.toHaveBeenCalled();
+      expect(db.issueR2Credentials).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['lecture.webm', 'video/mp4'],
+      ['lecture.mp4', 'video/webm'],
+      ['lecture.mp4', 'application/octet-stream'],
+      ['lecture.mp4', 'video/quicktime'],
+    ])('refuses %s declared as "%s"', async (fileName, contentType) => {
+      const db = store();
+      const response = await handleUploadSession({ ...body, fileName, contentType }, USER, db, () => ID);
+      expect(response).toMatchObject({ status: 415, body: { code: 'type_mismatch' } });
+      expect(db.createMaterial).not.toHaveBeenCalled();
+    });
+
+    it('records the canonical type when the browser reported none', async () => {
+      const db = store({
+        createR2MultipartUpload: vi.fn().mockResolvedValue({
+          objectKey: `videos/${ID}/source.mp4`, r2UploadId: 'upload-1', partSize: 1024, expiresAt: '2026-10-30T00:00:00.000Z',
+        }),
+      });
+      expect((await handleUploadSession({ ...body, contentType: '' }, USER, db, () => ID)).status).toBe(200);
+      expect(db.createMaterial).toHaveBeenCalledWith(expect.objectContaining({ video_content_type: 'video/mp4' }));
+    });
+
+    it('accepts a WebM lecture', async () => {
+      const db = store({
+        createR2MultipartUpload: vi.fn().mockResolvedValue({
+          objectKey: `videos/${ID}/source.webm`, r2UploadId: 'upload-1', partSize: 1024, expiresAt: '2026-10-30T00:00:00.000Z',
+        }),
+      });
+      const response = await handleUploadSession({ ...body, fileName: 'Lecture 2.WEBM', contentType: 'video/webm' }, USER, db, () => ID);
+      expect(response.status).toBe(200);
+      expect(db.createMaterial).toHaveBeenCalledWith(expect.objectContaining({
+        file_type: 'video', video_content_type: 'video/webm', file_path: expect.stringMatching(/\.webm$/),
+      }));
+    });
+  });
+
+  it('still answers 400 for malformed non-type parameters', async () => {
+    const db = store();
+    expect((await handleUploadSession({ ...createBody, courseId: 'nope' }, USER, db)).status).toBe(400);
+    expect((await handleUploadSession({ ...createBody, fileName: 'a/b.mp4' }, USER, db)).status).toBe(400);
+    expect((await handleUploadSession({ ...createBody, contentType: 42 }, USER, db)).status).toBe(400);
+    expect(db.createMaterial).not.toHaveBeenCalled();
+  });
+
   it('rejects mismatched idempotency key reuse', async () => {
     const db = store({ findByKey: vi.fn().mockResolvedValue(material({ file_size: 42 })) });
     const response = await handleUploadSession(createBody, USER, db);

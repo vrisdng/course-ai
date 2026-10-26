@@ -42,6 +42,7 @@ import { LinkedUrlDialog } from './LinkedUrlDialog';
 import { TranscriptDialog } from './TranscriptDialog';
 
 import { ACCEPTED_FILE_TYPES, useMaterialUpload } from '@/features/materials/useMaterialUpload';
+import { AcceptedUploadsHelp, AcceptedUploadsHint, RejectedUploadsAlert } from '@/features/materials/UploadPolicyNotices';
 import { useMaterialActions } from '@/features/materials/useMaterialActions';
 import { useBulkAcademicTermUpdate } from '@/features/materials/useBulkAcademicTermUpdate';
 import { useMaterialsList } from '@/features/materials/useMaterialsList';
@@ -528,6 +529,7 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                   <p className="text-sm text-muted-foreground">
                     Drop your course materials here, or <span className="font-medium text-primary underline">click to browse</span>
                   </p>
+                  <AcceptedUploadsHint />
                 </div>
                 <div className="mt-4 grid gap-3 text-left sm:grid-cols-3">
                   {uploadChecklistItems.map((item) => (
@@ -586,15 +588,9 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             )}
           </div>
 
-          <div className="rounded-lg border border-border bg-muted/20 p-4">
-            <p className="text-sm font-medium text-foreground">What can be uploaded?</p>
-            <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-              <li>PDF, DOC, DOCX, PPTX, PNG, JPG, JPEG, WEBP, and GIF files.</li>
-              <li>PDF, DOC, and image files must be {documentLimitMb}MB or smaller.</li>
-               <li>MP4 and WebM videos are stored for playback and transcribed with timestamps (limited only by the storage provider's maximum object size).</li>
-              <li>DOCX and PPTX files are extracted after upload.</li>
-            </ul>
-          </div>
+          <RejectedUploadsAlert rejections={upload.rejectedUploads} onDismiss={upload.dismissRejectedUploads} />
+
+          <AcceptedUploadsHelp documentLimitMb={documentLimitMb} />
         </CardContent>
       </Card>
 

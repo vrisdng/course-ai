@@ -113,6 +113,21 @@ Clicking a PDF citation shows the cited page as a pre-rendered image with exactl
 - **Image size:** ~1400px WebP q80, roughly 150–250 KB per text-heavy page.
 - **Cleanup still to do:** the deleted `pdf-page-thumbnail` function stays **deployed** until `supabase functions delete pdf-page-thumbnail`. `materials.thumbnail_path` is unused but kept, because `transcribe-video` still writes `null` to it.
 
+## Upload policy: PDF and video only (2026-10-23)
+
+New materials must be PDF or MP4/WebM video. `_shared/uploadPolicy.ts` holds the one policy (`UPLOAD_POLICY.enabledFamilies`), and the upload hook, the file chooser and the upload-zone help text all read it. Every server entry point enforces it before any job, conversion, OCR or provider call:
+
+- `parse-document` loads the material row, checks its name and stored path, then reads the first 1 KB of the stored object (`_shared/storageHead.ts`, Range request) and checks the recorded content type and the file signature (`%PDF-`; ZIP for DOCX/PPTX if re-enabled). The client's `fileType` is ignored. A refused **new** material is marked `failed` with the reason; a material that is already indexed or has a parse job is left alone.
+- `ingest-material` (text uploads) refuses every material while the `text` family is off, and refuses to embed inline text for a non-text material.
+- `video-upload-session` checks name and declared type on `create`/`create-multipart`, before any row, path or R2 credential exists. Video bytes are not sniffed; completion still verifies stored size and content type.
+- `upload-video` (legacy, unused by the browser) only forwards `video/mp4` or `video/webm` bodies to AssemblyAI.
+
+Refusals are HTTP 415 `{ error, code }`, with `code` set to `unsupported_type`, `type_mismatch` or `content_mismatch`. The browser shows `error` to the teacher.
+
+**Known gap:** document bytes and the `materials` row are written by the browser directly (Storage and PostgREST under RLS) before `parse-document` runs. A client that bypasses the UI can still store a non-PDF object and row. It is never queued or processed, and its row is marked failed, but the object stays in Storage until the material is deleted. Closing this needs a Storage/RLS policy migration or a server-issued signed upload URL.
+
+**Re-enabling Office:** add `"office"` to `UPLOAD_POLICY.enabledFamilies`, then redeploy the functions that bundle the policy (`parse-document`, `ingest-material`, `video-upload-session`, `upload-video`) and the frontend. Nothing below was removed.
+
 ## Office documents → PDF (2026-10-08)
 
 DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get page images, blocks (with LaTeX maths) and block-level citations. Before this, their text came from the document XML: equations were dropped and page numbers were guessed.

@@ -47,3 +47,9 @@ export type TranscriptSegment = {
 };
 
 export type UploadOutcome = 'indexed' | 'processing';
+
+// A file the upload policy turned away, and the reason shown to the teacher.
+export interface UploadRejection {
+  fileName: string;
+  message: string;
+}
