@@ -43,7 +43,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const body = await request.json().catch(() => null);
   const parsed = parseRenderRequest(body, origin);
-  if (!parsed.ok) {
+  if (parsed.ok === false) {
     return json({ error: parsed.error }, 400);
   }
   const { pdfUrl, pages: targets, width } = parsed.request;
