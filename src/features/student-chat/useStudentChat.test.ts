@@ -158,6 +158,84 @@ describe('useStudentChat', () => {
     expect(result.current.isLoading).toBe(false);
   });
 
+  it.each(['close', 'error'] as const)(
+    'displays the final answer before the stream ends with %s, keeping follow-ups blocked until then',
+    async (ending) => {
+      const result = await setupWithCourse();
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const cancel = vi.fn();
+      const stream = new ReadableStream<Uint8Array>({
+        start(value) { controller = value; },
+        cancel,
+      });
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(stream, {
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const frames: FrameRequestCallback[] = [];
+      vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => frames.push(callback)));
+      const citations = [{
+        id: 'c1', chunkId: 'chunk-1', excerpt: 'Evidence',
+        documentName: 'Lecture', documentType: 'pdf', relevanceScore: 0.9,
+      }];
+
+      act(() => result.current.setInput('question'));
+      let sending!: Promise<void>;
+      act(() => { sending = result.current.handleSend(); });
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      const userLookups = authGetUser.mock.calls.length;
+
+      try {
+        act(() => controller.enqueue(new TextEncoder().encode(
+          sseEvent('status', { message: 'Searching course materials' }) +
+          sseEvent('token', { text: 'Unfinished draft' }) +
+          sseEvent('final', { answer: 'Final cited answer', citations, conversationId: 'conv-1' }),
+        )));
+
+        await waitFor(() => {
+          expect(result.current.messages.find((m) => m.role === 'assistant')).toMatchObject({
+            content: 'Final cited answer', citations, status: undefined,
+          });
+        });
+        act(() => frames.forEach((callback) => callback(0)));
+        expect(result.current.messages.find((m) => m.role === 'assistant')?.content).toBe('Final cited answer');
+        expect(result.current.isLoading).toBe(true);
+        expect(authGetUser).toHaveBeenCalledTimes(userLookups);
+
+        act(() => result.current.setInput('follow-up'));
+        await act(async () => { await result.current.handleSend(); });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(false);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => {
+          if (ending === 'error') controller.error(new TypeError('Stream connection lost'));
+          else controller.close();
+          await sending;
+        });
+      }
+
+      expect(result.current.messages.find((m) => m.role === 'assistant')).toMatchObject({
+        content: 'Final cited answer', citations,
+      });
+      expect(result.current.isLoading).toBe(false);
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it('displays a final answer returned as JSON', async () => {
+    const result = await setupWithCourse();
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      answer: 'JSON answer', citations: [], conversationId: 'conv-1',
+    }), { headers: { 'content-type': 'application/json' } }));
+
+    act(() => result.current.setInput('question'));
+    await act(async () => { await result.current.handleSend(); });
+
+    expect(result.current.messages.find((m) => m.role === 'assistant')).toMatchObject({
+      content: 'JSON answer', citations: [], status: undefined,
+    });
+  });
+
   it('shows search status, discards text from before a search, and clears the status on the final answer', async () => {
     const result = await setupWithCourse();
     const fetchMock = vi.mocked(fetch);

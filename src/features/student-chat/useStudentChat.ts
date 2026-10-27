@@ -632,6 +632,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     activeAssistantMessageIdRef.current = assistantMessageId;
+    let finalPayload: RagChatFinalPayload | null = null;
 
     try {
       setMessages((prev) => [
@@ -681,10 +682,20 @@ export function useStudentChat(routeConversationId: string | null = null) {
       }
 
       const responseContentType = response.headers.get('content-type') || '';
-      let finalPayload: RagChatFinalPayload | null = null;
+      const displayFinalAnswer = (payload: RagChatFinalPayload): void => {
+        if (activeRequestIdRef.current !== requestId) return;
+        finalPayload = payload;
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: payload.answer, citations: payload.citations, status: undefined }
+              : message
+          )
+        );
+      };
 
       if (responseContentType.includes('application/json')) {
-        finalPayload = await response.json() as RagChatFinalPayload;
+        displayFinalAnswer(await response.json() as RagChatFinalPayload);
       } else {
         if (!response.body) {
           throw new Error('No response stream was returned.');
@@ -699,6 +710,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         let rafHandle = 0;
         const flushTokens = () => {
           rafHandle = 0;
+          if (finalPayload || activeRequestIdRef.current !== requestId) return;
           const snapshot = pendingContent;
           setMessages((prev) =>
             prev.map((message) =>
@@ -756,7 +768,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
           if (event.event === 'final') {
             if (typeof parsed === 'object' && parsed) {
-              finalPayload = parsed as RagChatFinalPayload;
+              displayFinalAnswer(parsed as RagChatFinalPayload);
             }
             return;
           }
@@ -825,22 +837,17 @@ export function useStudentChat(routeConversationId: string | null = null) {
         return;
       }
 
-      const { answer, citations, conversationId } = finalPayload;
-
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === assistantMessageId
-            ? { ...message, content: answer, citations, status: undefined }
-            : message
-        )
-      );
-
-      await fetchConversations(conversationId || currentConversationId, { requestId });
+      await fetchConversations(finalPayload.conversationId || currentConversationId, { requestId });
     } catch (error) {
       if (
         error instanceof DOMException &&
         error.name === 'AbortError'
       ) {
+        return;
+      }
+
+      if (finalPayload) {
+        console.warn('Chat stream failed after receiving the final answer:', error);
         return;
       }
 
