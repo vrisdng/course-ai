@@ -43,6 +43,6 @@ describe('MessageList', () => {
     render(<MessageList messages={[message]} onSuggestionClick={vi.fn()} onOpenSources={vi.fn()} onCitationClick={onCitationClick} />);
     const composite = screen.getByRole('button', { name: /\[1·2\].*Webcast.*Notes/ });
     expect(composite).toHaveAttribute('title', 'Lecture + Notes');
-    fireEvent.click(composite); expect(onCitationClick).toHaveBeenCalledWith(message, 1);
+    fireEvent.click(composite); expect(onCitationClick).toHaveBeenCalledWith(message, [1, 2]);
   });
 });

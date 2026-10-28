@@ -6,6 +6,9 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 
+import { isWebcastCitation } from './citations';
+import { formatCitationLocator } from './time';
+import type { Citation } from './types';
 import { CitationPerfBadge } from './CitationPerfBadge';
 import { HighlightedPageImage } from './HighlightedPageImage';
 import { PdfReader } from './PdfReader';
@@ -19,6 +22,8 @@ interface SourcesPanelProps {
   activeViewerSource: ActiveViewerSource | null;
   activeVideoSource?: ActiveVideoSource | null;
   openingCitationKey?: string | null;
+  citationSources?: Citation[];
+  onSelectCitation?: (citation: Citation) => void;
   onOpenPanel: () => void;
   onClosePanel: () => void;
 }
@@ -32,6 +37,8 @@ export function SourcesPanel({
   activeViewerSource,
   activeVideoSource,
   openingCitationKey,
+  citationSources = [],
+  onSelectCitation,
   onOpenPanel,
   onClosePanel,
 }: SourcesPanelProps) {
@@ -131,6 +138,27 @@ export function SourcesPanel({
                   </Button>
                 </div>
               </div>
+
+              {citationSources.length > 1 && (
+                <ul aria-label="Cited sources" className="max-h-[40%] shrink-0 space-y-2 overflow-y-auto border-b border-border p-3">
+                  {citationSources.map((citation) => (
+                    <li key={citation.id} className="rounded-lg border border-border bg-muted/20 p-3">
+                      <button
+                        type="button"
+                        aria-label={`Open source: ${citation.documentName}`}
+                        className="text-left text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        onClick={() => onSelectCitation?.(citation)}
+                      >
+                        {citation.documentName}
+                      </button>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {isWebcastCitation(citation) ? 'Webcast' : 'Notes'} · {formatCitationLocator(citation)}
+                      </p>
+                      {citation.excerpt && <p className="mt-1 line-clamp-3 text-sm text-foreground/80">{citation.excerpt}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
 
                {activeViewerSource ? (
                  <div className="min-h-0 flex-1 overflow-y-auto p-3">

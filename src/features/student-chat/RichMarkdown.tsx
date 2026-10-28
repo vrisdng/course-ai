@@ -24,7 +24,7 @@ import type { Citation } from './types';
 interface RichMarkdownProps {
   content: string;
   citations?: Citation[];
-  onCitationClick?: (citationNumber: number) => void;
+  onCitationClick?: (citationNumber: number | number[]) => void;
   onCitationOpen?: (citation: Citation, citationNumber: number) => void;
 }
 
@@ -44,6 +44,18 @@ function isSafeImageUrl(src: string | undefined): boolean {
     return false;
   }
   return /^https?:\/\//.test(normalized) || normalized.startsWith('/');
+}
+
+function hideStreamingBlockCitationMarkers(content: string): string {
+  // Match protected code/math first; only an unfinished marker at the message end is hidden.
+  // Code spans close with the same delimiter length; fenced blocks allow a longer closing fence.
+  const protectedLiteral = /^ {0,3}(?<backtickFence>`{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\k<backtickFence>`*[ \t]*$|(?![\s\S]))|^ {0,3}(?<tildeFence>~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\k<tildeFence>~*[ \t]*$|(?![\s\S]))|(?<ticks>`+)(?!`)[\s\S]*?(?:(?<!`)\k<ticks>(?!`)|(?![\s\S]))|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)/;
+  const blockMarker = /<{1,2}\s*cite\s*:\s*(?=[\d,\s]*[a-z])\d+[a-z]*(?:\s*,\s*\d+[a-z]*)*\s*>{1,2}/;
+  const unfinishedMarker = /<{1,2}(?:c(?:i(?:t(?:e(?:\s*:\s*[\da-z,\s]*>?)?)?)?)?)?(?![\s\S])/;
+  return content.replace(
+    new RegExp(`(${protectedLiteral.source})|${blockMarker.source}|${unfinishedMarker.source}`, 'gim'),
+    (match, literal: string | undefined) => literal ?? '',
+  );
 }
 
 function CitationImage({
@@ -195,7 +207,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        onCitationClick?.(nums[0]);
+                        onCitationClick?.(nums.length > 1 ? nums : nums[0]);
                         onCitationOpen?.(resolvedCitations[0], nums[0]);
                       }}
                     >
@@ -225,7 +237,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
         >
           {markdownWithCitationLinks(
             groupAdjacentCitations(
-              normalizeHeadings(normalizeMathDelimiters(content)),
+              normalizeHeadings(normalizeMathDelimiters(hideStreamingBlockCitationMarkers(content))),
               citations,
             ),
             citations.length,

@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // A chainable fake that resolves to `result` from any awaited point in a
@@ -48,6 +49,7 @@ vi.mock('./signedMedia', () => ({
 
 import { toast } from 'sonner';
 import { useStudentChat } from './useStudentChat';
+import { RichMarkdown } from './RichMarkdown';
 
 function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -110,6 +112,27 @@ describe('useStudentChat', () => {
     return result;
   }
 
+  it.each(['individual', 'all'] as const)('sends selected IDs for a comparison using %s selection', async (selection) => {
+    const docs = [1, 2, 3].map((n) => ({ id: `doc-${n}`, file_name: `Notes ${n}`, file_type: 'pdf' }));
+    from.mockImplementation((table: string) => createQueryChain(table === 'materials' ? { data: docs, error: null } : emptyResult));
+    rpc.mockResolvedValueOnce({ data: [{ id: 'course-1', name: 'Course', code: 'C1', access_role: 'student' }], error: null });
+    const { result } = renderHook(() => useStudentChat(null));
+    await waitFor(() => expect(result.current.selectedDocumentIds).toHaveLength(3));
+    act(() => {
+      result.current.clearSelectedDocuments();
+    });
+    act(() => {
+      if (selection === 'all') result.current.selectAllDocuments();
+      else result.current.applySelectedDocuments(['doc-1', 'doc-2']);
+      result.current.setInput('Compare these materials');
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(streamResponse(sseEvent('final', { answer: 'Comparison', citations: [], conversationId: 'conv-1' })));
+    await act(async () => { await result.current.handleSend(); });
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
+    expect(body.selectedDocumentIds).toEqual(selection === 'all' ? ['doc-1', 'doc-2', 'doc-3'] : ['doc-1', 'doc-2']);
+    expect(body.skipRag).toBe(false);
+  });
+
   it('does not send an empty or whitespace-only message', async () => {
     const result = await setupWithCourse();
     const fetchMock = vi.mocked(fetch);
@@ -156,6 +179,53 @@ describe('useStudentChat', () => {
     expect(assistantMessage?.citations?.[0].evidenceSegments?.[0].id).toBe('segment-1');
     expect(result.current.messages.find((m) => m.role === 'user')?.content).toBe('What is X?');
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it('renders split SSE citation tokens without exposing markers, then displays the final citation', async () => {
+    rpc.mockResolvedValueOnce({
+      data: [{ id: 'course-1', name: 'Course 1', code: 'C1', access_role: 'student' }], error: null,
+    });
+    let chat!: ReturnType<typeof useStudentChat>;
+    function ChatHarness() {
+      chat = useStudentChat(null);
+      const assistant = chat.messages.find((message) => message.role === 'assistant');
+      return createElement(RichMarkdown, { content: assistant?.content ?? '', citations: assistant?.citations });
+    }
+    const { container } = render(createElement(ChatHarness));
+    await waitFor(() => expect(chat.selectedCourseId).toBe('course-1'));
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(stream, {
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => frames.push(callback)));
+    act(() => chat.setInput('question'));
+    let sending!: Promise<void>;
+    act(() => { sending = chat.handleSend(); });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    const encoder = new TextEncoder();
+    try {
+      for (const text of ['Claim ', ...'<<cite:1b>>', ' more text.']) {
+        act(() => controller.enqueue(encoder.encode(sseEvent('token', { text }))));
+        await waitFor(() => expect(frames.length).toBeGreaterThan(0));
+        act(() => frames.splice(0).forEach((callback) => callback(0)));
+        expect(container.textContent).not.toContain('<');
+        expect(container.textContent).not.toContain('cite:');
+        expect(container.textContent).toContain('Claim');
+      }
+      expect(container.textContent).toContain('more text.');
+      expect(chat.isLoading).toBe(true);
+      act(() => controller.enqueue(encoder.encode(sseEvent('final', {
+        answer: 'Claim <<cite:1>> more text.',
+        citations: [{ id: 'c1', chunkId: 'chunk-1', excerpt: 'Evidence',
+          documentName: 'Notes', documentType: 'pdf', relevanceScore: 0.9 }],
+      }))));
+      await waitFor(() => expect(screen.getByRole('button', { name: /\[1\]/ })).toBeInTheDocument());
+      expect(container.textContent).not.toContain('cite:');
+    } finally {
+      await act(async () => { controller.close(); await sending; });
+    }
   });
 
   it.each(['close', 'error'] as const)(
@@ -639,4 +709,24 @@ describe('useStudentChat', () => {
       chunkId: null, materialId: 'mat-1', startMs: 30_000, documentName: 'Lecture',
     });
   });
+
+  it('keeps every selected composite source and replaces the group for a single citation', async () => {
+    const result = await setupWithCourse();
+    const citations = [
+      { id: 'v1', chunkId: 'video-chunk', documentName: 'Webcast', documentType: 'video', excerpt: 'Video evidence', startMs: 40_000, relevanceScore: 0.9 },
+      { id: 'p1', chunkId: 'pdf-chunk', documentName: 'Notes', documentType: 'pdf', excerpt: 'Notes evidence', pageNumber: 3, relevanceScore: 0.8 },
+      { id: 'p2', chunkId: 'other', documentName: 'Unrelated', documentType: 'pdf', excerpt: '', relevanceScore: 0.7 },
+    ];
+    const message = { id: 'a1', role: 'assistant' as const, content: 'Claim <<cite:1>><<cite:2>>', citations };
+    act(() => result.current.focusCitation(message, [1, 2]));
+    expect(result.current.selectedMessage?.citations).toEqual(citations.slice(0, 2));
+    expect(result.current.showSidePanel).toBe(true);
+    expect(result.current.highlightedCitationKey).toBe('a1-1');
+
+    act(() => result.current.focusCitation(message, 2));
+    expect(result.current.selectedMessage?.citations).toEqual([citations[1]]);
+    act(() => result.current.startNewConversation());
+    expect(result.current.selectedMessage).toBeNull();
+  });
+
 });

@@ -31,6 +31,7 @@ vi.mock('@/features/student-chat/DocumentScopeSelector', () => ({ DocumentScopeS
   <button onClick={() => (props.onSelectAllDocuments as () => void)()}>all docs</button>
 </div> }));
 vi.mock('@/features/student-chat/SourcesPanel', () => ({ SourcesPanel: (props: Record<string, unknown>) => <aside>
+  {(props.citationSources as Citation[] | undefined)?.map((citation) => <button key={citation.id} onClick={() => (props.onSelectCitation as (source: Citation) => void)(citation)}>{citation.documentName}</button>)}
   panel:{String(props.showSidePanel)}<button onClick={() => (props.onClosePanel as () => void)()}>close panel</button>
 </aside> }));
 vi.mock('@/features/student-chat/VideoSourceDialog', () => ({ VideoSourceDialog: (props: Record<string, unknown>) => <div>
@@ -41,6 +42,7 @@ vi.mock('@/features/student-chat/DocumentViewerDialog', () => ({ DocumentViewerD
 </div> }));
 
 import StudentChat from './StudentChat';
+import type { Citation } from '@/features/student-chat/types';
 
 function Location() { return <output>{useLocation().pathname}</output>; }
 function renderPage(path = '/chat') {
@@ -91,6 +93,18 @@ describe('StudentChat page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'close panel' }));
     expect(mocks.chat.setInput).toHaveBeenCalledWith('suggestion'); expect(mocks.chat.handleSend).toHaveBeenCalled();
     expect(mocks.chat.selectAllDocuments).toHaveBeenCalled(); expect(mocks.chat.setShowSidePanel).toHaveBeenCalledWith(false);
+  });
+  it('passes the complete selected citation group to the panel and opens either source', () => {
+    const citations: Citation[] = [
+      { id: 'v1', chunkId: 'video-chunk', documentName: 'Webcast', documentType: 'video', excerpt: 'Video evidence', startMs: 40_000, relevanceScore: 0.9 },
+      { id: 'p1', chunkId: 'pdf-chunk', documentName: 'Notes', documentType: 'pdf', excerpt: 'Notes evidence', pageNumber: 3, relevanceScore: 0.8 },
+    ];
+    mocks.chat.selectedMessage = { id: 'a1', role: 'assistant', content: 'Claim', citations };
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
+    expect(mocks.chat.openCitationSource).toHaveBeenLastCalledWith(citations[1], 'a1-p1');
+    fireEvent.click(screen.getByRole('button', { name: 'Webcast' }));
+    expect(mocks.chat.openCitationSource).toHaveBeenLastCalledWith(citations[0], 'a1-v1');
   });
   it('syncs a current conversation into the URL and starts new chats at the base route', async () => {
     mocks.chat.currentConversationId = 'conv-2'; renderPage('/chat');

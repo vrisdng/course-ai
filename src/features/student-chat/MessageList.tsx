@@ -17,7 +17,7 @@ interface MessageListProps {
   showEmptyState?: boolean;
   onSuggestionClick: (suggestion: string) => void;
   onOpenSources: (message: Message) => void;
-  onCitationClick: (message: Message, citationNumber: number) => void;
+  onCitationClick: (message: Message, citationNumber: number | number[]) => void;
   onCitationOpen?: (citation: Citation, citationKey: string) => void;
 }
 

@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   generateChatText: null as null | ReturnType<typeof vi.fn>,
 }));
 
+const MATERIAL_ID_2 = "22222222-2222-4222-8222-222222222222";
+const MATERIAL_ID_3 = "33333333-3333-4333-8333-333333333333";
 const MATERIAL_ID = "11111111-1111-4111-8111-111111111111";
 
 const CHUNK = {
@@ -42,6 +44,7 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
     auth: { getUser: async () => ({ data: { user: { id: "user" } }, error: null }) },
     from: (table: string) => {
       let inserted: Record<string, unknown> | null = null;
+      let materialIds = [MATERIAL_ID];
       const result = () => {
         if (table === "citations" && inserted) state.savedCitations = inserted as unknown as Array<Record<string, unknown>>;
         if (table === "material_transcript_segments" && state.transcriptError) return { data: null, error: { message: "unavailable" } };
@@ -51,12 +54,12 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
         ], error: null };
         if (table === "conversations") return { data: { id: "conversation", course_id: "course", user_id: "user" }, error: null };
         if (table === "messages" && inserted) return { data: { id: `${inserted.role}-message` }, error: null };
-        if (table === "materials") return { data: [{ id: MATERIAL_ID, file_name: "Hashing notes", file_type: "pdf", file_path: "notes.pdf" }], error: null };
+        if (table === "materials") return { data: materialIds.map((id) => ({ id, file_name: id === MATERIAL_ID ? "Hashing notes" : id === MATERIAL_ID_2 ? "Trees" : "Graphs", file_type: "pdf", file_path: "notes.pdf" })), error: null };
         if (table === "messages" || table === "chunks" || table === "page_blocks") return { data: [], error: null };
         return { data: null, error: null };
       };
       const builder = {
-        select: () => builder, eq: () => builder, in: () => builder, order: () => builder, limit: () => builder,
+        select: () => builder, eq: () => builder, in: (_column: string, ids: string[]) => { if (table === "materials") materialIds = ids; return builder; }, order: () => builder, limit: () => builder,
         abortSignal: () => builder, gte: () => builder, lte: () => builder, range: () => builder, update: () => builder,
         insert: (payload: Record<string, unknown>) => { inserted = payload; return builder; },
         single: async () => result(), maybeSingle: async () => result(),
@@ -189,6 +192,15 @@ describe("rag-chat answer citations", () => {
     expect(final.answer).not.toContain("<<cite:7>>");
     expect(final.citations).toEqual([]);
     expect(state.generateChatText).not.toHaveBeenCalled();
+  });
+
+  it("passes multiple selected materials to retrieval and names them for comparison", async () => {
+    state.agentAnswer = "Comparison <<cite:1>>.";
+    await ask({ message: "Compare these materials", selectedDocumentIds: [MATERIAL_ID, MATERIAL_ID_2, MATERIAL_ID_3] });
+    const searches = state.rpcCalls.filter((call) => call.args.query_embedding !== undefined);
+    expect(searches[0].args.selected_material_ids).toEqual([MATERIAL_ID, MATERIAL_ID_2, MATERIAL_ID_3]);
+    expect(state.agentSystemPrompt).toContain('"Hashing notes", "Trees", and "Graphs"');
+    expect(state.agentSystemPrompt).toContain('these are the materials the user selected');
   });
 
   it("restricts searches to the selected documents and tells the model to stay in them", async () => {

@@ -718,7 +718,7 @@ serve(async (req: Request) => {
 
       systemPrompt = `You are CEEGPT, an AI learning assistant for university students.
 
-The user has chosen to chat without grounding the answer in any uploaded course documents. Answer using your general knowledge.
+The user has chosen to chat without grounding the answer in any uploaded course documents. Answer using your general knowledge. If the request refers to selected or attached materials, explain that no materials are selected and ask the user to select materials in the material selector, then try again.
 
 FORMATTING: Every section title or topic heading MUST use ## markdown headings. Never write a heading as plain unformatted text. Use **bold** for key terms and emphasis within paragraphs. Use bullet points for lists. Use markdown tables when presenting comparative or tabular data. ${FORMATTING_FORMATTING_EXTRA}. Add clear vertical spacing: leave one blank line after every heading and one blank line between paragraphs/sections.
 
@@ -743,7 +743,7 @@ Use prior conversation turns to resolve follow-up references like "this", "that"
       isSummaryQuery = /\b(summarize|summary|overview|key points?|main points?|recap|outline|what.*cover|what.*about|tell me about|give me an? (overview|summary|recap))\b/i.test(trimmedMessage);
 
       const retrievalScopeInstruction = hasSelectedDocumentFilter
-        ? `DOCUMENT SCOPE: The user selected a document filter. Searches only return these documents: ${formatDocumentNameList(selectedMaterials)}. Ground your answer ONLY in them. Do not use any outside course materials, prior assumptions, or unstated course context. If they do not contain enough evidence, say the answer is not available in the selected documents.`
+        ? `DOCUMENT SCOPE: The user selected a document filter. Searches only return these documents: ${formatDocumentNameList(selectedMaterials)}; these are the materials the user selected. When the user refers to these materials, use this selection instead of asking which materials they mean. Ground your answer ONLY in them. Do not use any outside course materials, prior assumptions, or unstated course context. If they do not contain enough evidence, say the answer is not available in the selected documents.`
         : "DOCUMENT SCOPE: No document filter is active. Searches cover all materials in the selected course.";
 
       const summaryInstruction = isSummaryQuery
