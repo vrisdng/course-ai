@@ -6,6 +6,10 @@ const state = vi.hoisted(() => ({
   rpcCalls: [] as Array<{ name: string; args: Record<string, unknown> }>,
   agentAnswer: "",
   agentSystemPrompt: "",
+  video: false,
+  transcriptError: false,
+  toolText: "",
+  savedCitations: [] as Array<Record<string, unknown>>,
   generateChatText: null as null | ReturnType<typeof vi.fn>,
 }));
 
@@ -35,13 +39,19 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
     rpc: async (name: string, args: Record<string, unknown>) => {
       state.rpcCalls.push({ name, args });
       if (name === "is_enrolled" || name === "is_admin") return { data: true, error: null };
-      return { data: [CHUNK], error: null };
+      return { data: [{ ...CHUNK, ...(state.video ? { material_type: "video", start_ms: 0, end_ms: 3000 } : {}) }], error: null };
     },
     auth: { getUser: async () => ({ data: { user: { id: "user" } }, error: null }) },
     from: (table: string) => {
       let inserted: Record<string, unknown> | null = null;
       let materialIds = [MATERIAL_ID];
       const result = () => {
+        if (table === "citations" && inserted) state.savedCitations = inserted as unknown as Array<Record<string, unknown>>;
+        if (table === "material_transcript_segments" && state.transcriptError) return { data: null, error: { message: "unavailable" } };
+        if (table === "material_transcript_segments") return { data: [
+          { id: 'seg-a', segment_index: 0, start_ms: 0, end_ms: 1000, text: 'Unrelated introduction.' },
+          { id: 'seg-b', segment_index: 1, start_ms: 1000, end_ms: 3000, text: CHUNK.chunk_text },
+        ], error: null };
         if (table === "conversations") return { data: { id: "conversation", course_id: "course", user_id: "user" }, error: null };
         if (table === "messages" && inserted) return { data: { id: `${inserted.role}-message` }, error: null };
         if (table === "materials") return { data: materialIds.map((id) => ({ id, file_name: id === MATERIAL_ID ? "Hashing notes" : id === MATERIAL_ID_2 ? "Trees" : "Graphs", file_type: "pdf", file_path: "notes.pdf" })), error: null };
@@ -50,7 +60,7 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
       };
       const builder = {
         select: () => builder, eq: () => builder, in: (_column: string, ids: string[]) => { if (table === "materials") materialIds = ids; return builder; }, order: () => builder, limit: () => builder,
-        gte: () => builder, lte: () => builder, range: () => builder, update: () => builder,
+        abortSignal: () => builder, gte: () => builder, lte: () => builder, range: () => builder, update: () => builder,
         insert: (payload: Record<string, unknown>) => { inserted = payload; return builder; },
         single: async () => result(), maybeSingle: async () => result(),
         then: (resolve: (value: ReturnType<typeof result>) => unknown) => Promise.resolve(result()).then(resolve),
@@ -72,7 +82,7 @@ vi.mock("../_shared/llm.ts", () => {
     }) => {
       state.agentSystemPrompt = options.messages[0].content;
       options.onToolCall("hashing");
-      await options.tool.execute("hashing");
+      state.toolText = await options.tool.execute("hashing");
       options.onTextDelta(state.agentAnswer);
       return { text: state.agentAnswer, usage: null };
     },
@@ -83,7 +93,7 @@ vi.mock("../_shared/llm.ts", () => {
 
 interface FinalEvent {
   answer: string;
-  citations: Array<{ materialId?: string | null }>;
+  citations: Array<{ materialId?: string | null; evidenceSegments?: Array<{ id: string }>; blockIds?: string[] }>;
 }
 
 async function ask(body: Record<string, unknown>): Promise<FinalEvent> {
@@ -100,11 +110,53 @@ async function ask(body: Record<string, unknown>): Promise<FinalEvent> {
 
 describe("rag-chat answer citations", () => {
   beforeEach(async () => {
+    state.video = false;
+    state.transcriptError = false;
+    state.toolText = "";
+    state.savedCitations = [];
     state.rpcCalls = [];
     state.agentSystemPrompt = "";
     state.generateChatText?.mockClear();
     vi.stubGlobal("Deno", { env: { get: () => "test" } });
     await import("./index");
+  });
+
+  it("shows labelled transcript segments and persists the cited segment without another model call", async () => {
+    state.video = true;
+    state.agentAnswer = "Linear probing uses the next free slot <<cite:1b>>.";
+    const final = await ask({});
+    expect(state.toolText).toContain('[1b] Linear probing');
+    expect(final.answer).toContain('<<cite:1>>');
+    expect(final.citations[0].evidenceSegments?.map((segment) => segment.id)).toEqual(['seg-b']);
+    expect(final.citations[0].blockIds).toEqual([]);
+    expect(state.savedCitations[0].evidence_segments).toEqual(final.citations[0].evidenceSegments);
+    expect(state.generateChatText).not.toHaveBeenCalled();
+  });
+
+  it("keeps distinct claims on the same video attached to their own segments", async () => {
+    state.video = true;
+    state.agentAnswer = "Introduction <<cite:1a>>. Linear probing <<cite:1b>>.";
+    const final = await ask({});
+    expect(final.citations.map((citation) => citation.evidenceSegments?.map((segment) => segment.id))).toEqual([['seg-a'], ['seg-b']]);
+    expect(final.answer).toBe('Introduction <<cite:1>>. Linear probing <<cite:2>>.');
+  });
+
+  it("still answers with an approximate source when transcript loading fails", async () => {
+    state.video = true;
+    state.transcriptError = true;
+    state.agentAnswer = "Linear probing <<cite:1>>.";
+    const final = await ask({});
+    expect(final.citations[0].evidenceSegments).toBeNull();
+    expect(state.toolText).not.toContain('[1b]');
+    expect(state.generateChatText).not.toHaveBeenCalled();
+  });
+
+  it.each(['1', '1z'])("keeps a video citation without a valid segment label approximate: %s", async (label) => {
+    state.video = true;
+    state.agentAnswer = `Linear probing <<cite:${label}>>.`;
+    const final = await ask({});
+    expect(final.citations[0].evidenceSegments).toBeNull();
+    expect(state.generateChatText).not.toHaveBeenCalled();
   });
 
   it("keeps an uncited general-knowledge answer uncited, with no second citation pass", async () => {
