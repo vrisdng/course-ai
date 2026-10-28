@@ -20,12 +20,14 @@ import ResetPassword from './ResetPassword';
 type Entry = string | { pathname: string; hash?: string; state?: unknown };
 const renderPage = (entry: Entry = '/reset-password') => render(<MemoryRouter initialEntries={[entry]}><Routes>
   <Route path="/reset-password" element={<ResetPassword />} />
+  <Route path="/settings" element={<div>settings destination</div>} />
   <Route path="/auth" element={<div>auth destination</div>} />
   <Route path="/chat" element={<div>chat destination</div>} />
   <Route path="/admin-dashboard" element={<div>admin destination</div>} />
 </Routes></MemoryRouter>);
 
 const withEmail = (email: string): Entry => ({ pathname: '/reset-password', state: { email } });
+const withRequiredRecovery = (email: string): Entry => ({ pathname: '/reset-password', state: { email, requireRecoveryOtp: true, returnTo: '/settings' } });
 
 const fillPasswords = (password: string, confirm = password) => {
   fireEvent.change(screen.getByLabelText('New Password'), { target: { value: password } });
@@ -107,6 +109,33 @@ describe('ResetPassword', () => {
   });
 
   describe('new password (session present)', () => {
+    it('requires and verifies the recovery code for a Settings reset despite an existing session, then returns to Settings', async () => {
+      renderPage(withRequiredRecovery('student@example.test'));
+      expect(screen.getByLabelText('Email')).toHaveValue('student@example.test');
+      expect(screen.getByLabelText('Verification Code')).toBeInTheDocument();
+      expect(screen.queryByLabelText('New Password')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Verification Code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
+      await waitFor(() => expect(mocks.verifyOtp).toHaveBeenCalledWith({ email: 'student@example.test', token: '123456', type: 'recovery' }));
+      expect(await screen.findByLabelText('New Password')).toBeInTheDocument();
+      fillPasswords('newsecret1');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByText('settings destination')).toBeInTheDocument();
+      expect(mocks.updateUser).toHaveBeenCalledWith({ password: 'newsecret1' });
+    });
+
+    it('keeps the recovery code form after verification fails with an existing session', async () => {
+      mocks.verifyOtp.mockResolvedValue({ error: { message: 'Token has expired or is invalid' } });
+      renderPage(withRequiredRecovery('student@example.test'));
+      fireEvent.change(screen.getByLabelText('Verification Code'), { target: { value: '000000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
+      expect(await screen.findByText('Token has expired or is invalid')).toBeInTheDocument();
+      expect(screen.getByLabelText('Verification Code')).toBeInTheDocument();
+      expect(screen.queryByLabelText('New Password')).not.toBeInTheDocument();
+      expect(mocks.updateUser).not.toHaveBeenCalled();
+    });
+
     it('asks an imported student for their name after password setup, before entering the app', async () => {
       mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } }, isLoading: false, refreshProfile: mocks.refreshProfile };
       mocks.readProfile.mockResolvedValue({ data: { full_name: '' }, error: null });

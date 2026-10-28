@@ -55,8 +55,11 @@ export default function ResetPassword() {
   const location = useLocation();
   const { user, profile, isLoading: authLoading, signOut } = useAuth();
   const mustChangePassword = user?.app_metadata?.must_change_password === true;
+  const routeState = location.state as { email?: string; requireRecoveryOtp?: boolean; returnTo?: string } | null;
+  const requiresRecoveryOtp = routeState?.requireRecoveryOtp === true;
+  const [hasVerifiedRecoveryOtp, setHasVerifiedRecoveryOtp] = useState(false);
   const [setupStep, setSetupStep] = useState<'password' | 'profile' | 'name'>('password');
-  const needsName = setupStep === 'name' || (user?.app_metadata?.must_change_password === false && profile?.role === 'student' && !profile.full_name?.trim());
+  const needsName = !requiresRecoveryOtp && (setupStep === 'name' || (user?.app_metadata?.must_change_password === false && profile?.role === 'student' && !profile.full_name?.trim()));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -71,7 +74,7 @@ export default function ResetPassword() {
 
   // The forgot-password form hands the email over via router state so it is
   // not exposed in the URL; the field stays editable for direct visits.
-  const handedOverEmail = ((location.state as { email?: string } | null)?.email ?? '').trim().toLowerCase();
+  const handedOverEmail = (routeState?.email ?? '').trim().toLowerCase();
 
   const verifyForm = useForm<VerifyCodeFormData>({
     resolver: zodResolver(verifyCodeSchema),
@@ -89,7 +92,8 @@ export default function ResetPassword() {
 
   useEffect(() => {
     if (!successMessage) return;
-    const from = (location.state as { from?: string } | null)?.from;
+    const from = (location.state as { returnTo?: string; from?: string } | null)?.returnTo
+      ?? (location.state as { from?: string } | null)?.from;
     const destination = typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/reset-password') && !from.startsWith('/auth')
       ? from : profile?.role === 'admin' ? '/admin-dashboard' : '/chat';
     const handle = window.setTimeout(() => navigate(destination, { replace: true }), REDIRECT_DELAY_MS);
@@ -112,6 +116,8 @@ export default function ResetPassword() {
       });
       if (verifyError) {
         setError(verifyError.message);
+      } else if (requiresRecoveryOtp) {
+        setHasVerifiedRecoveryOtp(true);
       }
     } catch {
       setError('An unexpected error occurred. Please try again.');
@@ -184,7 +190,7 @@ export default function ResetPassword() {
       <Card className="w-full max-w-md">
         {hasSession && needsName ? (
           <StudentNameSetup successMessage={successMessage} onComplete={() => setSuccessMessage('Name saved. Redirecting you now...')} />
-        ) : hasSession ? (
+        ) : hasSession && (!requiresRecoveryOtp || hasVerifiedRecoveryOtp) ? (
           <form onSubmit={passwordForm.handleSubmit(handleUpdatePassword)}>
             <CardHeader>
               <CardTitle>Choose a new password</CardTitle>
@@ -286,6 +292,7 @@ export default function ResetPassword() {
                     placeholder="you@university.edu"
                     className="pl-10"
                     {...verifyForm.register('email')}
+                    disabled={requiresRecoveryOtp && Boolean(handedOverEmail)}
                   />
                 </div>
                 {verifyForm.formState.errors.email && (
