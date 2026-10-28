@@ -170,6 +170,7 @@ export interface AgentStreamOptions {
   onReset(): Promise<void> | void;
   onToolCall(query: string): Promise<void> | void;
   onUsage?: (usage: TokenUsage) => void;
+  onStep?: (duration: number) => void;
 }
 
 // Answers with tool use (agentic RAG). Runs on the Responses API, because Chat
@@ -195,13 +196,19 @@ export async function generateAgentTextStream(options: AgentStreamOptions): Prom
         execute: ({ query }) => runTool(query),
       }),
     };
+    let stepStartedAt = performance.now();
     const shared = {
       model,
       temperature: options.temperature,
       tools,
       providerOptions: buildAgentProviderOptions(options.reasoningEffort),
       abortSignal: options.signal,
-      onStepFinish: (step: { usage: { promptTokens: number; completionTokens: number } }) => recordUsage(step.usage),
+      onStepFinish: (step: { usage: { promptTokens: number; completionTokens: number } }) => {
+        recordUsage(step.usage);
+        const now = performance.now();
+        options.onStep?.(now - stepStartedAt);
+        stepStartedAt = now;
+      },
     };
 
     const result = streamText({ ...shared, messages: options.messages, maxSteps: options.maxSteps });

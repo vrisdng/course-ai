@@ -168,3 +168,9 @@ Requires a `.env` with Supabase project credentials and provider API keys (`GEMI
 | Video upload progress bar | Actual bytes accepted by resumable Storage upload | Network driven |
 | Admin analytics default range | Last 30 days from "now"; "reset" re-anchors to current time | Rolling window |
 | Flashcard count generated | 3–10 cards, scaled by available source context | Dynamic, content-driven |
+
+### Chat latency diagnostics
+
+For an authorized test session, open the chat URL with `?perf=chat` and inspect the browser console for `Chat browser timing`. The measurements begin when Send is handled: `first_token_received_ms`, `final_received_ms`, `ready_received_ms` (follow-ups are unlocked), `final_commit_ms` (React committed the final message state, not proof of a painted frame), and `eof_ms`. The first token can precede a search and be discarded. Match `request_id` with the `RAG timing` Edge Function log and the `query_events.request_id` row. The log contains model tier, source categories, outcome, and durations, not prompt or answer text.
+
+Server marks are milliseconds from request entry; `search_ms`, `source_prep_ms`, `video_candidate_load_ms`, and `video_select_ms` are durations. Model step intervals run between SDK step-finish callbacks and may include tool work; do not add overlapping timings. `stream_close_ms` marks the server closing the stream, while browser EOF includes transport time. Aborted or failed requests can lack later marks. Compare repeated samples for each model tier and PDF/video source mix under the same conditions; these diagnostics do not establish a production baseline by themselves.

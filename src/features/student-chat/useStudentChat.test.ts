@@ -85,6 +85,7 @@ describe('useStudentChat', () => {
   });
 
   afterEach(() => {
+    window.history.replaceState({}, "", "/");
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -254,6 +255,28 @@ describe('useStudentChat', () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('records final receipt, React commit and EOF only when chat timing is enabled', async () => {
+    window.history.replaceState({}, '', '/?perf=chat');
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const result = await setupWithCourse();
+    act(() => result.current.setInput('private question'));
+    vi.mocked(fetch).mockResolvedValueOnce(streamResponse(
+      sseEvent('token', { text: 'private partial' }) + sseEvent('final', {
+        answer: 'private answer', citations: [], conversationId: 'conv-1', meta: { requestId: 'req-1' },
+      }) + sseEvent('ready', {}),
+    ));
+    await act(async () => { await result.current.handleSend(); });
+    const samples = log.mock.calls.map((call) => call[1]);
+    expect(samples).toEqual(expect.arrayContaining([
+      expect.objectContaining({ request_id: 'req-1', first_token_received_ms: expect.any(Number) }),
+      expect.objectContaining({ request_id: 'req-1', final_received_ms: expect.any(Number) }),
+      expect.objectContaining({ request_id: 'req-1', ready_received_ms: expect.any(Number) }),
+      expect.objectContaining({ request_id: 'req-1', final_commit_ms: expect.any(Number) }),
+      expect.objectContaining({ request_id: 'req-1', eof_ms: expect.any(Number) }),
+    ]));
+    expect(JSON.stringify(samples)).not.toContain('private');
   });
 
   it('streams token events and assembles the final answer with citations', async () => {
