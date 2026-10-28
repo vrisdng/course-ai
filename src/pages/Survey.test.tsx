@@ -69,7 +69,7 @@ describe('Survey page', () => {
       },
     }));
 
-    expect(await screen.findByText('Thank you! Your reponse has been saved.')).toBeInTheDocument();
+    expect(await screen.findByText('Thank you! Your response has been saved.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to chat' })).toHaveAttribute('href', '/chat');
   });
 
@@ -90,7 +90,7 @@ describe('Survey page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit feedback' }));
 
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('network down'));
-    expect(screen.queryByText('Thank you! Your reponse has been saved.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Thank you! Your response has been saved.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeEnabled();
   });
 });

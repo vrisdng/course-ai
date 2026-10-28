@@ -1,19 +1,16 @@
 import { corsHeaders } from './cors.ts';
-import { buildSurveyEmail, parseSurveyAnswers, type SurveyEmailContent } from './survey.ts';
-
-export interface SurveyEmailMessage extends SurveyEmailContent {
-  to: string;
-  from: string;
-}
+import { parseSurveyAnswers, type SurveyAnswer } from './survey.ts';
 
 export type SurveyAuthResult = Response | { userId: string };
 
+export interface SurveySavePayload {
+  userId: string;
+  answers: SurveyAnswer[];
+}
+
 export interface SubmitSurveyDeps {
   authenticate: (req: Request) => Promise<SurveyAuthResult>;
-  sendEmail: (message: SurveyEmailMessage) => Promise<void>;
-  recipientEmail: string;
-  fromEmail: string;
-  now?: () => Date;
+  save: (payload: SurveySavePayload) => Promise<string>;
 }
 
 export function jsonResponse(body: unknown, status = 200): Response {
@@ -60,18 +57,11 @@ export async function handleSubmitSurvey(req: Request, deps: SubmitSurveyDeps): 
     return jsonResponse({ error: 'Please answer at least one question.' }, 400);
   }
 
-  const content = buildSurveyEmail(answers, deps.now?.() ?? new Date());
-
   try {
-    await deps.sendEmail({
-      ...content,
-      to: deps.recipientEmail,
-      from: deps.fromEmail,
-    });
+    const id = await deps.save({ userId: auth.userId, answers });
+    return jsonResponse({ success: true, id });
   } catch (error) {
-    console.error('submit-survey email error:', error);
+    console.error('submit-survey save error:', error);
     return jsonResponse({ error: 'We could not save your response. Please try again.' }, 500);
   }
-
-  return jsonResponse({ success: true });
 }
