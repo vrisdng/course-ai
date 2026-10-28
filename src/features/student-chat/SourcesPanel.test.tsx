@@ -54,6 +54,23 @@ const props = (overrides: Partial<Parameters<typeof SourcesPanel>[0]> = {}) => (
 });
 
 describe('SourcesPanel', () => {
+  it('lists every composite source with metadata and an independent open action', () => {
+    const citations = [
+      { id: 'v1', chunkId: 'video-chunk', documentName: 'Lecture recording', documentType: 'video', excerpt: 'Video evidence', startMs: 40_000, endMs: 45_000, relevanceScore: 0.9 },
+      { id: 'p1', chunkId: 'pdf-chunk', documentName: 'Lecture notes', documentType: 'pdf', excerpt: 'Notes evidence', pageNumber: 3, relevanceScore: 0.8 },
+    ];
+    const onSelectCitation = vi.fn();
+    render(<SourcesPanel {...props({ citationSources: citations, onSelectCitation })} />);
+    expect(screen.getByText('Webcast · 0:40-0:45')).toBeInTheDocument();
+    expect(screen.getByText('Notes · Page 3')).toBeInTheDocument();
+    expect(screen.getByText('Video evidence')).toBeInTheDocument();
+    expect(screen.getByText('Notes evidence')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open source: Lecture notes' }));
+    expect(onSelectCitation).toHaveBeenLastCalledWith(citations[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Open source: Lecture recording' }));
+    expect(onSelectCitation).toHaveBeenLastCalledWith(citations[0]);
+  });
+
   it('closes through the panel control', () => {
     const value = props();
     render(<SourcesPanel {...value} />);

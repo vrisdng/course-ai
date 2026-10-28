@@ -1031,15 +1031,16 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
   }, []);
 
-  const focusCitation = useCallback((message: Message, citationNumber: number) => {
+  const focusCitation = useCallback((message: Message, citationNumber: number | number[]) => {
     if (!message.citations || message.citations.length === 0) return;
 
-    const citationIndex = citationNumber - 1;
-    if (!message.citations[citationIndex]) return;
+    const numbers = Array.isArray(citationNumber) ? citationNumber : [citationNumber];
+    const citations = numbers.map((number) => message.citations[number - 1]).filter(Boolean);
+    if (citations.length === 0) return;
 
-    setSelectedMessage(message);
+    setSelectedMessage({ ...message, citations });
     setShowSidePanel(true);
-    setHighlightedCitationKey(getCitationKey(message.id, citationNumber));
+    setHighlightedCitationKey(getCitationKey(message.id, numbers[0]));
   }, [setShowSidePanel]);
 
   const openSourcesForMessage = useCallback((message: Message) => {

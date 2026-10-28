@@ -45,6 +45,7 @@ export default function StudentChat() {
     availableDocuments,
     isLoadingDocuments,
     messages,
+    selectedMessage,
     input,
     isLoading,
     showSidePanel,
@@ -263,6 +264,8 @@ export default function StudentChat() {
           activeViewerSource={activeViewerSource}
           activeVideoSource={activeVideoSource}
           openingCitationKey={openingCitationKey}
+          citationSources={selectedMessage?.citations}
+          onSelectCitation={(citation) => openCitationSource(citation, `${selectedMessage.id}-${citation.id}`)}
           onOpenPanel={() => setShowSidePanel(true)}
           onClosePanel={() => setShowSidePanel(false)}
         />
