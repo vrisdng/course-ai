@@ -354,6 +354,92 @@ describe('useStudentChat', () => {
     },
   );
 
+  it.each(['pdf', 'video'])('unlocks a saved %s turn before EOF and sends follow-ups to its conversation', async (documentType) => {
+    const result = await setupWithCourse();
+    from.mockImplementation((table) => createQueryChain(table === 'conversations' ? {
+      data: [{ id: 'conv-1', title: 'Question', course_id: 'course-1', created_at: '2026-10-28' }], error: null,
+    } : emptyResult));
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({
+      start(value) { controller = value; },
+    }), { headers: { 'content-type': 'text/event-stream' } }));
+    const citation = { id: 'c1', chunkId: 'chunk', materialId: 'material', excerpt: 'Evidence',
+      documentName: 'Lecture', documentType, relevanceScore: 0.9, startMs: 1000, endMs: 5000 };
+    act(() => result.current.setInput('question'));
+    let sending!: Promise<void>;
+    act(() => { sending = result.current.handleSend(); });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    const emit = (event: string, data: unknown) => controller.enqueue(new TextEncoder().encode(sseEvent(event, data)));
+    try {
+      act(() => emit('final', { answer: 'Answer <<cite:1>>', citations: [citation], conversationId: 'conv-1' }));
+      await waitFor(() => expect(result.current.messages[1]?.content).toBe('Answer <<cite:1>>'));
+      expect(result.current.isLoading).toBe(true);
+      act(() => emit('ready', {}));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.currentConversationId).toBe('conv-1');
+      expect(result.current.messages).toHaveLength(2);
+      if (documentType === 'video') {
+        const evidenceSegments = [{ id: 'segment', segmentIndex: 0, startMs: 1000, endMs: 2000, text: 'Evidence' }];
+        act(() => result.current.openSourcesForMessage(result.current.messages[1]));
+        act(() => emit('citations', { citations: [{ ...citation, evidenceSegments }, { ...citation, id: 'other' }] }));
+        await waitFor(() => expect(result.current.messages[1].citations?.[0].evidenceSegments).toEqual(evidenceSegments));
+        expect(result.current.selectedMessage?.citations?.[0].evidenceSegments).toEqual(evidenceSegments);
+        expect(result.current.selectedMessage?.citations).toHaveLength(1);
+      }
+      let finishFollowup!: ReadableStreamDefaultController<Uint8Array>;
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({ start(value) { finishFollowup = value; } }), {
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      act(() => result.current.setInput('follow-up'));
+      let followup!: Promise<void>;
+      act(() => { followup = result.current.handleSend(); });
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+      expect(JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string).conversationId).toBe('conv-1');
+      expect(vi.mocked(fetch).mock.calls[0][1]!.signal!.aborted).toBe(true);
+      await act(async () => {
+        emit('citations', { citations: [] });
+        controller.close();
+        await sending;
+      });
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.messages[1].citations).toHaveLength(documentType === 'video' ? 2 : 1);
+      await act(async () => { finishFollowup.close(); await followup; });
+    } finally {
+      try { controller.close(); } catch { /* already closed */ }
+      await act(async () => { await sending; });
+    }
+  });
+
+  it('keeps a saved answer usable when the background conversation refresh rejects', async () => {
+    const result = await setupWithCourse();
+    const error = new Error('Network unavailable');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    authGetUser.mockRejectedValueOnce(error);
+    vi.mocked(fetch).mockResolvedValueOnce(streamResponse(
+      sseEvent('final', { answer: 'Saved answer', citations: [], conversationId: 'conv-1' }) +
+      sseEvent('ready', {}),
+    ));
+    act(() => result.current.setInput('question'));
+    await act(async () => { await result.current.handleSend(); });
+    expect(warning).toHaveBeenCalledWith('Failed to refresh conversations after saving the answer:', error);
+    expect(result.current.messages[1].content).toBe('Saved answer');
+    expect(result.current.currentConversationId).toBe('conv-1');
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('surfaces persistence failure without removing the completed answer', async () => {
+    const result = await setupWithCourse();
+    vi.mocked(fetch).mockResolvedValueOnce(streamResponse(
+      sseEvent('final', { answer: 'Completed answer', citations: [], conversationId: 'conv-1' }) +
+      sseEvent('error', { code: 'message_persistence_failed', error: 'Your answer could not be saved.' }),
+    ));
+    act(() => result.current.setInput('question'));
+    await act(async () => { await result.current.handleSend(); });
+    expect(result.current.messages[1].content).toBe('Completed answer');
+    expect(toast.error).toHaveBeenCalledWith('Your answer could not be saved.');
+    expect(result.current.isLoading).toBe(false);
+  });
+
   it('displays a final answer returned as JSON', async () => {
     const result = await setupWithCourse();
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({

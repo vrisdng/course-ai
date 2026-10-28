@@ -958,6 +958,7 @@ ${retrievalScopeInstruction}`;
           let outcome: ChatOutcome = "error";
           let errorCode: string | null = "incomplete_request";
           let answerDelivered = false;
+          let turnSaved = false;
           try {
             ensureStreamActive();
 
@@ -1029,6 +1030,7 @@ ${retrievalScopeInstruction}`;
 
             ensureStreamActive();
 
+            const answerGeneratedAt = performance.now();
             const { answer, citedChunks, citedRefs, imageByFinalCite } = resolveAnswerCitations({
               rawAnswer,
               chunks: retrievedChunks,
@@ -1043,20 +1045,8 @@ ${retrievalScopeInstruction}`;
               return { shown, indexes: ref.blockIndexes };
             });
 
-            const evidenceByCitation = await selectVideoEvidence({
-              client: supabaseClient,
-              chunks: citedChunks,
-              answer,
-              question: trimmedMessage,
-              onUsage: recordUsage,
-              apiKey: chatApiKey,
-              signal: requestAbortController.signal,
-            });
-
-            ensureStreamActive();
-
             const citations = citedChunks.map((chunk, index) => ({
-              id: `citation-${index + 1}`,
+              id: crypto.randomUUID(),
               chunkId: chunk.id,
               blockIds: citedBlockIds(citedBlocks[index].indexes, citedBlocks[index].shown),
               excerpt: citedExcerpt(citedBlocks[index].indexes, citedBlocks[index].shown, chunk.chunk_text),
@@ -1069,7 +1059,7 @@ ${retrievalScopeInstruction}`;
               imageUrl: imageByFinalCite.get(index + 1)?.path ?? null,
               materialId: imageByFinalCite.get(index + 1)?.materialId ?? chunk.material_id,
               studentDocumentId: chunk.student_document_id,
-              evidenceSegments: evidenceByCitation.get(index + 1) ?? null,
+              evidenceSegments: null as VideoEvidenceSegment[] | null,
             }));
 
             // Send the final event to the client BEFORE persisting to DB.
@@ -1110,15 +1100,11 @@ ${retrievalScopeInstruction}`;
             context.user_message_id = userMessageResult.data?.id ?? null;
             context.assistant_message_id = assistantMessageResult.data?.id ?? null;
             if (userMessageResult.error || !userMessageResult.data) {
-              errorCode = "message_persistence_failed";
-              console.error(`Failed to save user message: ${userMessageResult.error?.message || "Unknown error"}`);
-              return;
+              throw new Error(`Failed to save user message: ${userMessageResult.error?.message || "Unknown error"}`);
             }
 
             if (assistantMessageResult.error || !assistantMessageResult.data) {
-              errorCode = "message_persistence_failed";
-              console.error(`Failed to save assistant message: ${assistantMessageResult.error?.message || "Unknown error"}`);
-              return;
+              throw new Error(`Failed to save assistant message: ${assistantMessageResult.error?.message || "Unknown error"}`);
             }
 
             const assistantMessage = assistantMessageResult.data;
@@ -1131,6 +1117,7 @@ ${retrievalScopeInstruction}`;
                   const { error: citationsError } = await supabaseClient
                     .from("citations")
                     .insert(citations.map((citation, index) => ({
+                      id: citation.id,
                       message_id: assistantMessage.id,
                       chunk_id: citation.chunkId,
                       material_id: citedChunks[index].material_id,
@@ -1142,9 +1129,9 @@ ${retrievalScopeInstruction}`;
                       excerpt: citation.excerpt,
                       block_ids: citation.blockIds.length > 0 ? citation.blockIds : null,
                       image_url: imageByFinalCite.get(index + 1)?.path ?? null,
-                      evidence_segments: evidenceByCitation.get(index + 1) ?? null,
+                      evidence_segments: null,
                     })));
-                  if (citationsError) console.error(`Failed to save citations: ${citationsError.message}`);
+                  if (citationsError) throw new Error(`Failed to save citations: ${citationsError.message}`);
                 }
               })(),
               // Update conversation timestamp
@@ -1153,16 +1140,54 @@ ${retrievalScopeInstruction}`;
                 .update({ updated_at: new Date().toISOString() })
                 .eq("id", activeConversationId),
             ]);
+
+            turnSaved = true;
+            ensureStreamActive();
+            // Follow-ups may now abort this stream without losing their history or basic sources.
+            sendEvent("ready", {});
+            console.log("RAG completion timing", { basic_ready_ms: Math.round(performance.now() - answerGeneratedAt) });
+
+            if (!citedChunks.some((chunk) => chunk.material_type === "video")) return;
+            const evidenceStartedAt = performance.now();
+            const evidenceByCitation = await selectVideoEvidence({
+              client: supabaseClient,
+              chunks: citedChunks,
+              answer,
+              question: trimmedMessage,
+              onUsage: recordUsage,
+              apiKey: chatApiKey,
+              signal: requestAbortController.signal,
+            });
+            console.log("RAG completion timing", { video_evidence_ms: Math.round(performance.now() - evidenceStartedAt) });
+            ensureStreamActive();
+            if (evidenceByCitation.size === 0) return;
+
+            await Promise.all([...evidenceByCitation].map(async ([number, evidenceSegments]) => {
+              const citation = citations[number - 1];
+              const { error } = await supabaseClient.from("citations")
+                .update({ evidence_segments: evidenceSegments })
+                .eq("message_id", assistantMessage.id)
+                .eq("id", citation.id);
+              if (error) throw new Error(`Failed to save video evidence: ${error.message}`);
+              citation.evidenceSegments = evidenceSegments;
+            }));
+            ensureStreamActive();
+            sendEvent("citations", { citations });
           } catch (streamError) {
             const failure = classifyChatFailure(streamError, requestAbortController.signal);
             if (answerDelivered) {
-              errorCode = "message_persistence_failed";
+              errorCode = turnSaved ? null : "message_persistence_failed";
             } else {
               outcome = failure.outcome;
               errorCode = failure.errorCode;
             }
             if (answerDelivered) {
-              console.error("Failed to persist delivered RAG answer", streamError);
+              if (!turnSaved) {
+                console.error("Failed to persist delivered RAG answer", streamError);
+                sendEvent("error", { code: "message_persistence_failed", error: "Your answer is shown but could not be saved. Please retry your question before continuing." });
+              } else if (failure.outcome !== "aborted") {
+                console.warn("Unable to enrich video citations; keeping basic sources", streamError);
+              }
               return;
             }
             if (failure.outcome === "aborted") {
