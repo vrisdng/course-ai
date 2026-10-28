@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { supabase } from '@/integrations/supabase/client';
-import { parseStudentEmails } from './parseStudentEmails';
+import { parseStudentImport } from './parseStudentImport';
 
 interface ImportResult { email: string; status: string; error?: string }
 interface ImportStudentsDialogProps { courseId: string; onImported: () => void }
@@ -21,15 +21,15 @@ export function ImportStudentsDialog({ courseId, onImported }: ImportStudentsDia
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ImportResult[]>([]);
   const [error, setError] = useState('');
-  const parsed = parseStudentEmails(text);
+  const parsed = parseStudentImport(text);
 
   const importStudents = async () => {
     setBusy(true); setError(''); setResults([]);
     let imported = false;
     try {
-      for (let offset = 0; offset < parsed.emails.length; offset += 20) {
+      for (let offset = 0; offset < parsed.students.length; offset += 20) {
         const { data, error: requestError } = await supabase.functions.invoke('import-course-students', {
-          body: { courseId, emails: parsed.emails.slice(offset, offset + 20) },
+          body: { courseId, students: parsed.students.slice(offset, offset + 20) },
         });
         if (requestError || data?.error || !Array.isArray(data?.results)) {
           throw new Error(data?.error || requestError?.message || 'Unexpected import response');
@@ -65,14 +65,22 @@ export function ImportStudentsDialog({ courseId, onImported }: ImportStudentsDia
       <div className="space-y-2">
         <Label htmlFor="student-emails">Student emails</Label>
         <Textarea id="student-emails" rows={6} disabled={busy} value={text}
-          placeholder={'ada@university.edu, grace@university.edu\nstudent@university.edu'}
+          placeholder={'email,fullName\nada@university.edu,Ada Lovelace\ngrace@university.edu,"Hopper, Grace"'}
           onChange={(event) => { setText(event.target.value); setResults([]); setError(''); }} />
-        <p className="text-sm text-muted-foreground">Emails only, separated by commas or new lines. An email header is optional. {parsed.emails.length} unique emails.</p>
+        <p className="text-sm text-muted-foreground">Paste emails separated by commas or new lines, or one email,name row per student. The email,fullName header is optional; quote names containing commas. Names are optional (up to 200 characters). Existing accounts keep their names. {parsed.students.length} unique emails.</p>
       </div>
+      {parsed.students.length > 0 && <div className="max-h-48 overflow-auto rounded-md border">
+        <table className="w-full text-left text-sm" aria-label="Student import preview">
+          <thead><tr><th scope="col" className="p-2">Email</th><th scope="col" className="p-2">Name for new account</th></tr></thead>
+          <tbody>{parsed.students.map((student) => <tr key={student.email}>
+            <td className="break-all p-2">{student.email}</td><td className="break-words p-2">{student.fullName || 'Collected at first login'}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
       {parsed.invalid.length > 0 && <p role="alert" className="text-sm text-destructive">Fix invalid entries: {parsed.invalid.join(', ')}</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <Button disabled={busy || !parsed.emails.length || parsed.invalid.length > 0} onClick={() => void importStudents()}>
-        {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Importing… {results.length}/{parsed.emails.length}</> : `Import ${parsed.emails.length} student${parsed.emails.length === 1 ? '' : 's'}`}
+      <Button disabled={busy || !parsed.students.length || parsed.invalid.length > 0} onClick={() => void importStudents()}>
+        {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Importing… {results.length}/{parsed.students.length}</> : `Import ${parsed.students.length} student${parsed.students.length === 1 ? '' : 's'}`}
       </Button>
       {results.length > 0 && <ul aria-live="polite" className="space-y-2 text-sm">
         {results.map((result) => <li key={result.email} className="break-all"><span className="font-medium">{result.email}</span>: <span>{STATUS_LABELS[result.status] || result.status}</span>

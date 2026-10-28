@@ -47,6 +47,13 @@ describe('PasswordChangeGate', () => {
     expect(screen.getByText('setup:/chat')).toBeInTheDocument();
     expect(screen.queryByText('normal access')).not.toBeInTheDocument();
   });
+  it('requires password setup even when the imported student already has a name', () => {
+    state.auth.user = { app_metadata: { must_change_password: true } };
+    state.auth.profile = { role: 'student', full_name: 'Ada Lovelace' };
+    page('/chat');
+    expect(screen.getByText('setup:/chat')).toBeInTheDocument();
+    expect(screen.queryByText('normal access')).not.toBeInTheDocument();
+  });
   it('allows imported students with names and ordinary existing accounts', () => {
     state.auth.user = { app_metadata: { must_change_password: false } };
     state.auth.profile = { role: 'student', full_name: 'Ngọc Mai' };
