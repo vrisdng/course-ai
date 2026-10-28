@@ -11,7 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { SurveyQuestionField } from '@/features/survey/SurveyQuestionField';
 import { buildSurveyAnswers, SURVEY_QUESTIONS, SURVEY_SECTIONS } from '@/features/survey/surveyQuestions';
 
-const SUCCESS_MESSAGE = 'Thank you! Your reponse has been saved.';
+const SUCCESS_MESSAGE = 'Thank you! Your response has been saved.';
 
 export default function Survey() {
   const [values, setValues] = useState<Record<string, string>>({});

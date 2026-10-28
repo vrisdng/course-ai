@@ -11,10 +11,7 @@ const request = (body: unknown, method = 'POST') => new Request('http://local/su
 function deps(overrides: Partial<SubmitSurveyDeps> = {}): SubmitSurveyDeps {
   return {
     authenticate: vi.fn().mockResolvedValue({ userId: 'user-1' }),
-    sendEmail: vi.fn().mockResolvedValue(undefined),
-    recipientEmail: 'owner@example.test',
-    fromEmail: 'CEEGPT Survey <survey@example.test>',
-    now: () => new Date('2026-10-28T00:00:00.000Z'),
+    save: vi.fn().mockResolvedValue('row-1'),
     ...overrides,
   };
 }
@@ -58,8 +55,8 @@ describe('submit survey handler', () => {
     expect(await empty.json()).toEqual({ error: 'Please answer at least one question.' });
   });
 
-  it('emails optional answers to the configured recipient', async () => {
-    const sendEmail = vi.fn().mockResolvedValue(undefined);
+  it('saves non-blank answers to the database and returns the row id', async () => {
+    const save = vi.fn().mockResolvedValue('row-1');
     const response = await handleSubmitSurvey(
       request({
         answers: [
@@ -67,26 +64,22 @@ describe('submit survey handler', () => {
           { question: '5. Frustrating moment?', answer: '' },
         ],
       }),
-      deps({ sendEmail }),
+      deps({ save }),
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true });
-    expect(sendEmail).toHaveBeenCalledOnce();
-    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
-      to: 'owner@example.test',
-      from: 'CEEGPT Survey <survey@example.test>',
-      subject: 'CEEGPT survey response (1 answer)',
-    }));
-    expect(sendEmail.mock.calls[0][0].html).toContain('1. How easy was it?');
-    expect(sendEmail.mock.calls[0][0].text).toContain('1. How easy was it?\n5');
+    expect(await response.json()).toEqual({ success: true, id: 'row-1' });
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith({
+      userId: 'user-1',
+      answers: [{ question: '1. How easy was it?', answer: '5' }],
+    });
   });
 
-  it('does not leak provider details when email delivery fails', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('returns a generic error when saving fails', async () => {
     const response = await handleSubmitSurvey(
       request({ answers: [{ question: 'Q', answer: 'A' }] }),
-      deps({ sendEmail: vi.fn().mockRejectedValue(new Error('resend down')) }),
+      deps({ save: vi.fn().mockRejectedValue(new Error('postgres down')) }),
     );
 
     expect(response.status).toBe(500);

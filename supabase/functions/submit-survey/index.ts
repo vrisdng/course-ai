@@ -6,8 +6,10 @@ import {
   handleSubmitSurvey,
   jsonResponse,
   type SurveyAuthResult,
-  type SurveyEmailMessage,
+  type SurveySavePayload,
+  type SubmitSurveyDeps,
 } from '../_shared/surveyHandler.ts';
+import type { SurveyAnswer } from '../_shared/survey.ts';
 
 async function authenticate(req: Request): Promise<SurveyAuthResult> {
   const authHeader = req.headers.get('Authorization');
@@ -39,36 +41,34 @@ async function authenticate(req: Request): Promise<SurveyAuthResult> {
   return { userId: user.id };
 }
 
-async function sendEmail(message: SurveyEmailMessage): Promise<void> {
-  const apiKey = Deno.env.get('RESEND_API_KEY');
-  if (!apiKey) {
-    throw new Error('RESEND_API_KEY is not configured');
+async function saveSurvey(payload: SurveySavePayload): Promise<string> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Server is not configured');
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: message.from,
-      to: [message.to],
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-    }),
-  });
+  const adminClient = createClient(supabaseUrl, serviceRoleKey);
+  const { data, error } = await adminClient
+    .from('survey_responses')
+    .insert({ user_id: payload.userId, answers: payload.answers as SurveyAnswer[] })
+    .select('id')
+    .single();
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Resend responded ${response.status}: ${detail}`);
+  if (error) {
+    throw new Error(`Failed to save survey: ${error.message}`);
   }
+
+  if (!data?.id) {
+    throw new Error('Failed to save survey: no id returned');
+  }
+
+  return data.id;
 }
 
-serve((req: Request) => handleSubmitSurvey(req, {
+const deps: SubmitSurveyDeps = {
   authenticate,
-  sendEmail,
-  recipientEmail: Deno.env.get('SURVEY_RECIPIENT_EMAIL') ?? 'maidng@u.nus.edu',
-  fromEmail: Deno.env.get('SURVEY_FROM_EMAIL') ?? 'CEEGPT Survey <onboarding@resend.dev>',
-}));
+  save: saveSurvey,
+};
+
+serve((req: Request) => handleSubmitSurvey(req, deps));

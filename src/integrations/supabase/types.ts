@@ -1171,6 +1171,27 @@ export type Database = {
           },
         ]
       }
+      survey_responses: {
+        Row: {
+          answers: Json
+          id: string
+          submitted_at: string
+          user_id: string
+        }
+        Insert: {
+          answers: Json
+          id?: string
+          submitted_at?: string
+          user_id: string
+        }
+        Update: {
+          answers?: Json
+          id?: string
+          submitted_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       usage_counters: {
         Row: {
           ai_questions: number

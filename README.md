@@ -91,10 +91,11 @@ Each function needs its own secrets set on the Supabase project (these are **sep
 ```sh
 supabase secrets set GEMINI_API_KEY=... OPENAI_API_KEY=... ASSEMBLY_API_KEY=... RESEND_API_KEY=...
 supabase secrets set RENDER_SERVICE_URL=https://<production-domain>/api/render-pdf-pages RENDER_SERVICE_SECRET=...
-# Feedback survey email. SURVEY_FROM_EMAIL must be a Resend-verified sender;
-# SURVEY_RECIPIENT_EMAIL optionally overrides the inbox configured in the function.
-supabase secrets set SURVEY_FROM_EMAIL="CEEGPT Survey <survey@your-verified-domain>" SURVEY_RECIPIENT_EMAIL=...
 ```
+
+Feedback survey submissions are stored in `public.survey_responses` (see
+`supabase/migrations/20261028000000_add_survey_responses.sql`); no email
+provider or extra secret is needed for the survey.
 
 Without the two `RENDER_SERVICE_*` secrets, ingestion skips PDF page images and citations fall back to rendering the PDF in the browser.
 
