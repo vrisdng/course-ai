@@ -21,6 +21,7 @@ describe('MainLayout', () => {
     renderLayout();
     expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin-dashboard');
     expect(screen.getByRole('link', { name: 'Analytics' })).toHaveAttribute('href', '/admin-analytics');
+    expect(screen.getByRole('link', { name: 'Share feedback' })).toHaveAttribute('href', '/survey');
     expect(screen.getByText('AL')).toBeInTheDocument(); expect(screen.getByText('page content')).toBeInTheDocument();
   });
   it('falls back to email initials when the profile has no name', () => {

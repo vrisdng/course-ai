@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
 import { TourHelpButton } from '@/features/onboarding/TourContext';
-import { BarChart3, LayoutDashboard, LogOut, MessageSquare, Settings } from 'lucide-react';
+import { BarChart3, ClipboardList, LayoutDashboard, LogOut, MessageSquare, Settings } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 interface NavLink {
@@ -57,6 +57,12 @@ export function Header() {
                   </Button>
                 </Link>
               ))}
+
+              <Button asChild variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-foreground">
+                <Link to="/survey" aria-label="Share feedback" title="Share feedback">
+                  <ClipboardList className="h-5 w-5" />
+                </Link>
+              </Button>
 
               <TourHelpButton />
 
