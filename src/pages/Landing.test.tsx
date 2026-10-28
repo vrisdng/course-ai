@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,46 +27,13 @@ describe('Landing', () => {
     mocks.auth.isAdmin = true; renderPage();
     expect(screen.getAllByRole('link', { name: 'Open dashboard' }).length).toBeGreaterThan(0);
   });
-  it('validates an anonymous invite and directs an existing account to sign in', async () => {
-    mocks.invoke.mockResolvedValue({ data: {
-      valid: true, reason: 'ok', invitedEmail: 'student@example.test', emailMatchesInvite: true,
-      accountExists: true, alreadyEnrolled: false, course: { id: 'c1', name: 'Algorithms', code: 'CS101' },
-    }, error: null });
-    renderPage('/?invite=ABC123&email=STUDENT%40EXAMPLE.TEST');
-    expect(await screen.findByText('Invite code is valid for student@example.test.')).toBeInTheDocument();
-    expect(screen.getByText(/Use this invite to enroll in Algorithms \(CS101\)/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sign In to Enroll' })).toHaveAttribute('href', expect.stringContaining('invite=ABC123'));
-    expect(mocks.invoke).toHaveBeenCalledWith('check-course-invite', { body: { inviteCode: 'ABC123', email: 'student@example.test' } });
-  });
-  it('rechecks entered email and shows invite mismatch feedback', async () => {
-    mocks.invoke
-      .mockResolvedValueOnce({ data: { valid: true, reason: 'ok', invitedEmail: 'owner@example.test' }, error: null })
-      .mockResolvedValueOnce({ data: { valid: true, reason: 'ok', invitedEmail: 'owner@example.test', emailMatchesInvite: false }, error: null });
-    renderPage('/?invite=ABC123');
-    await screen.findByText('Invite code is valid for owner@example.test.');
-    fireEvent.change(screen.getByLabelText('Your email'), { target: { value: ' other@example.test ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Check My Account' }));
-    expect(await screen.findByText('This invite is for a different email address.')).toBeInTheDocument();
-    expect(mocks.invoke).toHaveBeenLastCalledWith('check-course-invite', { body: { inviteCode: 'ABC123', email: 'other@example.test' } });
-  });
-  it('redeems a valid signed-in invite, refreshes access, and enters chat', async () => {
-    const invite = { valid: true, reason: 'ok', invitedEmail: 'student@example.test', emailMatchesInvite: true, alreadyEnrolled: false };
-    mocks.auth = { isAdmin: false, user: { email: 'student@example.test' }, profile: { email: 'student@example.test' }, isLoading: false, refreshProfile: vi.fn() };
-    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'token' } } });
-    mocks.invoke.mockImplementation((name: string) => Promise.resolve(name === 'check-course-invite'
-      ? { data: invite, error: null } : { data: { success: true, status: 'enrolled' }, error: null }));
-    renderPage('/?invite=ABC123');
-    fireEvent.click(await screen.findByRole('button', { name: 'Enroll Now' }));
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('redeem-course-invite', { body: { inviteCode: 'ABC123' } }));
-    await screen.findByText('chat destination');
-    expect(mocks.auth.refreshProfile).toHaveBeenCalled();
-    expect(mocks.toastSuccess).toHaveBeenCalledWith('You have been enrolled.');
-  });
-  it('shows expired and provider validation errors', async () => {
-    mocks.invoke.mockResolvedValueOnce({ data: { valid: false, reason: 'expired' }, error: null });
-    const { unmount } = renderPage('/?invite=OLD');
-    expect(await screen.findByText('This invite has expired.')).toBeInTheDocument(); unmount();
-    mocks.invoke.mockResolvedValueOnce({ data: null, error: { message: 'Service unavailable' } });
-    renderPage('/?invite=BAD'); expect(await screen.findByText('Service unavailable')).toBeInTheDocument();
+  it.each([false, true])('explains retired links without checking or redeeming them (signed in: %s)', (signedIn) => {
+    mocks.auth.user = signedIn ? { email: 'student@example.test' } : null;
+    renderPage('/?invite=OLD&email=student%40example.test');
+    expect(screen.getByText('Course invitation links have been retired.')).toBeInTheDocument();
+    expect(screen.getByText(/Contact your lecturer to be added to your course/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /enroll|check my account/i })).not.toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.getSession).not.toHaveBeenCalled();
   });
 });

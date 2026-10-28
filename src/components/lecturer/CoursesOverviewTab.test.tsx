@@ -14,10 +14,10 @@ const terms = [
 ];
 
 const props = () => ({
-  isAdmin: true, courses, isLoadingCourses: false, enrollmentCodeByCourseId: { 'course-1': 'AB3X7KM2' },
+  isAdmin: true, courses, isLoadingCourses: false,
   newCourseName: '', newCourseCode: '', newCourseDescription: '', isCreatingCourse: false,
   onNewCourseNameChange: vi.fn(), onNewCourseCodeChange: vi.fn(), onNewCourseDescriptionChange: vi.fn(),
-  onCreateCourse: vi.fn(), onDeleteCourse: vi.fn(), onOpenAddStudentsDialog: vi.fn(),
+  onCreateCourse: vi.fn(), onDeleteCourse: vi.fn(),
   academicTerms: terms, isLoadingTerms: false, newTermSemester: '1' as const, newTermAyStart: '2026', isCreatingTerm: false,
   activatingTermId: null, onNewTermSemesterChange: vi.fn(), onNewTermAyStartChange: vi.fn(), onCreateAcademicTerm: vi.fn(),
   onSetActiveTerm: vi.fn(), onDeleteAcademicTerm: vi.fn(),
@@ -25,14 +25,13 @@ const props = () => ({
 const renderTab = (value = props()) => render(<MemoryRouter><CoursesOverviewTab {...value} /></MemoryRouter>);
 
 describe('CoursesOverviewTab', () => {
-  it('lists courses with enrollment codes and wires row actions', () => {
+  it('lists course identifiers and wires student-management actions', () => {
     const value = props(); renderTab(value);
     const row = screen.getByText('Algorithms').closest('tr') as HTMLTableRowElement;
-    expect(within(row).getByText('AB3X7KM2')).toBeInTheDocument();
-    expect(within(screen.getByText('Databases').closest('tr') as HTMLElement).getByText('N/A')).toBeInTheDocument();
-    fireEvent.click(within(row).getByRole('button', { name: 'Generate Code' }));
+    expect(within(row).getByText('CS101')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Enrollment Code' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate Code' })).not.toBeInTheDocument();
     fireEvent.click(within(row).getByRole('button', { name: 'Delete Algorithms' }));
-    expect(value.onOpenAddStudentsDialog).toHaveBeenCalledWith(courses[0]);
     expect(value.onDeleteCourse).toHaveBeenCalledWith(courses[0]);
     expect(within(row).getByRole('link', { name: 'Students' })).toHaveAttribute('href', '/admin-dashboard/courses/course-1/students');
   });
@@ -41,9 +40,8 @@ describe('CoursesOverviewTab', () => {
     renderTab();
     const courseRow = screen.getByText('Algorithms').closest('tr') as HTMLTableRowElement;
     expect(courseRow.className).toContain('sm:table-row');
-    expect(within(courseRow).getByText('AB3X7KM2')).toHaveAttribute('data-label', 'Enrollment code');
     expect(within(courseRow).getByText('CS101')).toHaveAttribute('data-label', 'Code');
-    expect(screen.getByRole('columnheader', { name: 'Enrollment Code' }).closest('thead')?.className).toContain('hidden');
+    expect(screen.getByRole('columnheader', { name: 'Code' }).closest('thead')?.className).toContain('hidden');
     const termRow = screen.getByText('AY2026/27 Semester 2').closest('tr') as HTMLTableRowElement;
     expect(termRow.className).toContain('sm:table-row');
     expect(within(termRow).getByText('Inactive').closest('td')).toHaveAttribute('data-label', 'Status');

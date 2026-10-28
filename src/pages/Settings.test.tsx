@@ -95,37 +95,15 @@ describe('Settings', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Profile saved successfully');
   });
 
-  it('lists accessible courses and enrolls using a normalized invite code', async () => {
-    mocks.rpc
-      .mockResolvedValueOnce({ data: [{ id: 'c1', name: 'Algorithms', code: 'CS101', access_role: 'student' }], error: null })
-      .mockResolvedValueOnce({ data: [{ id: 'c2', name: 'Databases', code: 'DB201', access_role: 'student' }], error: null });
+  it.each([false, true])('lists accessible courses without self-enrollment controls (admin: %s)', async (isAdmin) => {
+    mocks.auth.isAdmin = isAdmin;
     renderSettings();
     fireEvent.click(screen.getByRole('tab', { name: 'Courses' }));
     expect(await screen.findByText('Algorithms')).toBeInTheDocument();
     expect(screen.getByText('CS101')).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('Course Invite Code'), { target: { value: ' abc-123 ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Enroll' }));
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('redeem-course-invite', { body: { inviteCode: 'ABC-123' } }));
-    expect(await screen.findByText('Databases')).toBeInTheDocument();
-    expect(mocks.toastSuccess).toHaveBeenCalledWith('Successfully enrolled!');
-    expect(screen.getByPlaceholderText('Course Invite Code')).toHaveValue('');
-  });
-
-  it('reports provider errors and hides enrollment controls from admins', async () => {
-    mocks.invoke.mockResolvedValue({ data: { error: 'Invite expired' }, error: null });
-    const { unmount } = renderSettings();
-    fireEvent.click(screen.getByRole('tab', { name: 'Courses' }));
-    await screen.findByText('Algorithms');
-    fireEvent.change(screen.getByPlaceholderText('Course Invite Code'), { target: { value: 'OLD' } });
-    fireEvent.keyDown(screen.getByPlaceholderText('Course Invite Code'), { key: 'Enter' });
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Invite expired'));
-    unmount();
-
-    mocks.auth = { ...mocks.auth, isAdmin: true };
-    renderSettings();
-    fireEvent.click(screen.getByRole('tab', { name: 'Courses' }));
-    await screen.findByText('Algorithms');
     expect(screen.queryByPlaceholderText('Course Invite Code')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enroll' })).not.toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
   it('shows the page loading state and handles course/profile failures', async () => {

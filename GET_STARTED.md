@@ -9,7 +9,7 @@ An AI course-companion app: students chat with a RAG-powered assistant over cour
 Two roles only: `student` and `admin` (a `lecturer` role existed historically and was merged into `admin`; some function names like `is_course_lecturer` still exist as compatibility aliases for `is_admin`).
 
 - **Students**: chat with course materials, manage their own conversations, set personal custom instructions.
-- **Admins**: everything students can do, plus manage courses/terms/materials, invite/enroll students, view analytics.
+- **Admins**: everything students can do, plus manage courses/terms/materials, import/enroll students, view analytics.
 
 Route guarding is via `ProtectedRoute` — unauthenticated users are sent to `/auth`; authenticated users lacking the required role are redirected to `/admin-dashboard` (if admin) or `/chat` (otherwise), not shown a 403 page.
 
@@ -24,7 +24,7 @@ Each material also carries a `material_access_scope`: `course` (enrolled student
 Email + password only — no OAuth/social login, no magic-link-only flow. Password minimum 6 characters.
 
 - Sign-up triggers Supabase's built-in email confirmation, supporting **both** a clickable email link and a 6-digit OTP code entered in-app.
-- Invite-aware: a `?invite=<code>` query param on the auth page is preserved through sign-in/sign-up and forwarded after login so the invite/course-code redemption flow can pick it up.
+- Old `/?invite=<code>` links show that invitations are retired and direct students to their lecturer. Sign-in and account setup do not redeem course codes.
 - Session handling relies entirely on the Supabase JS client's default token refresh — no custom session TTL logic in this app.
 - Password reset: "Forgot password?" on the sign-in tab emails a one-time numeric code (length set by the project's OTP setting; currently 8) (no link — mail-security scanners consume single-use links). The user enters the code at `/reset-password`, then sets a new password. ⏱ Codes are single-use and expire after 1 hour (project OTP expiry). ⏱ The built-in Supabase mailer sends at most 2 emails/hour project-wide until custom SMTP is configured.
 - Post-login redirect: admins → `/admin-dashboard`, students → `/chat` (or back to wherever `ProtectedRoute` redirected them from).
@@ -101,17 +101,11 @@ Admins manage courses and academic terms (e.g. "Semester 2 AY25/26").
 - New material uploads are automatically stamped with whichever term is active at upload time.
 - Because RAG retrieval filters by active term, **switching the active term is an instant, course-wide change** to what the chatbot can answer from — worth being deliberate about in production.
 
-### Course invites & enrollment
+### Student enrollment
 
 The course's **Enrolled Students** page also has an **Import students** action at the top right. Upload a CSV/text file or paste emails separated by commas/newlines; an `email` header is optional. To include names, use one `email,fullName` row per student, with an optional `email,fullName` header. Quote names containing commas (for example, `ada@example.test,"Lovelace, Ada"`). Names are optional and limited to 200 characters; the preview shows the name that will be used for each new account. A supplied name skips name collection after the required password change. Preview validation catches invalid entries and removes duplicates. Import creates confirmed student accounts and enrolls them directly into this course, reporting per-email results. Re-import is safe: existing students are enrolled without resetting credentials, and existing non-student accounts are skipped. No onboarding emails are sent.
 
-Two invitation-based enrollment options remain available, both admin-only to create, both on the same `course_invites` table:
-
-1. **Per-email invites** — up to 200 per request; checks each address for existing enrollment/invite/validity before creating.
-2. **Course-join codes** — a single reusable 8-character code (unambiguous charset, no `0/O/1/I`) shared course-wide.
-   - ⏱ Regenerating a course's code **immediately invalidates every previous code** for that course.
-
-⏱ **Both invite types expire 30 days after creation.** Redemption checks the expiry and rejects with "Invite has expired" past that window; only course-join codes go through the redemption endpoint (per-email invites are a separate accept path). Redemption is idempotent — redeeming an already-enrolled invite just confirms enrollment rather than erroring.
+Students are enrolled by lecturer import using their email and name. Invitation links, invitation creation, and self-enrollment codes are retired. Existing enrollments remain active; contact the lecturer if a course is missing.
 
 ## Admin analytics
 
@@ -143,14 +137,12 @@ npm run test      # vitest
 npm run lint
 ```
 
-Requires a `.env` with Supabase project credentials and provider API keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_*`). See [HANDOFF.md](HANDOFF.md) for known issues, including an important note about secret rotation.
+Requires a `.env` with Supabase project credentials and provider API keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_*`). See [HANDOFF.md](HANDOFF.md) for known issues, including an important note about secret rotation.
 
 ## ⏱ Dynamic/time-based behavior reference
 
 | Feature | Behavior | Type |
 |---|---|---|
-| Course invite / join code | Expires 30 days after creation | Fixed TTL |
-| Course code regeneration | Invalidates all prior codes for that course immediately | Instant invalidation |
 | Active academic term | Exactly one active at a time; admin-toggled, not date-driven; instantly changes RAG retrieval scope | Manual switch |
 | Conversation history sent to model | Last 24 messages fetched → last 14 turns → 850 chars/message → 9000-char total budget | Rolling window |
 | Conversation count per user | Unlimited (cap removed) | N/A |
