@@ -13,7 +13,13 @@ vi.mock('@/integrations/supabase/client', () => ({
   },
 }));
 
-import { PAGE_IMAGE_URL_TTL_SECONDS, loadBlockBoxes, loadPageImage, pageImagePath } from './pageImage';
+import {
+  PAGE_IMAGE_URL_TTL_SECONDS,
+  clearPageImageCache,
+  loadBlockBoxes,
+  loadPageImage,
+  pageImagePath,
+} from './pageImage';
 
 function query(result: { data: unknown; error: unknown }) {
   const chain: Record<string, unknown> = {};
@@ -30,8 +36,12 @@ describe('pageImagePath', () => {
 
 describe('loadPageImage', () => {
   beforeEach(() => {
+    clearPageImageCache();
     mocks.from.mockReset();
     mocks.createSignedUrl.mockReset();
+    // Signing always runs now (in parallel with the page lookup); tests that
+    // expect a failed lookup override this with a one-shot mock.
+    mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://img.test/default' }, error: null });
     mocks.storageFrom.mockReturnValue({ createSignedUrl: mocks.createSignedUrl });
   });
 
@@ -48,10 +58,58 @@ describe('loadPageImage', () => {
     expect(mocks.createSignedUrl).toHaveBeenCalledWith('page-images/mat-1/page-4.webp', PAGE_IMAGE_URL_TTL_SECONDS);
   });
 
+  it('starts the page lookup and the signing request together', async () => {
+    const resolvers: Array<(value: { data: unknown; error: unknown }) => void> = [];
+    mocks.from.mockImplementation(() => {
+      const chain: Record<string, unknown> = {};
+      for (const method of ['select', 'eq', 'maybeSingle']) chain[method] = vi.fn(() => chain);
+      chain.then = (resolve: (value: { data: unknown; error: unknown }) => unknown) =>
+        new Promise((res) => resolvers.push(res)).then(resolve);
+      return chain;
+    });
+    let resolveSign!: (value: { data: { signedUrl: string } | null; error: unknown }) => void;
+    mocks.createSignedUrl.mockImplementation(
+      () => new Promise((res) => { resolveSign = res; }),
+    );
+
+    const pending = loadPageImage('mat-1', 4);
+    // Both round trips are in flight before either answers.
+    expect(mocks.from).toHaveBeenCalledWith('material_pages');
+    expect(mocks.createSignedUrl).toHaveBeenCalledWith('page-images/mat-1/page-4.webp', PAGE_IMAGE_URL_TTL_SECONDS);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolvers[0]({ data: { width: 1400, height: 788 }, error: null });
+    resolveSign({ data: { signedUrl: 'https://img.test/p4' }, error: null });
+
+    await expect(pending).resolves.toEqual({ url: 'https://img.test/p4', width: 1400, height: 788 });
+  });
+
   it('returns null when the page has not been rendered', async () => {
     mocks.from.mockReturnValueOnce(query({ data: null, error: null }));
     await expect(loadPageImage('mat-1', 4)).resolves.toBeNull();
-    expect(mocks.createSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not cache a failed lookup, so a later retry can succeed', async () => {
+    mocks.from
+      .mockReturnValueOnce(query({ data: null, error: null }))
+      .mockReturnValueOnce(query({ data: { width: 1400, height: 788 }, error: null }));
+    mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://img.test/p4' }, error: null });
+
+    await expect(loadPageImage('mat-1', 4)).resolves.toBeNull();
+    await expect(loadPageImage('mat-1', 4)).resolves.toEqual({ url: 'https://img.test/p4', width: 1400, height: 788 });
+    expect(mocks.from).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses a cached page image within the TTL instead of querying again', async () => {
+    mocks.from.mockReturnValue(query({ data: { width: 1400, height: 788 }, error: null }));
+    mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://img.test/p4' }, error: null });
+
+    const first = await loadPageImage('mat-1', 4);
+    const second = await loadPageImage('mat-1', 4);
+
+    expect(second).toEqual(first);
+    expect(mocks.from).toHaveBeenCalledTimes(1);
+    expect(mocks.createSignedUrl).toHaveBeenCalledTimes(1);
   });
 
   it('returns null instead of throwing when a lookup fails', async () => {

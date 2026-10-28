@@ -50,6 +50,7 @@ vi.mock('./signedMedia', () => ({
 import { toast } from 'sonner';
 import { useStudentChat } from './useStudentChat';
 import { RichMarkdown } from './RichMarkdown';
+import { clearPageImageCache } from './pageImage';
 
 function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -72,6 +73,7 @@ function streamResponse(body: string, init?: Partial<Response>): Response {
 
 describe('useStudentChat', () => {
   beforeEach(() => {
+    clearPageImageCache();
     authGetUser.mockClear();
     authGetSession.mockClear();
     rpc.mockClear();
@@ -506,6 +508,54 @@ describe('useStudentChat', () => {
       }));
     }
 
+    it('opens the sidebar immediately while the source lookups are still running', async () => {
+      const resolvers: Array<(value: { data: unknown; error: unknown }) => void> = [];
+      const deferredQuery = () => {
+        const chain: Record<string, unknown> = {};
+        for (const method of ['select', 'eq', 'maybeSingle']) chain[method] = vi.fn(() => chain);
+        chain.then = (resolve: (value: { data: unknown; error: unknown }) => unknown) =>
+          new Promise((res) => resolvers.push(res)).then(resolve);
+        return chain;
+      };
+      from.mockImplementation((table: string) => {
+        if (table === 'chunks' || table === 'materials') return deferredQuery();
+        return createQueryChain(emptyResult);
+      });
+      createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://signed.test/course/notes.pdf' }, error: null });
+      const { result } = renderHook(() => useStudentChat(null));
+      await waitFor(() => expect(result.current.isLoadingCourses).toBe(false));
+
+      let open!: Promise<void>;
+      act(() => {
+        open = result.current.openCitationSource(
+          { id: 'c1', chunkId: 'chunk-1', materialId: 'mat-1', excerpt: 'x', documentName: 'Notes', documentType: 'pdf', pageNumber: 4, relevanceScore: 1 },
+          'key-1',
+        );
+      });
+
+      // The sidebar is up before any lookup has answered, showing a spinner.
+      expect(result.current.showSidePanel).toBe(true);
+      expect(result.current.activeViewerSource).toBeNull();
+      expect(result.current.openingCitationKey).toBe('key-1');
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        resolvers[0]({ data: { material_id: 'mat-1', student_document_id: null, highlight_box: null }, error: null });
+        // The material query is awaited once the chunk row lands; flush so its
+        // deferred resolver is registered, then answer it.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        resolvers[1]({ data: { file_path: 'course/notes.pdf', file_type: 'pdf', file_name: 'Notes.pdf', linked_url: null }, error: null });
+        await open;
+      });
+
+      expect(result.current.openingCitationKey).toBeNull();
+      expect(result.current.activeViewerSource).toMatchObject({
+        kind: 'pdf',
+        pageNumber: 4,
+        storage: { bucket: 'course-materials', path: 'course/notes.pdf' },
+      });
+    });
+
     it('opens the rendered page image with the cited box', async () => {
       mockTables({ width: 1400, height: 788 });
       const { result } = renderHook(() => useStudentChat(null));
@@ -662,7 +712,8 @@ describe('useStudentChat', () => {
 
     await act(async () => { await result.current.openCitationSource(citation, 'm1-1'); });
     expect(result.current.activeViewerSource?.documentName).toBe('Notes');
-    expect(storageFrom).toHaveBeenCalledTimes(1);
+    // The PDF link and the page-image link are signed in parallel now.
+    expect(storageFrom).toHaveBeenCalledTimes(2);
 
     type = 'video';
     from.mockClear();
@@ -673,7 +724,7 @@ describe('useStudentChat', () => {
       title: 'Lecture', materialId: 'mat-1', filePath: 'course/lecture.mp4', startMs: 40_000,
       signedUrl: null,
     });
-    expect(storageFrom).toHaveBeenCalledTimes(1);
+    expect(storageFrom).toHaveBeenCalledTimes(2);
     expect(from).not.toHaveBeenCalledWith('chunks');
     expect(signedMediaMocks.prefetchSignedMediaUrl).toHaveBeenCalledWith('mat-1');
   });

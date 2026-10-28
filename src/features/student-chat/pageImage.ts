@@ -4,6 +4,15 @@ import { isHighlightBox, type HighlightBox, type PageImage } from './documentVie
 
 export const PAGE_IMAGE_URL_TTL_SECONDS = 600;
 
+// Repeat opens of the same citation reuse the signed page image for a minute;
+// the signed URL itself is valid for PAGE_IMAGE_URL_TTL_SECONDS.
+const PAGE_IMAGE_CACHE_TTL_MS = 60_000;
+const pageImageCache = new Map<string, { image: PageImage; expiresAt: number }>();
+
+export function clearPageImageCache(): void {
+  pageImageCache.clear();
+}
+
 // Mirrors pageImagePath in supabase/functions/_shared/pageImages.ts.
 export function pageImagePath(materialId: string, pageNumber: number): string {
   return `page-images/${materialId}/page-${pageNumber}.webp`;
@@ -13,26 +22,38 @@ export function pageImagePath(materialId: string, pageNumber: number): string {
 // (not rendered, renderer off, or any lookup failure): callers then fall back
 // to rendering the PDF in the browser.
 export async function loadPageImage(materialId: string, pageNumber: number): Promise<PageImage | null> {
-  const { data: page, error: pageError } = await supabase
-    .from('material_pages')
-    .select('width, height')
-    .eq('material_id', materialId)
-    .eq('page_number', pageNumber)
-    .maybeSingle();
+  const cacheKey = `${materialId}:${pageNumber}`;
+  const cached = pageImageCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.image;
+  }
 
-  if (pageError || !page) {
+  // The storage path is deterministic, so the signing request can run while
+  // the page row loads; a missing row just discards the signed URL.
+  const [pageResult, signedResult] = await Promise.all([
+    supabase
+      .from('material_pages')
+      .select('width, height')
+      .eq('material_id', materialId)
+      .eq('page_number', pageNumber)
+      .maybeSingle(),
+    supabase.storage
+      .from('course-materials')
+      .createSignedUrl(pageImagePath(materialId, pageNumber), PAGE_IMAGE_URL_TTL_SECONDS),
+  ]);
+
+  const { data: page, error: pageError } = pageResult;
+  const { data: signed, error: signError } = signedResult;
+  if (pageError || !page || signError || !signed?.signedUrl) {
     return null;
   }
 
-  const { data: signed, error: signError } = await supabase.storage
-    .from('course-materials')
-    .createSignedUrl(pageImagePath(materialId, pageNumber), PAGE_IMAGE_URL_TTL_SECONDS);
-
-  if (signError || !signed?.signedUrl) {
-    return null;
-  }
-
-  return { url: signed.signedUrl, width: page.width, height: page.height };
+  const image: PageImage = { url: signed.signedUrl, width: page.width, height: page.height };
+  // Rendered pages are immutable and the signed URL outlives this TTL, so
+  // re-opening the same citation skips both round trips. Failures stay
+  // uncached: the page may render at any moment.
+  pageImageCache.set(cacheKey, { image, expiresAt: Date.now() + PAGE_IMAGE_CACHE_TTL_MS });
+  return image;
 }
 
 export interface BlockHighlight {

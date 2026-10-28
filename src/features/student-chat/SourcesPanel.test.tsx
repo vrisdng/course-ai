@@ -179,6 +179,13 @@ describe('SourcesPanel', () => {
     expect(screen.queryByTestId('pdf-gallery')).not.toBeInTheDocument();
   });
 
+  it('shows a loading state while the clicked citation is still resolving', () => {
+    const value = props({ activeViewerSource: null, openingCitationKey: 'a1-1' });
+    render(<SourcesPanel {...value} />);
+    expect(screen.getByText('Loading source')).toBeInTheDocument();
+    expect(screen.queryByText('Select a citation to see the source')).not.toBeInTheDocument();
+  });
+
   it('resizes the panel when the handle is dragged', () => {
     const value = props({ showSidePanel: true });
     const { container } = render(<SourcesPanel {...value} />);

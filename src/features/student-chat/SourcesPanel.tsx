@@ -220,6 +220,13 @@ export function SourcesPanel({
                       onOpenVideo={() => setVideoDialogOpen(true)}
                     />
                   </div>
+                ) : openingCitationKey ? (
+                  // The click already landed (the panel is open) but the source
+                  // lookups are still in flight.
+                  <div className="flex flex-1 flex-col items-center justify-center py-12">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    <span className="mt-2 text-sm font-medium text-muted-foreground">Loading source</span>
+                  </div>
                 ) : (
                  <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
                   <Info className="mb-2 h-8 w-8 text-muted-foreground/50" />

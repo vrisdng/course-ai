@@ -32,6 +32,38 @@ const citation = (overrides: Partial<Citation>): Citation => ({
 });
 
 describe('resolveCitationSource', () => {
+  function deferredQuery(resolvers: Array<(value: { data: unknown; error: unknown }) => void>) {
+    const chain: Record<string, unknown> = {};
+    for (const method of ['select', 'eq', 'maybeSingle']) chain[method] = vi.fn(() => chain);
+    chain.then = (resolve: (value: { data: unknown; error: unknown }) => unknown) =>
+      new Promise((res) => resolvers.push(res)).then(resolve);
+    return chain;
+  }
+
+  it('starts the chunk and material lookups together when the citation knows its material', async () => {
+    const resolvers: Array<(value: { data: unknown; error: unknown }) => void> = [];
+    mocks.from.mockImplementation(() => deferredQuery(resolvers));
+
+    const pending = resolveCitationSource(citation({ chunkId: 'chunk-1', materialId: 'mat-1' }));
+
+    // Both round trips are in flight before either answers.
+    expect(mocks.from).toHaveBeenCalledWith('chunks');
+    expect(mocks.from).toHaveBeenCalledWith('materials');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolvers[0]({ data: { material_id: 'mat-1', student_document_id: null, highlight_box: [0.1, 0.2, 0.6, 0.3] }, error: null });
+    // The material query is awaited once the chunk row lands; flush so its
+    // deferred resolver is registered, then answer it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolvers[1]({ data: { file_path: 'course/notes.pdf', file_type: 'pdf', file_name: 'Notes', linked_url: null }, error: null });
+
+    await expect(pending).resolves.toMatchObject({
+      bucket: 'course-materials',
+      filePath: 'course/notes.pdf',
+      highlightBox: [0.1, 0.2, 0.6, 0.3],
+    });
+  });
+
   it('resolves a saved video citation after its original chunk was replaced', async () => {
     mocks.from.mockReturnValueOnce(query({ data: {
       file_path: 'course/lecture.mp4', file_type: 'video', file_name: 'Lecture', linked_url: null,

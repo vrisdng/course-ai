@@ -90,14 +90,27 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
   // carries its material id can skip the extra round trip.
   const skipChunkLookup = Boolean(citation.materialId && citation.documentType === 'video');
 
-  // The chunk holds the highlight box. It may be gone (re-transcription replaces
-  // it), in which case the citation's saved source IDs still open the file.
-  if (citation.chunkId && !skipChunkLookup) {
-    const { data: chunkRow, error: chunkError } = await supabase
+  // When the citation already names its material, the chunk row only adds the
+  // highlight box, so both lookups start together instead of one after the other.
+  const chunkLookup = citation.chunkId && !skipChunkLookup
+    ? supabase
       .from('chunks')
       .select('material_id, student_document_id, highlight_box')
       .eq('id', citation.chunkId)
-      .maybeSingle();
+      .maybeSingle()
+    : null;
+  const materialLookup = materialId
+    ? supabase
+      .from('materials')
+      .select('file_path, file_type, file_name, linked_url, converted_pdf_path')
+      .eq('id', materialId)
+      .maybeSingle()
+    : null;
+
+  // The chunk holds the highlight box. It may be gone (re-transcription replaces
+  // it), in which case the citation's saved source IDs still open the file.
+  if (chunkLookup) {
+    const { data: chunkRow, error: chunkError } = await chunkLookup;
     if (chunkRow) {
       materialId ??= chunkRow.material_id;
       studentDocumentId ??= chunkRow.student_document_id;
@@ -110,11 +123,12 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
   }
 
   if (materialId) {
-    const { data: materialRow, error: materialError } = await supabase
+    const materialResult = materialLookup ?? supabase
       .from('materials')
       .select('file_path, file_type, file_name, linked_url, converted_pdf_path')
       .eq('id', materialId)
       .maybeSingle();
+    const { data: materialRow, error: materialError } = await materialResult;
 
     if (materialError || !materialRow) {
       throw new Error(materialError?.message || 'Unable to locate source file');
@@ -1071,6 +1085,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
     beginCitationOpen(kind);
     setOpeningCitationKey(citationKey);
 
+    // PDFs and videos land in the sidebar, so open it now with a loading state
+    // instead of after every lookup. Images and raw files open the clear-view
+    // dialog instead, so their panel state stays untouched.
+    if (kind === 'pdf' || kind === 'video') {
+      setShowSidePanel(true);
+    }
+
     // Warm the signed-media cache while the source lookup runs; the sidebar no
     // longer mounts a video, so this only makes the dialog open faster.
     const earlyPrefetch = citation.materialId && kind === 'video'
@@ -1078,13 +1099,16 @@ export function useStudentChat(routeConversationId: string | null = null) {
       : null;
 
     try {
-      const resolved = await resolveCitationSource(citation);
+      // The block lookup never needs the source row: run both together.
+      const [resolved, blockHighlight] = await Promise.all([
+        resolveCitationSource(citation),
+        citation.blockIds?.length ? loadBlockBoxes(citation.blockIds) : Promise.resolve(null),
+      ]);
       if (requestId !== sourceOpenRequestIdRef.current) return;
       markCitationStep('source_resolved');
 
       // The player resolves either Supabase Storage or R2 through signed-media.
       if (resolved.fileType === 'video') {
-        setShowSidePanel(true);
         setActiveViewerSource(null);
         setActiveVideoSource({
           title: resolved.fileName,
@@ -1102,43 +1126,39 @@ export function useStudentChat(routeConversationId: string | null = null) {
         return;
       }
 
-      const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-        .from(resolved.bucket)
-        .createSignedUrl(resolved.filePath, 120);
-
-      if (signedUrlError || !signedUrlData?.signedUrl) {
-        throw new Error(signedUrlError?.message || 'Unable to generate source preview URL');
-      }
-      if (requestId !== sourceOpenRequestIdRef.current) return;
-
-      const { signedUrl } = signedUrlData;
-
-      // PDFs/images render in-app; raw/binary files fall back to a new tab (the
-      // "no new tab" rule was scoped to PDFs).
       const viewerKind = resolved.previewAsPdf ? 'pdf' : kind;
 
       // Cited blocks decide the page and the outlines; without them the
-      // chunk's own page and box are used.
-      const blockHighlight = viewerKind === 'pdf' && citation.blockIds?.length
-        ? await loadBlockBoxes(citation.blockIds)
-        : null;
-      const pageNumber = blockHighlight?.pageNumber ?? ensureStartingPage(citation.pageNumber);
-      const highlightBoxes = blockHighlight && blockHighlight.boxes.length > 0
-        ? blockHighlight.boxes
+      // chunk's own page and box are used. Only PDF previews show block
+      // outlines, so other kinds keep the chunk's page even if blocks resolved.
+      const pdfHighlight = viewerKind === 'pdf' ? blockHighlight : null;
+      const pageNumber = pdfHighlight?.pageNumber ?? ensureStartingPage(citation.pageNumber);
+      const highlightBoxes = pdfHighlight && pdfHighlight.boxes.length > 0
+        ? pdfHighlight.boxes
         : resolved.highlightBox ? [resolved.highlightBox] : [];
 
-      // A page rendered at ingestion shows as an image with the cited boxes,
-      // without downloading the PDF; otherwise the viewer renders the PDF.
-      const pageImage = viewerKind === 'pdf' && resolved.materialId
-        ? await loadPageImage(resolved.materialId, pageNumber)
-        : null;
+      // Signing the file and fetching the rendered page don't depend on each
+      // other: start both at once, then fall back to the PDF if no page image
+      // was rendered at ingestion.
+      const [signedUrlResult, pageImage] = await Promise.all([
+        supabase.storage
+          .from(resolved.bucket)
+          .createSignedUrl(resolved.filePath, 120),
+        viewerKind === 'pdf' && resolved.materialId
+          ? loadPageImage(resolved.materialId, pageNumber)
+          : Promise.resolve(null),
+      ]);
+      const { data: signedUrlData, error: signedUrlError } = signedUrlResult;
+      if (signedUrlError || !signedUrlData?.signedUrl) {
+        throw new Error(signedUrlError?.message || 'Unable to generate source preview URL');
+      }
       if (requestId !== sourceOpenRequestIdRef.current) return;
 
       const viewerSource: ActiveViewerSource = {
         kind: viewerKind,
         documentName: resolved.fileName,
         pageNumber,
-        signedUrl,
+        signedUrl: signedUrlData.signedUrl,
         storage: { bucket: resolved.bucket, path: resolved.filePath },
         materialId: resolved.materialId,
         excerpt: citation.excerpt,
