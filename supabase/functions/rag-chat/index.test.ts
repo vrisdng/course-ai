@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   persistenceFails: false,
   otherOwner: false,
   generationFails: false,
+  noRagPrompt: "",
   abort: null as null | AbortController,
 }));
 
@@ -59,7 +60,8 @@ vi.mock("../_shared/llm.ts", () => ({
     return { text: "answer", usage: { promptTokens: 20, completionTokens: 4 } };
   },
   generateChatText: vi.fn(),
-  generateChatTextStream: async (options: { onTextDelta: (text: string) => void; onUsage: (usage: { promptTokens: number; completionTokens: number }) => void }) => {
+  generateChatTextStream: async (options: { messages: Array<{ role: string; content: string }>; onTextDelta: (text: string) => void; onUsage: (usage: { promptTokens: number; completionTokens: number }) => void }) => {
+    state.noRagPrompt = options.messages[0].content;
     if (state.abort) {
       state.abort.abort();
       throw new Error("Chat API error: wrapped cancellation");
@@ -89,6 +91,11 @@ describe("RAG terminal telemetry wiring", () => {
     }));
     return { response, body: await response.text() };
   }
+
+  it("offers a selection step when an ungrounded request refers to selected materials", async () => {
+    await run();
+    expect(state.noRagPrompt).toContain("select materials in the material selector");
+  });
 
   it("records one successful request with resolved IDs and model usage", async () => {
     const { body } = await run();

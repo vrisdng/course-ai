@@ -53,7 +53,7 @@ export function formatDocumentNameList(materials: ResolvedSelectedMaterial[]): s
     return `"${materials[0].fileName}" and "${materials[1].fileName}"`;
   }
 
-  return `${materials.length} selected documents`;
+  return `${materials.slice(0, -1).map((material) => `"${material.fileName}"`).join(", ")}, and "${materials[materials.length - 1].fileName}"`;
 }
 
 export function buildSelectedDocumentEmptyAnswer(materials: ResolvedSelectedMaterial[]): string {
