@@ -110,6 +110,25 @@ describe('useStudentChat', () => {
     return result;
   }
 
+  it('keeps every selected composite source and replaces the group for a single citation', async () => {
+    const result = await setupWithCourse();
+    const citations = [
+      { id: 'v1', chunkId: 'video-chunk', documentName: 'Webcast', documentType: 'video', excerpt: 'Video evidence', startMs: 40_000, relevanceScore: 0.9 },
+      { id: 'p1', chunkId: 'pdf-chunk', documentName: 'Notes', documentType: 'pdf', excerpt: 'Notes evidence', pageNumber: 3, relevanceScore: 0.8 },
+      { id: 'p2', chunkId: 'other', documentName: 'Unrelated', documentType: 'pdf', excerpt: '', relevanceScore: 0.7 },
+    ];
+    const message = { id: 'a1', role: 'assistant' as const, content: 'Claim <<cite:1>><<cite:2>>', citations };
+    act(() => result.current.focusCitation(message, [1, 2]));
+    expect(result.current.selectedMessage?.citations).toEqual(citations.slice(0, 2));
+    expect(result.current.showSidePanel).toBe(true);
+    expect(result.current.highlightedCitationKey).toBe('a1-1');
+
+    act(() => result.current.focusCitation(message, 2));
+    expect(result.current.selectedMessage?.citations).toEqual([citations[1]]);
+    act(() => result.current.startNewConversation());
+    expect(result.current.selectedMessage).toBeNull();
+  });
+
   it('does not send an empty or whitespace-only message', async () => {
     const result = await setupWithCourse();
     const fetchMock = vi.mocked(fetch);

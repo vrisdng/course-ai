@@ -4,7 +4,7 @@ import type { Citation, Message } from './types';
 
 interface MessageContentProps {
   message: Message;
-  onCitationClick: (message: Message, citationNumber: number) => void;
+  onCitationClick: (message: Message, citationNumber: number | number[]) => void;
   onCitationOpen?: (citation: Citation, citationKey: string) => void;
 }
 

@@ -24,7 +24,7 @@ import type { Citation } from './types';
 interface RichMarkdownProps {
   content: string;
   citations?: Citation[];
-  onCitationClick?: (citationNumber: number) => void;
+  onCitationClick?: (citationNumber: number | number[]) => void;
   onCitationOpen?: (citation: Citation, citationNumber: number) => void;
 }
 
@@ -195,7 +195,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        onCitationClick?.(nums[0]);
+                        onCitationClick?.(nums.length > 1 ? nums : nums[0]);
                         onCitationOpen?.(resolvedCitations[0], nums[0]);
                       }}
                     >
