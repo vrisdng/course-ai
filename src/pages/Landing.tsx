@@ -1,171 +1,127 @@
-import { CheckCircle2 } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { ArrowRight, BookOpen, Check, FileText, GraduationCap, Layers3, Loader2, MessageSquare, Play, ShieldCheck, Sparkles } from 'lucide-react';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
+import '@/features/landing/landing.css';
+
+const benefits = [
+  { icon: MessageSquare, color: 'blue', title: 'Answers with sources', description: 'Follow citations back to the course material behind an answer.' },
+  { icon: BookOpen, color: 'green', title: 'Notes and webcasts', description: 'Find the right page or moment in your course materials.' },
+  { icon: Layers3, color: 'amber', title: 'Flashcards for revision', description: 'Turn an answer into flashcards and test what you remember.' },
+  { icon: GraduationCap, color: 'purple', title: 'Built for your course', description: 'Learn from materials your lecturer has shared with your class.' },
+];
 
 export default function Landing() {
   const [searchParams] = useSearchParams();
-  const { isAdmin } = useAuth();
-  const showRetiredInvite = searchParams.has('invite');
+  const { user, profile, isLoading } = useAuth();
 
-  const primaryCta = isAdmin
-    ? { to: '/admin-dashboard', label: 'Open dashboard' }
-    : { to: '/chat', label: 'Open chat' };
+  if (isLoading || (user && !profile?.role)) {
+    return <div className="landing-page landing-loading" role="status"><Loader2 className="motion-safe:animate-spin" aria-hidden="true" />Loading your account…</div>;
+  }
+  if (user) return <Navigate to={profile.role === 'admin' ? '/admin-dashboard' : '/chat'} replace />;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Nav */}
-      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
-        <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <Link to="/" className="flex items-baseline gap-1">
-            <img src="/ceegpt_logo.svg" alt="" className="mr-2 h-6 w-6" />
-            <span className="text-lg font-semibold tracking-tight">CEEGPT</span>
-            <span className="mono-label mt-0 text-[0.6rem] leading-none">™</span>
+    <div className="landing-page">
+      <a className="landing-skip" href="#main">Skip to content</a>
+      <header className="landing-header">
+        <nav className="landing-container landing-nav" aria-label="Main navigation">
+          <Link to="/" className="landing-brand" aria-label="CEEGPT home">
+            <img src="/ceegpt_logo.svg" alt="" width="38" height="38" />
+            <span>CEEGPT</span>
           </Link>
-          <div className="hidden items-center gap-8 md:flex">
-            <a href="#how" className="text-sm text-muted-foreground transition-colors hover:text-foreground">How it works</a>
-            <a href="#courses" className="text-sm text-muted-foreground transition-colors hover:text-foreground">For courses</a>
-            <a href="#access" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Access</a>
+          <span className="landing-nav-caption">Your course AI companion</span>
+          <div className="landing-nav-links">
+            <a href="#how">How it works</a>
+            <a href="#courses">For lecturers</a>
+            <a href="#access">Access</a>
           </div>
-          <div className="flex items-center gap-3">
-            <Link to="/auth?mode=signin" className="text-sm text-muted-foreground transition-colors hover:text-foreground">
-              Sign in
-            </Link>
-            <Link to={primaryCta.to}>
-              <button className="pill bg-primary text-primary-foreground hover:bg-primary/90">{primaryCta.label}</button>
-            </Link>
-          </div>
+          <Button asChild className="landing-primary landing-nav-cta"><Link to="/auth?mode=signin">Sign in<ArrowRight aria-hidden="true" /></Link></Button>
         </nav>
       </header>
 
-      {/* Hero */}
-      <section className="relative overflow-hidden bg-grid">
-        <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-1/2 particle-field md:block" aria-hidden="true" />
-        <div className="relative mx-auto max-w-6xl px-4 sm:px-6 pb-20 pt-16 md:pt-24">
-          <div className="mb-6 flex items-center gap-3">
-            <span className="h-px w-8 bg-foreground/40" />
-            <span className="mono-label">Simple answers from your course</span>
-          </div>
-          <h1 className="display-xl max-w-4xl text-foreground">
-            Learn from
-            <br />
-            your materials
-          </h1>
-          <p className="mt-8 max-w-xl text-lg text-muted-foreground">
-            Ask a question and get a short answer from your lectures, readings, and slides.
-          </p>
-          <div className="mt-10 flex flex-wrap items-center gap-3">
-            <Link to={primaryCta.to}>
-              <button className="pill bg-primary text-primary-foreground hover:bg-primary/90">{primaryCta.label}</button>
-            </Link>
-            <a href="#how">
-              <button className="pill border border-border bg-background hover:bg-accent">How it works</button>
-            </a>
-          </div>
-        </div>
-      </section>
-
-      {showRetiredInvite && (
-        <section id="access" className="mx-auto max-w-6xl px-4 sm:px-6 py-12">
-          <Card className="mx-auto w-full max-w-xl rounded-none border-border text-left">
-            <CardHeader>
-              <CardTitle>Course invitation links have been retired.</CardTitle>
-              <CardDescription>Contact your lecturer to be added to your course using your email and name.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button asChild><Link to="/auth?mode=signin">Sign in</Link></Button>
-            </CardContent>
-          </Card>
-        </section>
-      )}
-
-      {/* How it works — a real sequence, so numbered markers earn their place */}
-      <section id="how" className="bg-primary text-primary-foreground">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-24">
-          <span className="mono-label text-primary-foreground/60">How it works</span>
-          <div className="mt-12 grid gap-px overflow-hidden border border-primary-foreground/15 bg-primary-foreground/15 md:grid-cols-3">
-            {[
-              {
-                n: '01',
-                t: 'Upload course files',
-                d: 'Add lectures, slides, and readings.',
-              },
-              {
-                n: '02',
-                t: 'Ask a question',
-                d: 'Type your question in plain language.',
-              },
-              {
-                n: '03',
-                t: 'Open the source',
-                d: 'See where the answer came from.',
-              },
-            ].map((step) => (
-              <div key={step.n} className="bg-primary p-8">
-                <span className="mono-label text-primary-foreground/50">{step.n}</span>
-                <h3 className="mt-6 text-xl font-medium">{step.t}</h3>
-                <p className="mt-3 text-sm leading-relaxed text-primary-foreground/70">{step.d}</p>
+      <main id="main">
+        <section className="landing-hero" aria-labelledby="hero-title">
+          <div className="landing-container landing-hero-grid">
+            <div className="landing-hero-copy">
+              <p className="landing-eyebrow"><span aria-hidden="true" />YOUR COURSE. A LITTLE CLEARER.</p>
+              <h1 id="hero-title">Learn better<br />with <span>course AI.</span></h1>
+              <p className="landing-intro">Big questions. Clearer understanding. Ask about your course and explore answers grounded in your notes and webcasts, with sources you can check.</p>
+              <div className="landing-hero-actions">
+                <Button asChild size="lg" className="landing-primary"><Link to="/auth?mode=signin">Sign in to start learning<ArrowRight aria-hidden="true" /></Link></Button>
+                <a className="landing-text-link" href="#how">See how it works<ArrowRight aria-hidden="true" /></a>
               </div>
-            ))}
-          </div>
-        </div>
-      </section>
+              <div className="landing-benefits">
+                {benefits.map(({ icon: Icon, color, title, description }) => (
+                  <div className="landing-benefit" key={title}>
+                    <span className={`landing-icon landing-icon-${color}`}><Icon aria-hidden="true" /></span>
+                    <div><h2>{title}</h2><p>{description}</p></div>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-      {/* For courses */}
-      <section id="courses" className="border-t border-border">
-        <div className="mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 py-24 md:grid-cols-2">
-          <div>
-            <span className="mono-label">For courses</span>
-            <h2 className="mt-6 max-w-md text-3xl font-medium tracking-tight md:text-4xl">
-              Clear answers for class.
-            </h2>
-          </div>
-          <ul className="space-y-6">
-            {[
-              ['From your materials', 'Use what your instructor uploaded.'],
-              ['Cited answers', 'Every response links back to a source.'],
-              ['No guessing', 'If it is not in the course, it says so.'],
-            ].map(([t, d]) => (
-              <li key={t} className="flex gap-4 border-t border-border pt-6">
-                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
-                <div>
-                  <p className="font-medium">{t}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{d}</p>
+            <div className="landing-hero-preview">
+              <figure className="landing-demo">
+                <figcaption>Illustrative course conversation</figcaption>
+                <div className="landing-demo-orbit" aria-hidden="true" />
+                <div className="landing-float landing-question"><div className="landing-demo-card">How do Scope 1 and Scope 2 emissions differ?</div></div>
+                <div className="landing-float landing-answer">
+                  <div className="landing-demo-card">
+                    <span className="landing-answer-label"><Sparkles size={17} aria-hidden="true" />CEEGPT</span>
+                    <p><strong>Scope 1</strong> covers direct emissions from sources an organisation owns or controls. <strong>Scope 2</strong> covers indirect emissions from purchased energy.</p>
+                    <span className="landing-source-label">From your course materials</span>
+                    <div className="landing-source"><FileText size={14} aria-hidden="true" />Lecture notes · Page 12<span>1</span></div>
+                    <div className="landing-source"><Play size={14} aria-hidden="true" />Week 3 webcast · 08:24<span>2</span></div>
+                  </div>
                 </div>
-              </li>
-            ))}
+                <div className="landing-float landing-notes"><div className="landing-demo-card landing-mini-card"><span className="landing-icon landing-icon-green"><FileText aria-hidden="true" /></span><div><strong>Notes</strong><span>Find the right page</span></div></div></div>
+                <div className="landing-float landing-webcast"><div className="landing-demo-card landing-mini-card"><span className="landing-icon landing-icon-purple"><Play aria-hidden="true" /></span><div><strong>Webcast</strong><span>Revisit the moment</span></div></div></div>
+                <div className="landing-float landing-flashcard"><div className="landing-demo-card landing-mini-card"><span className="landing-icon landing-icon-amber"><Layers3 aria-hidden="true" /></span><div><strong>From answer to recall</strong><span>Your next flashcard starts here.</span></div><Check size={16} aria-hidden="true" /></div></div>
+              </figure>
+
+              <section id="access" className="landing-access" aria-labelledby="access-title">
+                <div className="landing-access-heading"><span className="landing-icon landing-icon-blue"><GraduationCap aria-hidden="true" /></span><span>ONE PLACE FOR YOUR LEARNING</span></div>
+                <h2 id="access-title">Welcome to CEEGPT</h2>
+                <p>Use your email and password to access your courses.</p>
+                <Button asChild size="lg" className="landing-primary"><Link to="/auth?mode=signin">Sign in to your account<ArrowRight aria-hidden="true" /></Link></Button>
+                <div className="landing-access-note"><ShieldCheck aria-hidden="true" /><p>Your lecturer manages course enrollment. If you need access, ask them to add your email and name.</p></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        {searchParams.has('invite') && (
+          <aside className="landing-container landing-retired" aria-labelledby="retired-title">
+            <ShieldCheck aria-hidden="true" /><div><h2 id="retired-title">Course invitation links have been retired.</h2><p>Contact your lecturer to be added to your course using your email and name.</p></div>
+          </aside>
+        )}
+
+        <section id="how" className="landing-how" aria-labelledby="how-title">
+          <div className="landing-container">
+            <p className="landing-eyebrow">LESS SEARCHING. MORE UNDERSTANDING.</p>
+            <h2 id="how-title">A question is a good place to start.</h2>
+            <ol className="landing-steps">
+              {[
+                ['Choose your materials', 'Open your course and choose the notes or webcasts you want to explore.'],
+                ['Ask in your own words', 'Get an explanation, connect ideas, or work through a topic that has not clicked yet.'],
+                ['Check it. Then practise.', 'Follow the sources, revisit the explanation, and make flashcards for revision.'],
+              ].map(([title, description], index) => <li key={title}><span className="landing-step-number">0{index + 1}</span><h3>{title}</h3><p>{description}</p></li>)}
+            </ol>
+          </div>
+        </section>
+
+        <section id="courses" className="landing-container landing-courses" aria-labelledby="courses-title">
+          <div><p className="landing-eyebrow">FOR LECTURERS</p><h2 id="courses-title">Your course materials.<br />More ways to learn.</h2><p>Bring your teaching resources together and give students a starting point for their questions.</p></div>
+          <ul>
+            <li><Check aria-hidden="true" /><span><strong>Share notes and webcasts</strong>Upload PDFs and videos for your class to explore.</span></li>
+            <li><Check aria-hidden="true" /><span><strong>Manage your courses</strong>Organise materials by course and academic term.</span></li>
+            <li><Check aria-hidden="true" /><span><strong>Keep your class connected</strong>Add students by email and name, and review course usage.</span></li>
           </ul>
-        </div>
-      </section>
+        </section>
+      </main>
 
-      {/* Closing CTA */}
-      <section className="border-t border-border bg-grid">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-24 text-center">
-          <h2 className="display-xl mx-auto max-w-3xl text-foreground" style={{ fontSize: 'clamp(2.5rem, 7vw, 5rem)' }}>
-            Start asking
-          </h2>
-          <div className="mt-10 flex justify-center gap-3">
-            <Link to={primaryCta.to}>
-              <button className="pill bg-primary text-primary-foreground hover:bg-primary/90">{primaryCta.label}</button>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <footer className="border-t border-border">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:px-6 py-10 text-sm text-muted-foreground sm:flex-row">
-          <div className="flex items-center gap-2">
-            <img src="/ceegpt_logo.svg" alt="" className="h-5 w-5" />
-            <span className="font-medium text-foreground">CEEGPT</span>
-          </div>
-          <div className="flex flex-col items-center gap-1 sm:items-end">
-            <span className="mono-label">Grounded course answers</span>
-            <a href="https://moworld.me/" target="_blank" rel="noreferrer" className="text-foreground transition-colors hover:text-primary">
-              Developed by Duong Ngoc Mai
-            </a>
-          </div>
-        </div>
+      <footer className="landing-footer">
+        <div className="landing-container"><span className="landing-brand"><img src="/ceegpt_logo.svg" alt="" width="26" height="26" />CEEGPT</span><p>A little clarity goes a long way.</p><a href="https://moworld.me/" target="_blank" rel="noreferrer">Developed by Duong Ngoc Mai<ArrowRight size={14} aria-hidden="true" /></a></div>
       </footer>
     </div>
   );
