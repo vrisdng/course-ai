@@ -1039,7 +1039,6 @@ ${retrievalScopeInstruction}`;
             ensureStreamActive();
 
             timing.mark("generation_end_ms");
-            const answerGeneratedAt = performance.now();
             const { answer, citedChunks, citedRefs, imageByFinalCite } = resolveAnswerCitations({
               rawAnswer,
               chunks: retrievedChunks,
@@ -1157,10 +1156,8 @@ ${retrievalScopeInstruction}`;
             // Follow-ups may now abort this stream without losing their history or basic sources.
             sendEvent("ready", {});
             timing.mark("ready_enqueue_ms");
-            console.log("RAG completion timing", { basic_ready_ms: Math.round(performance.now() - answerGeneratedAt) });
 
             if (!citedChunks.some((chunk) => chunk.material_type === "video")) return;
-            const evidenceStartedAt = performance.now();
             const evidenceByCitation = await selectVideoEvidence({
               client: supabaseClient,
               timing,
@@ -1171,7 +1168,6 @@ ${retrievalScopeInstruction}`;
               apiKey: chatApiKey,
               signal: requestAbortController.signal,
             });
-            console.log("RAG completion timing", { video_evidence_ms: Math.round(performance.now() - evidenceStartedAt) });
             ensureStreamActive();
             if (evidenceByCitation.size === 0) return;
 

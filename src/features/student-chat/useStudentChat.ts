@@ -661,6 +661,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     abortControllerRef.current = abortController;
     activeAssistantMessageIdRef.current = assistantMessageId;
     let finalPayload: RagChatFinalPayload | null = null;
+    let firstTokenReceivedMs: number | null = null;
     let readyReceived = false;
 
     try {
@@ -716,6 +717,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         finalPayload = payload;
         if (timingEnabled) {
           chatTimingRef.current = { id: assistantMessageId, answer: payload.answer, startedAt: timingStartedAt, requestId: payload.meta?.requestId };
+          if (firstTokenReceivedMs !== null) console.info("Chat browser timing", { request_id: payload.meta?.requestId, first_token_received_ms: firstTokenReceivedMs });
           console.info("Chat browser timing", { request_id: payload.meta?.requestId, final_received_ms: Math.round(performance.now() - timingStartedAt) });
         }
         setMessages((prev) =>
@@ -766,6 +768,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
               return;
             }
 
+            if (timingEnabled && firstTokenReceivedMs === null) firstTokenReceivedMs = Math.round(performance.now() - timingStartedAt);
             pendingContent += delta;
             if (!rafHandle) {
               rafHandle = requestAnimationFrame(flushTokens);
@@ -809,6 +812,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           if (event.event === 'ready') {
             if (!finalPayload || readyReceived || activeRequestIdRef.current !== requestId) return;
             readyReceived = true;
+            if (timingEnabled) console.info("Chat browser timing", { request_id: finalPayload.meta?.requestId, ready_received_ms: Math.round(performance.now() - timingStartedAt) });
             if (!currentConversationId && finalPayload.conversationId) {
               const conversationId = finalPayload.conversationId;
               completedNewConversationIdRef.current = conversationId;

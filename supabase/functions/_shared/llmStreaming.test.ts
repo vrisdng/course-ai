@@ -39,13 +39,18 @@ describe("streaming wrapper usage", () => {
       { promptTokens: 10, completionTokens: 2 }, { promptTokens: 20, completionTokens: 3 },
     ])).mockImplementationOnce(stream("answer", [{ promptTokens: 30, completionTokens: 4 }]));
     const onUsage = vi.fn();
+    const onStep = vi.fn();
+    let time = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => time += 10);
     const result = await generateAgentTextStream({
       apiKey: "test", model: "test", messages: [], maxSteps: 2,
       tool: { name: "search", description: "test", queryDescription: "test", execute: async () => "" },
-      onTextDelta: vi.fn(), onReset: vi.fn(), onToolCall: vi.fn(), onUsage,
+      onTextDelta: vi.fn(), onReset: vi.fn(), onToolCall: vi.fn(), onUsage, onStep,
     });
     expect(result).toEqual({ text: "answer", usage: { promptTokens: 60, completionTokens: 9 } });
     expect(onUsage).toHaveBeenCalledTimes(3);
+    expect(onStep.mock.calls).toEqual([[10], [10], [10]]);
+    vi.restoreAllMocks();
   });
 
   it("includes an empty stream's usage and its non-streaming retry", async () => {
