@@ -130,13 +130,15 @@ describe('useStudentChat', () => {
       await waitFor(() => expect(result.current.messages[1]?.content).toBe(answer));
       const originalMessages = result.current.messages;
       act(() => result.current.openSourcesForMessage(originalMessages[1]));
+      const originalSelection = result.current.selectedMessage;
       await act(async () => {
         resolveList({ data: [conversation], error: null });
         await sending;
       });
 
       expect(result.current.messages).toBe(originalMessages);
-      expect(result.current.selectedMessage).toBe(originalMessages[1]);
+      expect(result.current.selectedMessage).toBe(originalSelection);
+      expect(result.current.selectedMessage).toMatchObject({ id: originalMessages[1].id, citations });
       expect(result.current.currentConversationId).toBe(conversation.id);
       expect(result.current.conversations).toHaveLength(1);
       expect(result.current.messages).toHaveLength(2);
