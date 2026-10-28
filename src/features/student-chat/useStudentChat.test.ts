@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // A chainable fake that resolves to `result` from any awaited point in a
@@ -48,6 +49,7 @@ vi.mock('./signedMedia', () => ({
 
 import { toast } from 'sonner';
 import { useStudentChat } from './useStudentChat';
+import { RichMarkdown } from './RichMarkdown';
 
 function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -177,6 +179,53 @@ describe('useStudentChat', () => {
     expect(assistantMessage?.citations?.[0].evidenceSegments?.[0].id).toBe('segment-1');
     expect(result.current.messages.find((m) => m.role === 'user')?.content).toBe('What is X?');
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it('renders split SSE citation tokens without exposing markers, then displays the final citation', async () => {
+    rpc.mockResolvedValueOnce({
+      data: [{ id: 'course-1', name: 'Course 1', code: 'C1', access_role: 'student' }], error: null,
+    });
+    let chat!: ReturnType<typeof useStudentChat>;
+    function ChatHarness() {
+      chat = useStudentChat(null);
+      const assistant = chat.messages.find((message) => message.role === 'assistant');
+      return createElement(RichMarkdown, { content: assistant?.content ?? '', citations: assistant?.citations });
+    }
+    const { container } = render(createElement(ChatHarness));
+    await waitFor(() => expect(chat.selectedCourseId).toBe('course-1'));
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(stream, {
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => frames.push(callback)));
+    act(() => chat.setInput('question'));
+    let sending!: Promise<void>;
+    act(() => { sending = chat.handleSend(); });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    const encoder = new TextEncoder();
+    try {
+      for (const text of ['Claim ', ...'<<cite:1b>>', ' more text.']) {
+        act(() => controller.enqueue(encoder.encode(sseEvent('token', { text }))));
+        await waitFor(() => expect(frames.length).toBeGreaterThan(0));
+        act(() => frames.splice(0).forEach((callback) => callback(0)));
+        expect(container.textContent).not.toContain('<');
+        expect(container.textContent).not.toContain('cite:');
+        expect(container.textContent).toContain('Claim');
+      }
+      expect(container.textContent).toContain('more text.');
+      expect(chat.isLoading).toBe(true);
+      act(() => controller.enqueue(encoder.encode(sseEvent('final', {
+        answer: 'Claim <<cite:1>> more text.',
+        citations: [{ id: 'c1', chunkId: 'chunk-1', excerpt: 'Evidence',
+          documentName: 'Notes', documentType: 'pdf', relevanceScore: 0.9 }],
+      }))));
+      await waitFor(() => expect(screen.getByRole('button', { name: /\[1\]/ })).toBeInTheDocument());
+      expect(container.textContent).not.toContain('cite:');
+    } finally {
+      await act(async () => { controller.close(); await sending; });
+    }
   });
 
   it.each(['close', 'error'] as const)(
