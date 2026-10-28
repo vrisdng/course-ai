@@ -48,11 +48,12 @@ function isSafeImageUrl(src: string | undefined): boolean {
 
 function hideStreamingBlockCitationMarkers(content: string): string {
   // Match protected code/math first; only an unfinished marker at the message end is hidden.
-  const protectedLiteral = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*(?:`|$)|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)/;
+  // Code spans close with the same delimiter length; fenced blocks allow a longer closing fence.
+  const protectedLiteral = /^ {0,3}(?<backtickFence>`{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\k<backtickFence>`*[ \t]*$|(?![\s\S]))|^ {0,3}(?<tildeFence>~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\k<tildeFence>~*[ \t]*$|(?![\s\S]))|(?<ticks>`+)(?!`)[\s\S]*?(?:(?<!`)\k<ticks>(?!`)|(?![\s\S]))|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)/;
   const blockMarker = /<{1,2}\s*cite\s*:\s*(?=[\d,\s]*[a-z])\d+[a-z]*(?:\s*,\s*\d+[a-z]*)*\s*>{1,2}/;
-  const unfinishedMarker = /<{1,2}(?:c(?:i(?:t(?:e(?:\s*:\s*[\da-z,\s]*>?)?)?)?)?)?$/;
+  const unfinishedMarker = /<{1,2}(?:c(?:i(?:t(?:e(?:\s*:\s*[\da-z,\s]*>?)?)?)?)?)?(?![\s\S])/;
   return content.replace(
-    new RegExp(`(${protectedLiteral.source})|${blockMarker.source}|${unfinishedMarker.source}`, 'gi'),
+    new RegExp(`(${protectedLiteral.source})|${blockMarker.source}|${unfinishedMarker.source}`, 'gim'),
     (match, literal: string | undefined) => literal ?? '',
   );
 }

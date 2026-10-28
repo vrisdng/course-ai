@@ -178,8 +178,13 @@ describe('RichMarkdown citations', () => {
 
   it.each([
     '`<<cite:1b>>`',
+    '``<<cite:1b>>``',
+    '``a ` <<cite:1b>>``',
     '```text\n<<cite:1b>>\n```',
+    '````text\n```\n<<cite:1b>>\n````',
+    '````text\n<<cite:1b>>\n`````',
     '~~~text\n<<cite:1b>>\n~~~',
+    '~~~~text\n~~~\n<<cite:1b>>\n~~~~',
     '$<<cite:1b>>$',
     '$$\n<<cite:1b>>\n$$',
     '\\[<<cite:1b>>\\]',
