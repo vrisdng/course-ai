@@ -46,6 +46,17 @@ function isSafeImageUrl(src: string | undefined): boolean {
   return /^https?:\/\//.test(normalized) || normalized.startsWith('/');
 }
 
+function hideStreamingBlockCitationMarkers(content: string): string {
+  // Match protected code/math first; only an unfinished marker at the message end is hidden.
+  const protectedLiteral = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*(?:`|$)|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)/;
+  const blockMarker = /<{1,2}\s*cite\s*:\s*\d+[a-z]+(?:\s*,\s*\d+[a-z]+)*\s*>{1,2}/;
+  const unfinishedMarker = /<{1,2}(?:c(?:i(?:t(?:e(?:\s*:\s*[\da-z,\s]*>?)?)?)?)?)?$/;
+  return content.replace(
+    new RegExp(`(${protectedLiteral.source})|${blockMarker.source}|${unfinishedMarker.source}`, 'gi'),
+    (match, literal: string | undefined) => literal ?? '',
+  );
+}
+
 function CitationImage({
   citation,
   alt,
@@ -225,7 +236,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
         >
           {markdownWithCitationLinks(
             groupAdjacentCitations(
-              normalizeHeadings(normalizeMathDelimiters(content)),
+              normalizeHeadings(normalizeMathDelimiters(hideStreamingBlockCitationMarkers(content))),
               citations,
             ),
             citations.length,

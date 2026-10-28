@@ -162,6 +162,41 @@ describe('RichMarkdown tables and images', () => {
 });
 
 describe('RichMarkdown citations', () => {
+  it.each(['<<cite:1b>>', '<cite:1b>', '<<cite:1>>'])(
+    'hides every unfinished prefix of %s and keeps surrounding streamed prose visible',
+    (token) => {
+      const { container, rerender } = render(<RichMarkdown content="Claim " />);
+      for (let length = 1; length < token.length; length++) {
+        rerender(<RichMarkdown content={`Claim ${token.slice(0, length)}`} />);
+        expect(container.textContent).toBe('Claim');
+      }
+      rerender(<RichMarkdown content={`Claim ${token} more text.`} />);
+      expect(container.textContent).not.toContain('cite:');
+      expect(container.textContent).toContain('more text.');
+    },
+  );
+
+  it.each([
+    '`<<cite:1b>>`',
+    '```text\n<<cite:1b>>\n```',
+    '~~~text\n<<cite:1b>>\n~~~',
+    '$<<cite:1b>>$',
+    '$$\n<<cite:1b>>\n$$',
+    '\\[<<cite:1b>>\\]',
+    '\\(<<cite:1b>>\\)',
+  ])('preserves a literal citation marker in code or maths: %s', (literal) => {
+    const { container } = render(<RichMarkdown content={`Prose before.\n\n${literal}\n\nAfter <<cite:2b>>.`} />);
+    expect(container.textContent).toContain('<<cite:1b>>');
+    expect(container.textContent).not.toContain('cite:2b');
+  });
+
+  it('only hides unfinished markers at the whole message end and handles backslash prose', () => {
+    const { container } = render(<RichMarkdown content={'\\text prose <<cite:1b>>. Less than < `$x$` after.'} />);
+    expect(container.textContent).not.toContain('cite:');
+    expect(container.textContent).toContain('Less than <');
+    expect(container.querySelector('code')?.textContent).toBe('$x$');
+  });
+
   it('does not turn (n) or [n] inside maths or code into citations', () => {
     const citation = { id: 'c1', chunkId: 'k1', excerpt: 'x', documentName: 'doc', documentType: 'pdf', relevanceScore: 1 };
     const content = 'Appends cost $O(1)$ and $x_{[1]}$ <<cite:1>>\n\n```\nf(1)\n```';
