@@ -49,6 +49,7 @@ interface RagChatFinalPayload {
   answer: string;
   citations: Citation[];
   conversationId: string;
+  meta?: { requestId?: string };
 }
 
 interface AccessibleCourse {
@@ -165,6 +166,13 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
 
 export function useStudentChat(routeConversationId: string | null = null) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const chatTimingRef = useRef<{ id: string; answer: string; startedAt: number; requestId?: string } | null>(null);
+  useEffect(() => {
+    const timing = chatTimingRef.current;
+    if (!timing || !messages.some((message) => message.id === timing.id && message.content === timing.answer)) return;
+    console.info("Chat browser timing", { request_id: timing.requestId, final_commit_ms: Math.round(performance.now() - timing.startedAt) });
+    chatTimingRef.current = null;
+  }, [messages]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ChatModelTier>('fast');
@@ -633,6 +641,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       return;
     }
 
+    const timingStartedAt = performance.now();
+    const timingEnabled = new URLSearchParams(window.location.search).get("perf") === "chat";
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -704,6 +714,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
       const displayFinalAnswer = (payload: RagChatFinalPayload): void => {
         if (activeRequestIdRef.current !== requestId) return;
         finalPayload = payload;
+        if (timingEnabled) {
+          chatTimingRef.current = { id: assistantMessageId, answer: payload.answer, startedAt: timingStartedAt, requestId: payload.meta?.requestId };
+          console.info("Chat browser timing", { request_id: payload.meta?.requestId, final_received_ms: Math.round(performance.now() - timingStartedAt) });
+        }
         setMessages((prev) =>
           prev.map((message) =>
             message.id === assistantMessageId
@@ -843,6 +857,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
+            if (timingEnabled) console.info("Chat browser timing", { request_id: finalPayload?.meta?.requestId, eof_ms: Math.round(performance.now() - timingStartedAt) });
             break;
           }
 

@@ -136,6 +136,26 @@ describe("RAG terminal telemetry wiring", () => {
     return { response, body: await response.text() };
   }
 
+  it('correlates content-free timings with the final response for video requests', async () => {
+    state.sourceType = 'video';
+    const log = vi.spyOn(console, 'log');
+    try {
+      const { body } = await run(false);
+      const timing = log.mock.calls.find(([label]) => label === 'RAG timing')?.[1];
+      expect(timing).toMatchObject({
+        request_id: expect.any(String), model_tier: 'fast', source_types: ['video'], outcome: 'success',
+        timings: {
+          setup_ms: [expect.any(Number)], search_ms: [expect.any(Number)],
+          source_prep_ms: [expect.any(Number)], final_enqueue_ms: [expect.any(Number)],
+          ready_enqueue_ms: [expect.any(Number)], video_candidate_load_ms: [expect.any(Number)],
+          video_select_ms: [expect.any(Number)], stream_close_ms: [expect.any(Number)],
+        },
+      });
+      expect(body).toContain(timing.request_id);
+      expect(JSON.stringify(timing)).not.toContain('hello');
+    } finally { log.mockRestore(); }
+  });
+
   it.each(['pdf', 'video'] as const)('delivers saved %s basics before optional evidence finishes', async (sourceType) => {
     state.sourceType = sourceType;
     let resolveEvidence!: (value: string) => void;
