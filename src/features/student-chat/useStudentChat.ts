@@ -209,10 +209,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
   const activeRequestIdRef = useRef(0);
   const activeAssistantMessageIdRef = useRef<string | null>(null);
   const conversationLoadRequestIdRef = useRef(0);
+  const completedNewConversationIdRef = useRef<string | null>(null);
   const conversationRetryTimeoutRef = useRef<number | null>(null);
 
   const cancelActiveRequest = useCallback(() => {
     activeRequestIdRef.current += 1;
+    conversationLoadRequestIdRef.current += 1;
+    completedNewConversationIdRef.current = null;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setIsLoading(false);
@@ -295,7 +298,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
     preferredConversationId?: string | null,
     options?: { requestId?: number }
   ) => {
+    const requestId = options?.requestId ?? activeRequestIdRef.current;
     const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (activeRequestIdRef.current !== requestId) return;
     if (userError || !userData?.user) {
       console.error('Failed to resolve current user for conversations:', userError);
       setConversations([]);
@@ -308,6 +313,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       .select('id, title, created_at, course_id')
       .eq('user_id', userData.user.id)
       .order('updated_at', { ascending: false });
+
+    if (activeRequestIdRef.current !== requestId) return;
 
     if (error) {
       console.error('Failed to load conversations:', error);
@@ -324,7 +331,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setConversations(nextConversations);
 
     setCurrentConversationId((current) => {
-      if (options?.requestId && activeRequestIdRef.current !== options.requestId) {
+      if (activeRequestIdRef.current !== requestId) {
         return current;
       }
 
@@ -352,6 +359,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
 
     const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (conversationLoadRequestIdRef.current !== requestId) return;
     if (userError || !userData?.user) {
       console.error('Failed to resolve current user for messages:', userError);
       setMessages([]);
@@ -528,6 +536,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       citations: citationsByMessageId[row.id] || undefined,
     }));
 
+    if (conversationLoadRequestIdRef.current !== requestId) return;
+
     setMessages(hydratedMessages);
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
@@ -553,6 +563,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
 
     previousRouteConversationIdRef.current = routeConversationId;
+    if (routeConversationId !== currentConversationId) {
+      cancelActiveRequest();
+    }
 
     if (!routeConversationId) {
       setCurrentConversationId(null);
@@ -560,7 +573,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
 
     setCurrentConversationId(routeConversationId);
-  }, [routeConversationId]);
+  }, [cancelActiveRequest, currentConversationId, routeConversationId]);
 
   useEffect(() => {
     if (!routeConversationId || conversations.length === 0) {
@@ -589,12 +602,17 @@ export function useStudentChat(routeConversationId: string | null = null) {
 
   useEffect(() => {
     conversationLoadRequestIdRef.current += 1;
-    sourceOpenRequestIdRef.current += 1;
     if (conversationRetryTimeoutRef.current !== null) {
       window.clearTimeout(conversationRetryTimeoutRef.current);
       conversationRetryTimeoutRef.current = null;
     }
 
+    // Attaching the first server ID is the same exchange, not navigation.
+    const preserveMessages = currentConversationId !== null && currentConversationId === completedNewConversationIdRef.current;
+    completedNewConversationIdRef.current = null;
+    if (preserveMessages) return;
+
+    sourceOpenRequestIdRef.current += 1;
     setMessages([]);
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
@@ -837,8 +855,12 @@ export function useStudentChat(routeConversationId: string | null = null) {
         return;
       }
 
+      if (!currentConversationId) {
+        completedNewConversationIdRef.current = finalPayload.conversationId;
+      }
       await fetchConversations(finalPayload.conversationId || currentConversationId, { requestId });
     } catch (error) {
+      if (activeRequestIdRef.current !== requestId) return;
       if (
         error instanceof DOMException &&
         error.name === 'AbortError'
@@ -1025,6 +1047,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
   }, [cancelActiveRequest, conversations, fetchConversations, isClearingConversations]);
 
   useEffect(() => () => {
+    activeRequestIdRef.current += 1;
+    conversationLoadRequestIdRef.current += 1;
     abortControllerRef.current?.abort();
     if (conversationRetryTimeoutRef.current !== null) {
       window.clearTimeout(conversationRetryTimeoutRef.current);

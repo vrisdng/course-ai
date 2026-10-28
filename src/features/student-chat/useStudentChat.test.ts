@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // A chainable fake that resolves to `result` from any awaited point in a
 // Supabase query-builder chain (e.g. .from().select().eq().order()).
-function createQueryChain(result: { data: unknown; error: unknown }) {
+function createQueryChain(result: { data: unknown; error: unknown } | Promise<{ data: unknown; error: unknown }>) {
   const chain: Record<string, unknown> = {};
   const methods = ['select', 'eq', 'in', 'order', 'delete', 'maybeSingle', 'single', 'insert'];
   for (const method of methods) {
     chain[method] = vi.fn(() => chain);
   }
-  chain.then = (resolve: (value: typeof result) => unknown) => Promise.resolve(result).then(resolve);
+  chain.then = (resolve: (value: Awaited<typeof result>) => unknown) => Promise.resolve(result).then(resolve);
   return chain;
 }
 
@@ -109,6 +109,115 @@ describe('useStudentChat', () => {
 
     return result;
   }
+
+  it.each(['stream', 'json'] as const)(
+    'preserves the first long exchange when the %s final conversation ID is discovered',
+    async (format) => {
+      const result = await setupWithCourse();
+      const conversation = { id: 'new-conversation', title: 'First question', created_at: '2026-10-28', course_id: 'course-1' };
+      let resolveList!: (value: { data: unknown; error: unknown }) => void;
+      const pendingList = new Promise<{ data: unknown; error: unknown }>((resolve) => { resolveList = resolve; });
+      from.mockImplementation((table: string) => createQueryChain(table === 'conversations' ? pendingList : emptyResult));
+      const answer = 'A detailed answer. '.repeat(1000);
+      const citations = [{ id: 'cite-1', chunkId: 'chunk-1', excerpt: 'Evidence', documentName: 'Lecture', documentType: 'pdf', relevanceScore: 0.9 }];
+      const payload = { answer, citations, conversationId: conversation.id };
+      vi.mocked(fetch).mockResolvedValueOnce(format === 'stream'
+        ? streamResponse(sseEvent('final', payload))
+        : new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } }));
+      act(() => result.current.setInput('A long first question. '.repeat(100)));
+      let sending!: Promise<void>;
+      act(() => { sending = result.current.handleSend(); });
+      await waitFor(() => expect(result.current.messages[1]?.content).toBe(answer));
+      const originalMessages = result.current.messages;
+      act(() => result.current.openSourcesForMessage(originalMessages[1]));
+      await act(async () => {
+        resolveList({ data: [conversation], error: null });
+        await sending;
+      });
+
+      expect(result.current.messages).toBe(originalMessages);
+      expect(result.current.selectedMessage).toBe(originalMessages[1]);
+      expect(result.current.currentConversationId).toBe(conversation.id);
+      expect(result.current.conversations).toHaveLength(1);
+      expect(result.current.messages).toHaveLength(2);
+      expect(result.current.messages[1]).toMatchObject({ content: answer, citations });
+      // Reloading history remounts the messages and loses their stable in-memory IDs.
+      expect(from).not.toHaveBeenCalledWith('messages');
+      const messageIds = result.current.messages.map((message) => message.id);
+      act(() => result.current.setInput('Follow-up'));
+      vi.mocked(fetch).mockResolvedValueOnce(streamResponse(sseEvent('final', payload)));
+      await act(async () => { await result.current.handleSend(); });
+      expect(JSON.parse(String(vi.mocked(fetch).mock.calls[1][1]?.body)).conversationId).toBe(conversation.id);
+      expect(result.current.messages.slice(0, 2).map((message) => message.id)).toEqual(messageIds);
+    },
+  );
+
+  it('ignores a final conversation-list refresh after starting another chat', async () => {
+    const result = await setupWithCourse();
+    let resolveList!: (value: { data: unknown; error: unknown }) => void;
+    const pendingList = new Promise<{ data: unknown; error: unknown }>((resolve) => { resolveList = resolve; });
+    from.mockImplementation((table: string) => createQueryChain(table === 'conversations' ? pendingList : emptyResult));
+    from.mockClear();
+    vi.mocked(fetch).mockResolvedValueOnce(streamResponse(sseEvent('final', {
+      answer: 'Final answer', citations: [], conversationId: 'old-conversation',
+    })));
+    act(() => result.current.setInput('question'));
+    let sending!: Promise<void>;
+    act(() => { sending = result.current.handleSend(); });
+    await waitFor(() => expect(from).toHaveBeenCalledWith('conversations'));
+    act(() => result.current.startNewConversation());
+    await act(async () => {
+      resolveList({ data: [{ id: 'old-conversation', title: 'Old', created_at: '2026-10-28', course_id: 'course-1' }], error: null });
+      await sending;
+    });
+    expect(result.current.currentConversationId).toBeNull();
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.conversations).toEqual([]);
+  });
+
+  it('ignores history hydration that finishes after navigation', async () => {
+    let resolveCitations!: (value: { data: unknown; error: unknown }) => void;
+    const pendingCitations = new Promise<{ data: unknown; error: unknown }>((resolve) => { resolveCitations = resolve; });
+    from.mockImplementation((table: string) => {
+      if (table === 'conversations') {
+        const chain = createQueryChain({ data: [{ id: 'conv-1', title: 'Old', created_at: '2026-10-28', course_id: 'course-1' }], error: null });
+        chain.maybeSingle = vi.fn(async () => ({ data: { id: 'conv-1' }, error: null }));
+        return chain;
+      }
+      if (table === 'messages') return createQueryChain({ data: [{ id: 'stored-message', role: 'assistant', content: 'Old answer' }], error: null });
+      if (table === 'citations') return createQueryChain(pendingCitations);
+      return createQueryChain(emptyResult);
+    });
+    const { result, rerender } = renderHook(({ routeId }: { routeId: string | null }) => useStudentChat(routeId), { initialProps: { routeId: 'conv-1' } });
+    await waitFor(() => expect(from).toHaveBeenCalledWith('citations'));
+    rerender({ routeId: null });
+    await act(async () => { resolveCitations(emptyResult); });
+    expect(result.current.currentConversationId).toBeNull();
+    expect(result.current.messages).toEqual([]);
+  });
+
+  it('aborts an active stream on route navigation and ignores its late final answer', async () => {
+    const { result, rerender } = renderHook(({ routeId }: { routeId: string | null }) => useStudentChat(routeId), { initialProps: { routeId: null } });
+    act(() => result.current.changeSelectedCourse('course-1'));
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+    }), { headers: { 'content-type': 'text/event-stream' } }));
+    act(() => result.current.setInput('question'));
+    let sending!: Promise<void>;
+    act(() => { sending = result.current.handleSend(); });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    rerender({ routeId: 'other-conversation' });
+    expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true);
+    await act(async () => {
+      controller.enqueue(new TextEncoder().encode(sseEvent('final', { answer: 'Late answer', citations: [], conversationId: 'old-conversation' })));
+      controller.close();
+      await sending;
+    });
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.isLoading).toBe(false);
+    expect(toast.error).not.toHaveBeenCalledWith('Streaming request failed.');
+  });
 
   it('does not send an empty or whitespace-only message', async () => {
     const result = await setupWithCourse();
