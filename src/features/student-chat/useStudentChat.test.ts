@@ -110,6 +110,27 @@ describe('useStudentChat', () => {
     return result;
   }
 
+  it.each(['individual', 'all'] as const)('sends selected IDs for a comparison using %s selection', async (selection) => {
+    const docs = [1, 2, 3].map((n) => ({ id: `doc-${n}`, file_name: `Notes ${n}`, file_type: 'pdf' }));
+    from.mockImplementation((table: string) => createQueryChain(table === 'materials' ? { data: docs, error: null } : emptyResult));
+    rpc.mockResolvedValueOnce({ data: [{ id: 'course-1', name: 'Course', code: 'C1', access_role: 'student' }], error: null });
+    const { result } = renderHook(() => useStudentChat(null));
+    await waitFor(() => expect(result.current.selectedDocumentIds).toHaveLength(3));
+    act(() => {
+      result.current.clearSelectedDocuments();
+    });
+    act(() => {
+      if (selection === 'all') result.current.selectAllDocuments();
+      else result.current.applySelectedDocuments(['doc-1', 'doc-2']);
+      result.current.setInput('Compare these materials');
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(streamResponse(sseEvent('final', { answer: 'Comparison', citations: [], conversationId: 'conv-1' })));
+    await act(async () => { await result.current.handleSend(); });
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
+    expect(body.selectedDocumentIds).toEqual(selection === 'all' ? ['doc-1', 'doc-2', 'doc-3'] : ['doc-1', 'doc-2']);
+    expect(body.skipRag).toBe(false);
+  });
+
   it('does not send an empty or whitespace-only message', async () => {
     const result = await setupWithCourse();
     const fetchMock = vi.mocked(fetch);
