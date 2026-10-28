@@ -61,8 +61,8 @@ export function SystemMaintenancePanel({
         <MaintenanceAction
           icon={<RefreshCw />}
           title="Refresh dashboard data"
-          description="Fetch the latest courses, terms, and enrollment codes from the database."
-          guidance="Do this when courses, terms, or enrollment codes look outdated or do not reflect a recent change."
+          description="Fetch the latest courses and terms from the database."
+          guidance="Do this when courses or terms look outdated or do not reflect a recent change."
           busy={activeAction === 'refresh'}
           disabled={activeAction !== null}
           onClick={() => void runAction('refresh', async () => {
