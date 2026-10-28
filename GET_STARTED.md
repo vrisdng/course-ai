@@ -51,6 +51,8 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 
 **Citations**: the model emits inline `<<cite:N>>` tokens referencing a numbered source list injected into the prompt; a second pass can add citations to a draft answer that's missing them. Each citation stores the source chunk, a relevance score, and a 300-character excerpt. ⏱ Citation source-preview links use signed URLs valid for **120 seconds**.
 
+**Answer completion**: the SSE `final` event delivers the completed answer and validated basic citations immediately. The additive `ready` event follows after the user/assistant messages and basic citations are saved; the composer then accepts another question without waiting for exact video evidence or stream EOF. Optional video evidence is validated, saved by citation ID, and sent in a later `citations` event. A follow-up or navigation may cancel that enrichment; the saved basic sources remain usable. Persistence errors keep the displayed answer and show a retry notice. Older servers without `ready` keep the client waiting until EOF; older clients ignore the new events and still receive the answer, with exact evidence available after reloading history.
+
 **Conversation history**: ⏱ up to the last 24 messages are fetched, tail-limited to the last 14 turns, each message clipped to 850 characters, and the whole window capped at a 9000-character budget before being sent to the model.
 
 **Conversation limits**: none — a per-user conversation cap existed at one point and was explicitly removed; users can create unlimited conversations.

@@ -651,6 +651,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
     abortControllerRef.current = abortController;
     activeAssistantMessageIdRef.current = assistantMessageId;
     let finalPayload: RagChatFinalPayload | null = null;
+    let readyReceived = false;
 
     try {
       setMessages((prev) => [
@@ -791,10 +792,50 @@ export function useStudentChat(routeConversationId: string | null = null) {
             return;
           }
 
+          if (event.event === 'ready') {
+            if (!finalPayload || readyReceived || activeRequestIdRef.current !== requestId) return;
+            readyReceived = true;
+            if (!currentConversationId && finalPayload.conversationId) {
+              const conversationId = finalPayload.conversationId;
+              completedNewConversationIdRef.current = conversationId;
+              setConversations((current) => current.some((item) => item.id === conversationId) ? current : [{
+                id: conversationId, courseId: selectedCourseId,
+                title: userMessage.content.length > 80 ? `${userMessage.content.slice(0, 77)}...` : userMessage.content,
+                createdAt: new Date().toISOString(),
+              }, ...current]);
+              setCurrentConversationId(conversationId);
+            }
+            setIsLoading(false);
+            activeAssistantMessageIdRef.current = null;
+            void fetchConversations(finalPayload.conversationId || currentConversationId, { requestId }).catch((error) => {
+              console.warn('Failed to refresh conversations after saving the answer:', error);
+            });
+            return;
+          }
+
+          if (event.event === 'citations') {
+            if (!finalPayload || activeRequestIdRef.current !== requestId || !parsed || typeof parsed !== 'object') return;
+            const citations = (parsed as { citations?: Citation[] }).citations;
+            if (!Array.isArray(citations)) return;
+            finalPayload = { ...finalPayload, citations };
+            setMessages((prev) => prev.map((message) => message.id === assistantMessageId ? { ...message, citations } : message));
+            setSelectedMessage((message) => message?.id === assistantMessageId ? {
+              ...message, citations: message.citations?.map((citation) => citations.find((updated) => updated.id === citation.id) ?? citation),
+            } : message);
+            setActiveVideoSource((source) => {
+              const citation = source && citations.find((item) => item.id === source.citationId);
+              return citation ? { ...source, evidenceSegments: citation.evidenceSegments } : source;
+            });
+            return;
+          }
+
           if (event.event === 'error') {
             const errorMessage = typeof parsed === 'object' && parsed && 'error' in parsed
               ? String((parsed as { error?: unknown }).error || '')
               : '';
+            if (finalPayload && typeof parsed === 'object' && parsed && (parsed as { code?: string }).code === 'message_persistence_failed') {
+              toast.error(errorMessage);
+            }
             throw new Error(errorMessage || 'Streaming request failed.');
           }
         };
@@ -855,6 +896,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         return;
       }
 
+      if (readyReceived) return;
       if (!currentConversationId) {
         completedNewConversationIdRef.current = finalPayload.conversationId;
       }
@@ -1110,6 +1152,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setShowSidePanel(true);
         setActiveViewerSource(null);
         setActiveVideoSource({
+          citationId: citation.id,
           title: resolved.fileName,
           signedUrl: null,
           filePath: resolved.filePath,

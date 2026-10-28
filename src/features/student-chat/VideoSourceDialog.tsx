@@ -11,6 +11,7 @@ import type { VideoEvidenceSegment } from './types';
 import { getVideoInterval } from './videoIntervals';
 
 export interface ActiveVideoSource {
+  citationId?: string;
   title: string;
   signedUrl: string | null;
   filePath?: string | null;
