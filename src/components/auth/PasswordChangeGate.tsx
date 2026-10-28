@@ -14,7 +14,8 @@ export function PasswordChangeGate({ children }: { children: ReactNode }) {
       params.delete('invite');
       params.delete('email');
     }
-    const from = location.pathname + (params.size ? `?${params}` : '') + location.hash;
+    const search = params.toString();
+    const from = location.pathname + (search ? `?${search}` : '') + location.hash;
     return <Navigate to="/reset-password" state={{ from }} replace />;
   }
   return <>{children}</>;
