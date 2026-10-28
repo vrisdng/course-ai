@@ -162,7 +162,7 @@ describe('RichMarkdown tables and images', () => {
 });
 
 describe('RichMarkdown citations', () => {
-  it.each(['<<cite:1b>>', '<cite:1b>', '<<cite:1>>'])(
+  it.each(['<<cite:1b>>', '<cite:1b>', '<<cite:1b,2>>', '<<cite:1,2b>>', '<<cite:1>>'])(
     'hides every unfinished prefix of %s and keeps surrounding streamed prose visible',
     (token) => {
       const { container, rerender } = render(<RichMarkdown content="Claim " />);

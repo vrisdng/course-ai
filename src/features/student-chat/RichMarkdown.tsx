@@ -49,7 +49,7 @@ function isSafeImageUrl(src: string | undefined): boolean {
 function hideStreamingBlockCitationMarkers(content: string): string {
   // Match protected code/math first; only an unfinished marker at the message end is hidden.
   const protectedLiteral = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*(?:`|$)|\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)/;
-  const blockMarker = /<{1,2}\s*cite\s*:\s*\d+[a-z]+(?:\s*,\s*\d+[a-z]+)*\s*>{1,2}/;
+  const blockMarker = /<{1,2}\s*cite\s*:\s*(?=[\d,\s]*[a-z])\d+[a-z]*(?:\s*,\s*\d+[a-z]*)*\s*>{1,2}/;
   const unfinishedMarker = /<{1,2}(?:c(?:i(?:t(?:e(?:\s*:\s*[\da-z,\s]*>?)?)?)?)?)?$/;
   return content.replace(
     new RegExp(`(${protectedLiteral.source})|${blockMarker.source}|${unfinishedMarker.source}`, 'gi'),
