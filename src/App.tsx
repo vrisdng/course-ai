@@ -22,6 +22,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import CourseStudents from "./pages/CourseStudents";
 import AdminAnalytics from "./pages/AdminAnalytics";
 import Settings from "./pages/Settings";
+import Survey from "./pages/Survey";
 import NotFound from "./pages/NotFound";
 
 const App = () => (
@@ -89,6 +90,14 @@ const App = () => (
             element={
               <ProtectedRoute requiredRole={['student', 'admin']}>
                 <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/survey"
+            element={
+              <ProtectedRoute requiredRole={['student', 'admin']}>
+                <Survey />
               </ProtectedRoute>
             }
           />
