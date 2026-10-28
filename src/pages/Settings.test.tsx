@@ -64,6 +64,7 @@ describe('Settings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.auth = {
+      user: { email: 'student@example.test' },
       profile: { id: 'p1', email: 'student@example.test', full_name: 'Ada', custom_instructions: 'Use examples' },
       refreshProfile: vi.fn().mockResolvedValue(undefined),
       isLoading: false,
@@ -141,19 +142,20 @@ describe('Settings', () => {
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('save failure'));
   });
 
-  it('emails a recovery code and passes the profile email in router state', async () => {
+  it('uses the Auth email instead of a stale profile email and passes it in router state', async () => {
+    mocks.auth = { ...mocks.auth, profile: { ...mocks.auth.profile, email: 'stale@example.test' } };
     renderSettings();
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('list_accessible_courses'));
     fireEvent.click(screen.getByRole('button', { name: 'Email me a reset code' }));
     await waitFor(() => expect(mocks.resetPasswordForEmail).toHaveBeenCalledWith('student@example.test'));
     expect(await screen.findByTestId('location-probe')).toHaveTextContent(
-      JSON.stringify({ pathname: '/reset-password', search: '', state: { email: 'student@example.test', requireRecoveryOtp: true, returnTo: '/settings' } }),
+      JSON.stringify({ pathname: '/reset-password', search: '', state: { email: 'student@example.test', requireRecoveryOtp: true, from: '/settings' } }),
     );
     expect(mocks.toastError).not.toHaveBeenCalled();
   });
 
   it('does not send a reset request without an account email', async () => {
-    mocks.auth = { ...mocks.auth, profile: { ...mocks.auth.profile, email: null } };
+    mocks.auth = { ...mocks.auth, user: { email: null } };
     renderSettings();
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('list_accessible_courses'));
     expect(screen.getByRole('button', { name: 'Email me a reset code' })).toBeDisabled();

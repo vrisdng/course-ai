@@ -19,7 +19,7 @@ interface AccessibleCourse {
 
 export default function Settings() {
   const navigate = useNavigate();
-  const { profile, refreshProfile, isLoading, isAdmin } = useAuth();
+  const { user, profile, refreshProfile, isLoading, isAdmin } = useAuth();
   
   const [fullName, setFullName] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
@@ -83,14 +83,14 @@ export default function Settings() {
   };
 
   const handleResetPassword = async () => {
-    const email = profile?.email?.trim().toLowerCase();
+    const email = user?.email?.trim().toLowerCase();
     if (!email || isSendingResetCode) return;
 
     setIsSendingResetCode(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email);
       if (error) throw error;
-      navigate('/reset-password', { state: { email, requireRecoveryOtp: true, returnTo: '/settings' } });
+      navigate('/reset-password', { state: { email, requireRecoveryOtp: true, from: '/settings' } });
     } catch (error) {
       toast.error((error as Error)?.message || 'Failed to send a reset code');
     } finally {
@@ -196,8 +196,8 @@ export default function Settings() {
               </Button>
               <div className="space-y-2 border-t pt-4">
                 <h2 className="text-sm font-medium">Reset password</h2>
-                <p className="text-xs text-muted-foreground">We’ll email a recovery code to {profile?.email}.</p>
-                <Button variant="outline" onClick={handleResetPassword} disabled={isSendingResetCode || !profile?.email}>
+                <p className="text-xs text-muted-foreground">We’ll email a recovery code to {user?.email}.</p>
+                <Button variant="outline" onClick={handleResetPassword} disabled={isSendingResetCode || !user?.email}>
                   {isSendingResetCode && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Email me a reset code
                 </Button>

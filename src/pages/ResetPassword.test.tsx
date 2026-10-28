@@ -27,7 +27,7 @@ const renderPage = (entry: Entry = '/reset-password') => render(<MemoryRouter in
 </Routes></MemoryRouter>);
 
 const withEmail = (email: string): Entry => ({ pathname: '/reset-password', state: { email } });
-const withRequiredRecovery = (email: string): Entry => ({ pathname: '/reset-password', state: { email, requireRecoveryOtp: true, returnTo: '/settings' } });
+const withRequiredRecovery = (email: string): Entry => ({ pathname: '/reset-password', state: { email, requireRecoveryOtp: true, from: '/settings' } });
 
 const fillPasswords = (password: string, confirm = password) => {
   fireEvent.change(screen.getByLabelText('New Password'), { target: { value: password } });

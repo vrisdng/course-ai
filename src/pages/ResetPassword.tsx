@@ -55,7 +55,7 @@ export default function ResetPassword() {
   const location = useLocation();
   const { user, profile, isLoading: authLoading, signOut } = useAuth();
   const mustChangePassword = user?.app_metadata?.must_change_password === true;
-  const routeState = location.state as { email?: string; requireRecoveryOtp?: boolean; returnTo?: string } | null;
+  const routeState = location.state as { email?: string; requireRecoveryOtp?: boolean } | null;
   const requiresRecoveryOtp = routeState?.requireRecoveryOtp === true;
   const [hasVerifiedRecoveryOtp, setHasVerifiedRecoveryOtp] = useState(false);
   const [setupStep, setSetupStep] = useState<'password' | 'profile' | 'name'>('password');
@@ -92,8 +92,7 @@ export default function ResetPassword() {
 
   useEffect(() => {
     if (!successMessage) return;
-    const from = (location.state as { returnTo?: string; from?: string } | null)?.returnTo
-      ?? (location.state as { from?: string } | null)?.from;
+    const from = (location.state as { from?: string } | null)?.from;
     const destination = typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/reset-password') && !from.startsWith('/auth')
       ? from : profile?.role === 'admin' ? '/admin-dashboard' : '/chat';
     const handle = window.setTimeout(() => navigate(destination, { replace: true }), REDIRECT_DELAY_MS);
