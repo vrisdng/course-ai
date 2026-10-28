@@ -685,7 +685,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           message: userMessage.content,
           conversationId: currentConversationId,
           courseId: selectedCourseId,
-          selectedDocumentIds: selectedDocumentIds.length === availableDocuments.length ? [] : selectedDocumentIds,
+          selectedDocumentIds,
           model: selectedModel,
           skipRag: availableDocuments.length > 0 && selectedDocumentIds.length === 0,
         }),

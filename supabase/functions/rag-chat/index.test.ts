@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   persistenceFails: false,
   otherOwner: false,
   generationFails: false,
+  noRagPrompt: "",
   abort: null as null | AbortController,
   splitSource: false,
   sourceType: null as null | 'pdf' | 'video',
@@ -93,7 +94,8 @@ vi.mock("../_shared/llm.ts", () => ({
     state.evidenceSignal = options.signal;
     return state.evidence ?? '{"citations":[{"citation":1,"segmentIndices":[0]}]}';
   },
-  generateChatTextStream: async (options: { onTextDelta: (text: string) => void; onUsage: (usage: { promptTokens: number; completionTokens: number }) => void }) => {
+  generateChatTextStream: async (options: { messages: Array<{ role: string; content: string }>; onTextDelta: (text: string) => void; onUsage: (usage: { promptTokens: number; completionTokens: number }) => void }) => {
+    state.noRagPrompt = options.messages[0].content;
     if (state.abort) {
       state.abort.abort();
       throw new Error("Chat API error: wrapped cancellation");
@@ -232,6 +234,11 @@ describe("RAG terminal telemetry wiring", () => {
     expect(state.savedCitations.map((citation) => citation.block_ids)).toEqual([['block-a'], ['block-b']]);
     expect(new Set(state.savedCitations.map((citation) => citation.id)).size).toBe(2);
     expect(state.evidenceUpdateIds).toEqual(state.savedCitations.map((citation) => citation.id));
+  });
+
+  it("offers a selection step when an ungrounded request refers to selected materials", async () => {
+    await run();
+    expect(state.noRagPrompt).toContain("select materials in the material selector");
   });
 
   it("records one successful request with resolved IDs and model usage", async () => {

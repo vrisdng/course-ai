@@ -47,7 +47,7 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 - ⏱ **the currently active academic term** — switching the active term instantly changes what the assistant can see, app-wide (see [Academic terms](#academic-terms--course-management)),
 - the student's chosen document scope (see below).
 
-**Document scope**: students can select which materials to include. Selecting "all" sends no filter (search everything in scope); selecting **zero** documents skips retrieval entirely and the assistant answers from the conversation alone.
+**Document scope**: students can select which materials to include. Selecting "all" sends the IDs of all selected materials so retrieval and the assistant use that selection. When materials are available, selecting **zero** documents skips retrieval and the assistant answers from general knowledge and the conversation.
 
 **Citations**: the model emits inline `<<cite:N>>` tokens referencing a numbered source list injected into the prompt; a second pass can add citations to a draft answer that's missing them. Each citation stores the source chunk, a relevance score, and a 300-character excerpt. ⏱ Citation source-preview links use signed URLs valid for **120 seconds**.
 

@@ -38,7 +38,7 @@ describe("formatDocumentNameList", () => {
         { id: "2", fileName: "B.pdf" },
         { id: "3", fileName: "C.pdf" },
       ])
-    ).toBe("3 selected documents");
+    ).toBe('"A.pdf", "B.pdf", and "C.pdf"');
   });
 });
 
