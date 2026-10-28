@@ -204,6 +204,26 @@ No byte ceiling rejects a video; AssemblyAI's duration, source-size, format, and
 Whoever picks this up: start by confirming whether client-side audio extraction (already implemented) reliably gets lecture-length videos under OpenAI's 25MB cap before committing to the Storage-upload restructure.
 
 
+## Citation-based analytics (2026-10-24)
+
+The analytics page counts what answers *cited* rather than grouping questions into topics. Migration `20261024120000_citation_analytics.sql` adds the admin-only RPCs and the `query_events.ai_*` label columns; `supabase/tests/citation_analytics.sql` covers them in a rolled-back transaction.
+
+- **Join on `citations.material_id` + `page_number` / `start_ms`–`end_ms`, never `chunk_id`.** Re-processing a material recreates its chunks and sets old `citations.chunk_id` to NULL (`20261009180000`). The older `get_course_document_reference_stats` (used by `analytics-chat`) still joins through `chunks`, so it undercounts re-processed materials.
+- **Keyword search** (`course-analytics` → `match_course_chunks_for_analytics`) searches every material of the course regardless of term or access scope, never student documents, admins only. The floor is `KEYWORD_MATCH_THRESHOLD = 0.2` in `_shared/analyticsPlaces.ts`, measured on real notes: covered topics scored 0.37–0.65, a rare covered term 0.24, off-topic words ≤ 0.17. Video chunks within 30 s merge into one place.
+- **"Cited" is not "asked about":** an answer can cite a background page. The page says so.
+- **Labels** (`_shared/questionLabels.ts`): one Decisions API request per question with three questions (category choice, two predicates; "yes" from probability 0.5). Refusals are saved as NULL with `ai_labeled_at` set, so nothing is re-sent; failed calls are left unlabelled and retried on the next visit. `query_category` (regex) remains the fallback. Labelling runs when an admin opens the page (`useQuestionLabels`), not from `rag-chat`, so no chat path changed and no schedule is needed.
+- **Question-first page (2026-10-25):**
+  - Migrations `20261025090000_question_analytics.sql` and `20261025120000_question_detail.sql` add four functions:
+    - `get_course_question_overview`;
+    - `get_course_questions`, a filterable, paged list;
+    - `get_course_question_terms` (common words and phrases; the page no longer shows them, but the function is kept);
+    - `get_course_question_detail`, which returns the answer text and related questions.
+  - They also add `get_course_cited_files` and drop `get_course_questions_at_places`. Tests are in `supabase/tests/question_analytics.sql`.
+  - Copies of a file are merged **by file name** (the cited-files list, answer sources, related questions). Two different files with the same name in one course would also merge.
+  - Terms are computed per request with Postgres text search: one `to_tsvector` pass over the course's chunks, about 20 ms on the local test course. A topics list was tried in the left pane and removed: next to the search box it looked like search was scoped to it.
+  - "Not from materials" is the Decisions API label when one exists. Unlabelled questions count when their answer cited nothing.
+- The Decisions API has no AI SDK binding: `_shared/decisions.ts` is a small fetch client (retries 429/5xx), exposed through `llm.ts#createOpenAIDecisionsClient`. Only `gpt-6-luna` is supported.
+
 ## Student chat telemetry (2026-10-22)
 
 `query_events` now stores one best-effort terminal event for each authenticated, valid student-chat request, including errors and client aborts. Earlier authentication/configuration/JSON failures remain in function logs. `request_id` is server-generated and unique; course/conversation IDs are populated only after access resolution. Hard runtime termination or a failed telemetry write can still leave no event.
