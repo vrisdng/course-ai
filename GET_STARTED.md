@@ -103,7 +103,7 @@ Admins manage courses and academic terms (e.g. "Semester 2 AY25/26").
 
 ### Course invites & enrollment
 
-The course's **Enrolled Students** page also has an **Import students** action at the top right. Upload an email-only CSV/text file or paste emails separated by commas/newlines; an `email` header is optional. Preview validation catches invalid entries and removes duplicates. Import creates confirmed student accounts and enrolls them directly into this course, reporting per-email results. Re-import is safe: existing students are enrolled without resetting credentials, and existing non-student accounts are skipped. No onboarding emails are sent.
+The course's **Enrolled Students** page also has an **Import students** action at the top right. Upload a CSV/text file or paste emails separated by commas/newlines; an `email` header is optional. To include names, use one `email,fullName` row per student, with an optional `email,fullName` header. Quote names containing commas (for example, `ada@example.test,"Lovelace, Ada"`). Names are optional and limited to 200 characters; the preview shows the name that will be used for each new account. A supplied name skips name collection after the required password change. Preview validation catches invalid entries and removes duplicates. Import creates confirmed student accounts and enrolls them directly into this course, reporting per-email results. Re-import is safe: existing students are enrolled without resetting credentials, and existing non-student accounts are skipped. No onboarding emails are sent.
 
 Two invitation-based enrollment options remain available, both admin-only to create, both on the same `course_invites` table:
 

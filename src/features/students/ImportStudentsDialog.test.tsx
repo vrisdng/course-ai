@@ -19,7 +19,7 @@ describe('ImportStudentsDialog', () => {
     fireEvent.change(screen.getByLabelText('Student emails'), { target: { value: 'ada@example.test\ngrace@example.test' } });
     fireEvent.click(screen.getByRole('button', { name: 'Import 2 students' }));
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('import-course-students', {
-      body: { courseId: 'c1', emails: ['ada@example.test', 'grace@example.test'] },
+      body: { courseId: 'c1', students: [{ email: 'ada@example.test' }, { email: 'grace@example.test' }] },
     }));
     expect(await screen.findByText('Created and enrolled')).toBeInTheDocument();
     expect(screen.getByText('Retry enrollment')).toBeInTheDocument();
@@ -36,6 +36,23 @@ describe('ImportStudentsDialog', () => {
     expect(await screen.findByText(/Network unavailable/)).toBeInTheDocument();
     expect(screen.getByText('Created and enrolled')).toBeInTheDocument();
     expect(onImported).toHaveBeenCalledOnce();
+  });
+  it('previews names from an uploaded CSV and sends named rows in batches of 20', async () => {
+    mocks.invoke.mockResolvedValue({ data: { results: [] }, error: null });
+    render(<ImportStudentsDialog courseId="c1" onImported={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Import students' }));
+    const csv = 'email,fullName\n' + Array.from({ length: 21 }, (_, n) => `s${n}@example.test,"Student, ${n}"`).join('\n');
+    const file = new File([csv], 'named-students.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(screen.getByLabelText('CSV or text file'), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Import 21 students' })).toBeEnabled());
+    expect(screen.getByRole('cell', { name: 'Student, 0' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Import 21 students' }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(2));
+    const batches = mocks.invoke.mock.calls.map((call) => call[1].body.students);
+    expect(batches.map((batch) => batch.length)).toEqual([20, 1]);
+    expect(batches[0][0]).toEqual({ email: 's0@example.test', fullName: 'Student, 0' });
+    expect(batches[1][0]).toEqual({ email: 's20@example.test', fullName: 'Student, 20' });
   });
   it('reads an uploaded email-only CSV into the preview', async () => {
     render(<ImportStudentsDialog courseId="c1" onImported={vi.fn()} />);
