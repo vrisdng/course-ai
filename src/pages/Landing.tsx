@@ -213,7 +213,7 @@ export default function Landing() {
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
         <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
           <Link to="/" className="flex items-baseline gap-1">
-            <img src="/ceegpt_logo.svg" alt="" className="mr-2 h-6 w-6" />
+            <img src="/ceegpt-logo.svg" alt="" className="mr-2 h-6 w-6" />
             <span className="text-lg font-semibold tracking-tight">CEEGPT</span>
             <span className="mono-label mt-0 text-[0.6rem] leading-none">™</span>
           </Link>
@@ -472,7 +472,7 @@ export default function Landing() {
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:px-6 py-10 text-sm text-muted-foreground sm:flex-row">
           <div className="flex items-center gap-2">
-            <img src="/ceegpt_logo.svg" alt="" className="h-5 w-5" />
+            <img src="/ceegpt-logo.svg" alt="" className="h-5 w-5" />
             <span className="font-medium text-foreground">CEEGPT</span>
           </div>
           <div className="flex flex-col items-center gap-1 sm:items-end">
