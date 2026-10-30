@@ -159,7 +159,7 @@ DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get p
 
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 
-`rag-chat`'s `smart`/`pro` tiers and `generate-flashcards` previously called Gemini for plain text-in/text-out chat generation. Both now go through OpenAI only, via a new shared wrapper [supabase/functions/_shared/llm.ts](supabase/functions/_shared/llm.ts) built on the Vercel AI SDK (`ai` + `@ai-sdk/openai`, pulled in via `esm.sh` like every other npm dependency in these functions — no import map needed). `GEMINI_API_KEY` is no longer read for chat.
+`rag-chat`'s `smart`/`pro` tiers previously called Gemini for plain text-in/text-out chat generation. They now go through OpenAI only, via a new shared wrapper [supabase/functions/_shared/llm.ts](supabase/functions/_shared/llm.ts) built on the Vercel AI SDK (`ai` + `@ai-sdk/openai`, pulled in via `esm.sh` like every other npm dependency in these functions — no import map needed). `GEMINI_API_KEY` is no longer read for chat.
 
 **Not swapped — still on Gemini, deliberately:**
 - **`process-material-job`'s `extractTextWithGemini`** — now used only for legacy `.doc` (PDF/image OCR moved to OpenAI `gpt-5.6-luna` via `_shared/llm.ts#generateDocumentText` on 2026-09-21). It's document OCR: raw file bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.

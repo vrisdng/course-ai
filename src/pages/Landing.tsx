@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, Check, FileText, GraduationCap, Layers3, Loader2, MessageSquare, Play, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, BookOpen, Check, FileText, GraduationCap, Loader2, MessageSquare, Play, ShieldCheck, Sparkles } from 'lucide-react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,7 +7,6 @@ import '@/features/landing/landing.css';
 const benefits = [
   { icon: MessageSquare, color: 'blue', title: 'Answers with sources', description: 'Follow citations back to the course material behind an answer.' },
   { icon: BookOpen, color: 'green', title: 'Notes and webcasts', description: 'Find the right page or moment in your course materials.' },
-  { icon: Layers3, color: 'amber', title: 'Flashcards for revision', description: 'Turn an answer into flashcards and test what you remember.' },
   { icon: GraduationCap, color: 'purple', title: 'Built for your course', description: 'Learn from materials your lecturer has shared with your class.' },
 ];
 
@@ -76,7 +75,6 @@ export default function Landing() {
                 </div>
                 <div className="landing-float landing-notes"><div className="landing-demo-card landing-mini-card"><span className="landing-icon landing-icon-green"><FileText aria-hidden="true" /></span><div><strong>Notes</strong><span>Find the right page</span></div></div></div>
                 <div className="landing-float landing-webcast"><div className="landing-demo-card landing-mini-card"><span className="landing-icon landing-icon-purple"><Play aria-hidden="true" /></span><div><strong>Webcast</strong><span>Revisit the moment</span></div></div></div>
-                <div className="landing-float landing-flashcard"><div className="landing-demo-card landing-mini-card"><span className="landing-icon landing-icon-amber"><Layers3 aria-hidden="true" /></span><div><strong>From answer to recall</strong><span>Your next flashcard starts here.</span></div><Check size={16} aria-hidden="true" /></div></div>
               </figure>
 
               <section id="access" className="landing-access" aria-labelledby="access-title">
@@ -104,7 +102,7 @@ export default function Landing() {
               {[
                 ['Choose your materials', 'Open your course and choose the notes or webcasts you want to explore.'],
                 ['Ask in your own words', 'Get an explanation, connect ideas, or work through a topic that has not clicked yet.'],
-                ['Check it. Then practise.', 'Follow the sources, revisit the explanation, and make flashcards for revision.'],
+                ['Check the source', 'Follow the citations to the original notes or webcast and revisit the explanation.'],
               ].map(([title, description], index) => <li key={title}><span className="landing-step-number">0{index + 1}</span><h3>{title}</h3><p>{description}</p></li>)}
             </ol>
           </div>
@@ -121,7 +119,7 @@ export default function Landing() {
       </main>
 
       <footer className="landing-footer">
-        <div className="landing-container"><span className="landing-brand"><img src="/ceegpt_logo.svg" alt="" width="26" height="26" />CEEGPT</span><p>A little clarity goes a long way.</p><a href="https://moworld.me/" target="_blank" rel="noreferrer">Developed by Duong Ngoc Mai<ArrowRight size={14} aria-hidden="true" /></a></div>
+        <div className="landing-container"><span className="landing-brand"><img src="/ceegpt_logo.svg" alt="" width="26" height="26" />CEEGPT</span><p>A little clarity goes a long way.</p><p className="landing-credit">Developed by <a href="https://moworld.me/" target="_blank" rel="noreferrer">Duong Ngoc Mai</a> and Kavishwer Sathiamorthy</p></div>
       </footer>
     </div>
   );

@@ -35,12 +35,19 @@ describe('Landing', () => {
   it('renders a public overview of the actual course tools', () => {
     renderPage();
     expect(screen.getByRole('heading', { level: 1, name: /Learn better with course AI/i })).toBeInTheDocument();
-    for (const name of ['Answers with sources', 'Notes and webcasts', 'Flashcards for revision', 'Built for your course']) {
+    for (const name of ['Answers with sources', 'Notes and webcasts', 'Built for your course']) {
       expect(screen.getByRole('heading', { name })).toBeInTheDocument();
     }
     expect(screen.getByText('Illustrative course conversation')).toBeInTheDocument();
     expect(screen.getByText(/Use your email and password/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /guest|NUS account/i })).not.toBeInTheDocument();
+  });
+
+  it('omits flashcard promotion and credits both developers', () => {
+    const { container } = renderPage();
+    expect(screen.queryAllByText(/flashcards?/i)).toHaveLength(0);
+    expect(container.querySelector('.landing-flashcard')).toBeNull();
+    expect(screen.getByRole('contentinfo')).toHaveTextContent('Developed by Duong Ngoc Mai and Kavishwer Sathiamorthy');
   });
 
   it('sends every sign-in CTA to the existing email and password flow', () => {

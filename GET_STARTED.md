@@ -57,8 +57,6 @@ The core feature: `/chat/:conversationId?`, backed by the `rag-chat` edge functi
 
 **Custom instructions**: students can set free-text personal instructions in Settings, which are injected into the system prompt on every one of their chat requests (RAG and non-RAG paths alike) for persistent, cross-conversation personalization.
 
-**Flashcard generation**: from any assistant answer, generate 3–10 flashcards (`gpt-5.6-luna`) sized to the amount of context available (grows with cited-source length, capped at 10). Built from the answer plus up to 6 cited source chunks. No retry on rate-limit — a 429 surfaces directly as an error toast.
-
 ## Materials
 
 Admins upload course materials in two pipelines, both async and job-tracked.
@@ -125,7 +123,7 @@ Students and admins can update their profile and set **custom instructions** (se
 
 - **Frontend**: React 18, Vite, TypeScript, React Router, TanStack Query, Tailwind CSS, shadcn/ui (Radix primitives).
 - **Backend**: Supabase — Postgres with pgvector, Row Level Security, Edge Functions (Deno).
-- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat; `gpt-5.6-luna` for flashcards), OpenAI `text-embedding-3-large` for embeddings, Gemini (`gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-5.6-luna`, AssemblyAI (video transcription).
+- **AI/ML**: OpenAI (`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` for chat), OpenAI `text-embedding-3-large` for embeddings, Gemini (`gemini-3.8-flash` Vision only for legacy `.doc` OCR). PDF/image OCR uses OpenAI `gpt-5.6-luna`, AssemblyAI (video transcription).
 
 ## Local development
 
@@ -157,4 +155,3 @@ Requires a `.env` with Supabase project credentials and provider API keys (`GEMI
 | Abandoned video cleanup | Uploads older than 24 hours; cleanup sweep every 15 minutes | Required external schedule |
 | Video upload progress bar | Actual bytes accepted by resumable Storage upload | Network driven |
 | Admin analytics default range | Last 30 days from "now"; "reset" re-anchors to current time | Rolling window |
-| Flashcard count generated | 3–10 cards, scaled by available source context | Dynamic, content-driven |
