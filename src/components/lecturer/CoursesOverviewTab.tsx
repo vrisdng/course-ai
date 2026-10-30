@@ -25,7 +25,6 @@ interface CoursesOverviewTabProps {
   isAdmin: boolean;
   courses: Course[];
   isLoadingCourses: boolean;
-  enrollmentCodeByCourseId: Record<string, string>;
   newCourseName: string;
   newCourseCode: string;
   newCourseDescription: string;
@@ -35,7 +34,6 @@ interface CoursesOverviewTabProps {
   onNewCourseDescriptionChange: (value: string) => void;
   onCreateCourse: () => void;
   onDeleteCourse: (course: Course) => void;
-  onOpenAddStudentsDialog: (course: Course) => void;
   academicTerms: AcademicTerm[];
   isLoadingTerms: boolean;
   newTermSemester: '1' | '2';
@@ -53,7 +51,6 @@ export function CoursesOverviewTab({
   isAdmin,
   courses,
   isLoadingCourses,
-  enrollmentCodeByCourseId,
   newCourseName,
   newCourseCode,
   newCourseDescription,
@@ -63,7 +60,6 @@ export function CoursesOverviewTab({
   onNewCourseDescriptionChange,
   onCreateCourse,
   onDeleteCourse,
-  onOpenAddStudentsDialog,
   academicTerms,
   isLoadingTerms,
   newTermSemester,
@@ -134,14 +130,13 @@ export function CoursesOverviewTab({
               <TableRow>
                 <TableHead>Course Name</TableHead>
                 <TableHead>Code</TableHead>
-                <TableHead>Enrollment Code</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoadingCourses ? (
                 <TableRow>
-                  <TableCell colSpan={4}>
+                  <TableCell colSpan={3}>
                     <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Loading courses...
@@ -150,7 +145,7 @@ export function CoursesOverviewTab({
                 </TableRow>
               ) : courses.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={3} className="text-center text-sm text-muted-foreground">
                     No courses created yet.
                   </TableCell>
                 </TableRow>
@@ -159,12 +154,8 @@ export function CoursesOverviewTab({
                   <TableRow key={course.id} className={stackedTable.row}>
                     <TableCell className={`${stackedTable.plainCell} text-base font-semibold sm:text-sm sm:font-medium sm:whitespace-nowrap`}>{course.name}</TableCell>
                     <TableCell data-label="Code" className={stackedTable.cell}>{course.code || '-'}</TableCell>
-                    <TableCell data-label="Enrollment code" className={`${stackedTable.cell} font-mono text-xs text-muted-foreground sm:whitespace-nowrap`}>{enrollmentCodeByCourseId[course.id] ?? 'N/A'}</TableCell>
                     <TableCell className={stackedTable.actionsCell}>
                       <div className={stackedTable.actions}>
-                        <Button type="button" size="sm" variant="outline" onClick={() => onOpenAddStudentsDialog(course)}>
-                          Generate Code
-                        </Button>
                         <Button type="button" size="sm" variant="outline" className="gap-1.5" asChild>
                           <Link to={`/admin-dashboard/courses/${course.id}/students`}>
                             <Users className="h-4 w-4" />

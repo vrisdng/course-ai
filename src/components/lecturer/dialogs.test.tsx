@@ -2,7 +2,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Material } from '@/features/materials/types';
 import { EditFileNameDialog } from './EditFileNameDialog';
-import { EnrollmentCodeDialog } from './EnrollmentCodeDialog';
 import { LinkedUrlDialog } from './LinkedUrlDialog';
 import { TranscriptDialog } from './TranscriptDialog';
 
@@ -63,19 +62,4 @@ describe('lecturer material dialogs', () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 
-  it('generates, copies, and regenerates enrollment codes across dialog states', () => {
-    const onGenerateCode = vi.fn(); const onCopyCode = vi.fn(); const course = { id: 'c1', name: 'Algorithms', code: 'CS101' };
-    const { rerender } = render(<EnrollmentCodeDialog course={course} code={null} expiresAt={null} isLoading={false}
-      isGenerating={false} onClose={vi.fn()} onCopyCode={onCopyCode} onGenerateCode={onGenerateCode} />);
-    expect(screen.getByText(/No enrollment code exists/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Generate Code' }));
-    expect(onGenerateCode).toHaveBeenCalledTimes(1);
-    rerender(<EnrollmentCodeDialog course={course} code="ABC123" expiresAt="2026-08-01T00:00:00Z" isLoading={false}
-      isGenerating={false} onClose={vi.fn()} onCopyCode={onCopyCode} onGenerateCode={onGenerateCode} />);
-    expect(screen.getByText('ABC123')).toBeInTheDocument();
-    expect(screen.getByText(/Expires/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy Code' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Regenerate Code' }));
-    expect(onCopyCode).toHaveBeenCalledWith('ABC123'); expect(onGenerateCode).toHaveBeenCalledTimes(2);
-  });
 });

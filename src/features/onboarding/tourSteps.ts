@@ -66,7 +66,7 @@ export const STUDENT_CHAT_TOUR: TourStepDefinition[] = [
     id: 'course',
     title: 'Pick your course',
     description:
-      'Choose the course you want to ask about. If your lecturer gave you an invite code, enroll here too.',
+      'Choose the course you want to ask about. Contact your lecturer if a course is missing.',
     targets: ['course-picker', 'mobile-nav'],
     side: 'right',
   },

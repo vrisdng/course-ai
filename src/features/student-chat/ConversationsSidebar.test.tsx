@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationsSidebar } from './ConversationsSidebar';
@@ -14,7 +14,7 @@ const props = () => ({
   isCollapsed: false, searchQuery: '', availableCourses: [{ id: 'course-1', name: 'Algorithms', code: 'CS101' }],
   selectedCourseId: 'course-1', isLoadingCourses: false, onSelectConversation: vi.fn(), onStartNewConversation: vi.fn(),
   onDeleteConversation: vi.fn(), onClearHistory: vi.fn(), onToggleCollapse: vi.fn(), onSearchChange: vi.fn(),
-  onChangeCourse: vi.fn(), onEnroll: vi.fn().mockResolvedValue(undefined), showEnroll: true,
+  onChangeCourse: vi.fn(),
 });
 const renderSidebar = (value: ReturnType<typeof props>) => render(<MemoryRouter><ConversationsSidebar {...value} /></MemoryRouter>);
 
@@ -57,23 +57,12 @@ describe('ConversationsSidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Databases' }));
     expect(value.onChangeCourse).toHaveBeenCalledWith('course-2');
   });
-  it('normalizes invite codes and closes after successful enrollment', async () => {
+  it('shows lecturer guidance when no courses are available and has no enrollment form', () => {
     const value = props(); value.availableCourses = []; value.selectedCourseId = null; renderSidebar(value);
-    fireEvent.click(screen.getByRole('button', { name: 'Enroll in Course' }));
-    const input = screen.getByLabelText('Invite code');
-    fireEvent.change(input, { target: { value: ' ab3x7 ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Enroll' }));
-    await waitFor(() => expect(value.onEnroll).toHaveBeenCalledWith('AB3X7'));
-    await waitFor(() => expect(screen.queryByText('Enroll in a Course')).not.toBeInTheDocument());
-  });
-  it('shows enrollment failures and keeps the manager open for retry', async () => {
-    const value = props(); value.availableCourses = []; value.selectedCourseId = null;
-    value.onEnroll.mockRejectedValueOnce(new Error('Invalid invite')); renderSidebar(value);
-    fireEvent.click(screen.getByRole('button', { name: 'Enroll in Course' }));
-    fireEvent.change(screen.getByLabelText('Invite code'), { target: { value: 'badcode' } });
-    fireEvent.keyDown(screen.getByLabelText('Invite code'), { key: 'Enter' });
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Invalid invite'));
-    expect(screen.getByText('Enroll in a Course')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Course' }));
+    expect(screen.getByText(/Contact your lecturer to be added to your course/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Invite code')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enroll' })).not.toBeInTheDocument();
   });
   it('renders drawer layout without the desktop rail chrome', () => {
     const value = props(); value.isCollapsed = true;

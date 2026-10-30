@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, MessageSquare, MoreVertical, Plus, Search, Settings, Trash2, UserPlus, X } from 'lucide-react';
-import { toast } from 'sonner';
+import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, MessageSquare, MoreVertical, Plus, Search, Settings, Trash2, X } from 'lucide-react';
 
 import { Link } from 'react-router-dom';
 
@@ -19,7 +18,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
@@ -48,9 +46,6 @@ interface ConversationsSidebarProps {
   onToggleCollapse: () => void;
   onSearchChange: (query: string) => void;
   onChangeCourse: (courseId: string) => void;
-  /** Called with the trimmed, uppercased invite code. Should throw on failure. */
-  onEnroll: (code: string) => Promise<void>;
-  showEnroll: boolean;
   /**
    * `sidebar` (default) renders the collapsible desktop rail, hidden below `md`.
    * `drawer` renders the same content without the rail chrome, for use inside a phone sheet.
@@ -75,14 +70,10 @@ export function ConversationsSidebar({
   onToggleCollapse,
   onSearchChange,
   onChangeCourse,
-  onEnroll,
-  showEnroll,
   layout = 'sidebar',
 }: ConversationsSidebarProps) {
   const isDrawer = layout === 'drawer';
   const [isCourseDialogOpen, setIsCourseDialogOpen] = useState(false);
-  const [enrollCode, setEnrollCode] = useState('');
-  const [isEnrolling, setIsEnrolling] = useState(false);
 
   const filteredConversations = searchQuery.trim()
     ? conversations.filter((c) =>
@@ -93,33 +84,11 @@ export function ConversationsSidebar({
   const selectedCourse = availableCourses.find((c) => c.id === selectedCourseId);
   const hasCourses = availableCourses.length > 0;
 
-  const handleEnrollSubmit = async () => {
-    const code = enrollCode.trim().toUpperCase();
-    if (!code) {
-      toast.error('Enter a course code');
-      return;
-    }
-    setIsEnrolling(true);
-    try {
-      await onEnroll(code);
-      setEnrollCode('');
-      setIsCourseDialogOpen(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to enroll');
-    } finally {
-      setIsEnrolling(false);
-    }
-  };
-
   const courseButtonLabel = isLoadingCourses
     ? 'Loading courses...'
-    : !hasCourses && showEnroll
-      ? 'Enroll in Course'
-      : selectedCourse
-        ? `${selectedCourse.name}${selectedCourse.code ? ` (${selectedCourse.code})` : ''}`
-        : 'Select Course';
-
-  const CourseIcon = !hasCourses && showEnroll ? UserPlus : BookOpen;
+    : selectedCourse
+      ? `${selectedCourse.name}${selectedCourse.code ? ` (${selectedCourse.code})` : ''}`
+      : 'Select Course';
 
   if (isCollapsed && !isDrawer) {
     return (
@@ -196,7 +165,7 @@ export function ConversationsSidebar({
               onClick={() => setIsCourseDialogOpen(true)}
               data-tour="course-picker"
             >
-              <CourseIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="flex-1 truncate text-left">{courseButtonLabel}</span>
             </Button>
           </div>
@@ -301,14 +270,12 @@ export function ConversationsSidebar({
       </aside>
 
       {/* Course Manager Dialog */}
-      <Dialog open={isCourseDialogOpen} onOpenChange={(open) => { if (!isEnrolling) setIsCourseDialogOpen(open); }}>
+      <Dialog open={isCourseDialogOpen} onOpenChange={setIsCourseDialogOpen}>
         <DialogContent className="sm:max-w-2xl w-full">
           <DialogHeader>
-            <DialogTitle>{hasCourses ? 'Manage Courses' : 'Enroll in a Course'}</DialogTitle>
+            <DialogTitle>Courses</DialogTitle>
             <DialogDescription>
-              {hasCourses
-                ? 'Switch between your enrolled courses or join a new one.'
-                : 'Enter the invite code provided by your instructor.'}
+              {hasCourses ? 'Switch between your enrolled courses.' : 'Contact your lecturer to be added to your course using your email and name.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -347,41 +314,6 @@ export function ConversationsSidebar({
             </div>
           )}
 
-          {/* Enroll form */}
-          {showEnroll && (
-            <>
-              {hasCourses && <div className="border-t border-border/60" />}
-              <div className="space-y-3 min-w-0">
-                {hasCourses && (
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Enroll in Another Course</p>
-                )}
-                <div className="space-y-1.5">
-                  <Label htmlFor="sidebar-enroll-code">Invite code</Label>
-                  <Input
-                    id="sidebar-enroll-code"
-                    placeholder="e.g. AB3X7KM2"
-                    value={enrollCode}
-                    onChange={(e) => setEnrollCode(e.target.value.toUpperCase())}
-                    maxLength={8}
-                    className="font-mono tracking-widest"
-                    disabled={isEnrolling}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleEnrollSubmit(); } }}
-                  />
-                </div>
-                <Button
-                  className="w-full gap-2"
-                  onClick={() => void handleEnrollSubmit()}
-                  disabled={isEnrolling || enrollCode.trim().length === 0}
-                >
-                  {isEnrolling ? (
-                    <><Loader2 className="h-4 w-4 animate-spin" />Enrolling...</>
-                  ) : (
-                    <><UserPlus className="h-4 w-4" />Enroll</>
-                  )}
-                </Button>
-              </div>
-            </>
-          )}
         </DialogContent>
       </Dialog>
     </>

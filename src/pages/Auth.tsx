@@ -43,8 +43,7 @@ export default function Auth() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, profile, isLoading: authLoading } = useAuth();
-  const inviteCode = (searchParams.get('invite') || '').trim();
-  const inviteEmailParam = (searchParams.get('email') || '').trim().toLowerCase();
+  const emailParam = (searchParams.get('email') || '').trim().toLowerCase();
   
   const [activeTab, setActiveTab] = useState(searchParams.get('mode') === 'signup' ? 'signup' : 'signin');
   const [isLoading, setIsLoading] = useState(false);
@@ -71,25 +70,17 @@ export default function Auth() {
   });
 
   useEffect(() => {
-    if (!inviteEmailParam) {
+    if (!emailParam) {
       return;
     }
-    signInForm.setValue('email', inviteEmailParam);
-    signUpForm.setValue('email', inviteEmailParam);
-    forgotPasswordForm.setValue('email', inviteEmailParam);
-  }, [inviteEmailParam, signInForm, signUpForm, forgotPasswordForm]);
+    signInForm.setValue('email', emailParam);
+    signUpForm.setValue('email', emailParam);
+    forgotPasswordForm.setValue('email', emailParam);
+  }, [emailParam, signInForm, signUpForm, forgotPasswordForm]);
 
   // Redirect if already authenticated
   useEffect(() => {
     if (!authLoading && user && profile) {
-      if (inviteCode) {
-        const params = new URLSearchParams();
-        params.set('invite', inviteCode);
-        params.set('email', inviteEmailParam || profile.email);
-        navigate(`/?${params.toString()}`, { replace: true });
-        return;
-      }
-
       const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
       if (from) {
         navigate(from, { replace: true });
@@ -100,7 +91,7 @@ export default function Auth() {
         );
       }
     }
-  }, [user, profile, authLoading, navigate, location, inviteCode, inviteEmailParam]);
+  }, [user, profile, authLoading, navigate, location]);
 
   const handleSignIn = async (data: SignInFormData) => {
     setIsLoading(true);
@@ -134,13 +125,8 @@ export default function Auth() {
     setSuccessMessage(null);
     
     try {
-      const redirectParams = new URLSearchParams();
-      if (inviteCode) {
-        redirectParams.set('invite', inviteCode);
-      }
-      redirectParams.set('email', data.email.trim().toLowerCase());
-      const redirectUrl = `${window.location.origin}/${redirectParams.toString() ? `?${redirectParams.toString()}` : ''}`;
-      
+      const redirectUrl = `${window.location.origin}/`;
+
       const { error } = await supabase.auth.signUp({
         email: data.email,
         password: data.password,
@@ -256,6 +242,11 @@ export default function Auth() {
       </Link>
 
       <Card className="w-full max-w-md">
+        {searchParams.has('invite') && (
+          <Alert className="m-6 w-auto">
+            <AlertDescription>Course invitation links have been retired. Contact your lecturer to be added to your course using your email and name.</AlertDescription>
+          </Alert>
+        )}
         {showOtpInput ? (
           <>
             <CardHeader className="text-center">
@@ -387,15 +378,6 @@ export default function Auth() {
             </CardHeader>
 
             <CardContent>
-              {inviteCode && (
-                <Alert className="mb-4">
-                  <CheckCircle2 className="h-4 w-4 text-success" />
-                  <AlertDescription>
-                    You are joining via course invite. Use the invited email to continue enrollment.
-                  </AlertDescription>
-                </Alert>
-              )}
-
               {error && (
                 <Alert variant="destructive" className="mb-4">
                   <AlertCircle className="h-4 w-4" />
