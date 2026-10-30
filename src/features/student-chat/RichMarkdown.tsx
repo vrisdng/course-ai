@@ -11,7 +11,6 @@ import rehypeRaw from 'rehype-raw';
 import { useState } from 'react';
 
 import {
-  groupAdjacentCitations,
   isWebcastCitation,
   markdownWithCitationLinks,
   normalizeHeadings,
@@ -173,45 +172,31 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
             },
             a: ({ href, children }) => {
               if (href?.startsWith('citation:')) {
-                const key = href.split(':')[1];
-                const nums = key.split('+').map(Number);
-                const resolvedCitations = nums
-                  .map((n) => citations[n - 1])
-                  .filter(Boolean) as NonNullable<typeof citations>[number][];
+                const number = Number(href.split(':')[1]);
+                const citation = citations[number - 1];
 
-                if (nums.every(Number.isFinite)) {
-                  const displayNum = nums.join('·');
-
-                  if (resolvedCitations.length === 0) {
+                if (Number.isFinite(number)) {
+                  if (!citation) {
                     return (
                       <span className="mx-0.5 inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                        [{displayNum}]
+                        [{number}]
                       </span>
                     );
                   }
 
-                  const anyWebcast = resolvedCitations.some(isWebcastCitation);
-                  const anyNotes = resolvedCitations.some((c) => !isWebcastCitation(c));
-                  const sourceLabel = [
-                    anyWebcast ? 'Webcast' : null,
-                    anyNotes ? 'Notes' : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ');
-
                   return (
                     <button
                       type="button"
-                      title={resolvedCitations.map((c) => c.documentName).join(' + ')}
+                      title={citation.documentName}
                       className="mx-0.5 inline-flex items-center gap-0.5 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary transition-colors hover:border-primary hover:bg-primary/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        onCitationClick?.(nums.length > 1 ? nums : nums[0]);
-                        onCitationOpen?.(resolvedCitations[0], nums[0]);
+                        onCitationClick?.(number);
+                        onCitationOpen?.(citation, number);
                       }}
                     >
-                      [{displayNum}] <span className="opacity-70">{sourceLabel}</span>
+                      [{number}] <span className="opacity-70">{isWebcastCitation(citation) ? 'Webcast' : 'Notes'}</span>
                     </button>
                   );
                 }
@@ -236,10 +221,7 @@ export function RichMarkdown({ content, citations = [], onCitationClick, onCitat
           }}
         >
           {markdownWithCitationLinks(
-            groupAdjacentCitations(
-              normalizeHeadings(normalizeMathDelimiters(hideStreamingBlockCitationMarkers(content))),
-              citations,
-            ),
+            normalizeHeadings(normalizeMathDelimiters(hideStreamingBlockCitationMarkers(content))),
             citations.length,
           )}
         </ReactMarkdown>
