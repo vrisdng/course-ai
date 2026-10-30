@@ -1,72 +1,103 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ auth: {} as Record<string, unknown>, invoke: vi.fn(), getSession: vi.fn(), toastError: vi.fn(), toastSuccess: vi.fn() }));
+const mocks = vi.hoisted(() => ({ auth: {} as Record<string, unknown>, invoke: vi.fn(), getSession: vi.fn() }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => mocks.auth }));
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { functions: { invoke: mocks.invoke }, auth: { getSession: mocks.getSession } } }));
-vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
+import { PasswordChangeGate } from '@/components/auth/PasswordChangeGate';
 import Landing from './Landing';
 
-const renderPage = (entry = '/') => render(<MemoryRouter initialEntries={[entry]}><Routes>
-  <Route path="/" element={<Landing />} /><Route path="/chat" element={<div>chat destination</div>} />
-  <Route path="/auth" element={<div>auth destination</div>} />
-</Routes></MemoryRouter>);
+function SetupDestination() {
+  const location = useLocation();
+  return <div>setup destination:{location.state?.from}</div>;
+}
+
+function Page({ gated = false }: { gated?: boolean }) {
+  const routes = <Routes>
+    <Route path="/" element={<Landing />} />
+    <Route path="/chat" element={<div>chat destination</div>} />
+    <Route path="/admin-dashboard" element={<div>admin destination</div>} />
+    <Route path="/auth" element={<div>auth destination</div>} />
+    <Route path="/reset-password" element={<SetupDestination />} />
+  </Routes>;
+  return gated ? <PasswordChangeGate>{routes}</PasswordChangeGate> : routes;
+}
+
+const renderPage = (entry = '/', gated = false) => render(<MemoryRouter initialEntries={[entry]}><Page gated={gated} /></MemoryRouter>);
 
 describe('Landing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.auth = { isAdmin: false, user: null, profile: null, isLoading: false, refreshProfile: vi.fn() };
-    mocks.getSession.mockResolvedValue({ data: { session: null } });
+    mocks.auth = { user: null, profile: null, isLoading: false, isAdmin: false };
   });
-  it('renders the complete product overview and role-aware primary actions', () => {
-    const { unmount } = renderPage();
-    expect(screen.getByRole('heading', { name: /Learn from your materials/ })).toBeInTheDocument();
-    expect(screen.getByText('Upload course files')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Open chat' }).length).toBeGreaterThan(0); unmount();
-    mocks.auth.isAdmin = true; renderPage();
-    expect(screen.getAllByRole('link', { name: 'Open dashboard' }).length).toBeGreaterThan(0);
+
+  it('renders a public overview of the actual course tools', () => {
+    renderPage();
+    expect(screen.getByRole('heading', { level: 1, name: /Learn better with course AI/i })).toBeInTheDocument();
+    for (const name of ['Answers with sources', 'Notes and webcasts', 'Built for your course']) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByText('Illustrative course conversation')).toBeInTheDocument();
+    expect(screen.getByText(/Use your email and password/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /guest|NUS account/i })).not.toBeInTheDocument();
   });
-  it('validates an anonymous invite and directs an existing account to sign in', async () => {
-    mocks.invoke.mockResolvedValue({ data: {
-      valid: true, reason: 'ok', invitedEmail: 'student@example.test', emailMatchesInvite: true,
-      accountExists: true, alreadyEnrolled: false, course: { id: 'c1', name: 'Algorithms', code: 'CS101' },
-    }, error: null });
-    renderPage('/?invite=ABC123&email=STUDENT%40EXAMPLE.TEST');
-    expect(await screen.findByText('Invite code is valid for student@example.test.')).toBeInTheDocument();
-    expect(screen.getByText(/Use this invite to enroll in Algorithms \(CS101\)/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sign In to Enroll' })).toHaveAttribute('href', expect.stringContaining('invite=ABC123'));
-    expect(mocks.invoke).toHaveBeenCalledWith('check-course-invite', { body: { inviteCode: 'ABC123', email: 'student@example.test' } });
+
+  it('omits flashcard promotion and credits both developers', () => {
+    const { container } = renderPage();
+    expect(screen.queryAllByText(/flashcards?/i)).toHaveLength(0);
+    expect(container.querySelector('.landing-flashcard')).toBeNull();
+    expect(screen.getByRole('contentinfo')).toHaveTextContent('Developed by Duong Ngoc Mai and Kavishwer Sathiamorthy');
   });
-  it('rechecks entered email and shows invite mismatch feedback', async () => {
-    mocks.invoke
-      .mockResolvedValueOnce({ data: { valid: true, reason: 'ok', invitedEmail: 'owner@example.test' }, error: null })
-      .mockResolvedValueOnce({ data: { valid: true, reason: 'ok', invitedEmail: 'owner@example.test', emailMatchesInvite: false }, error: null });
-    renderPage('/?invite=ABC123');
-    await screen.findByText('Invite code is valid for owner@example.test.');
-    fireEvent.change(screen.getByLabelText('Your email'), { target: { value: ' other@example.test ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Check My Account' }));
-    expect(await screen.findByText('This invite is for a different email address.')).toBeInTheDocument();
-    expect(mocks.invoke).toHaveBeenLastCalledWith('check-course-invite', { body: { inviteCode: 'ABC123', email: 'other@example.test' } });
+
+  it('sends every sign-in CTA to the existing email and password flow', () => {
+    renderPage('/?invite=OLD&email=student%40example.test');
+    const links = screen.getAllByRole('link', { name: /sign in/i });
+    expect(links.length).toBeGreaterThanOrEqual(2);
+    for (const link of links) expect(link).toHaveAttribute('href', '/auth?mode=signin');
+    fireEvent.click(links[0]);
+    expect(screen.getByText('auth destination')).toBeInTheDocument();
   });
-  it('redeems a valid signed-in invite, refreshes access, and enters chat', async () => {
-    const invite = { valid: true, reason: 'ok', invitedEmail: 'student@example.test', emailMatchesInvite: true, alreadyEnrolled: false };
-    mocks.auth = { isAdmin: false, user: { email: 'student@example.test' }, profile: { email: 'student@example.test' }, isLoading: false, refreshProfile: vi.fn() };
-    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'token' } } });
-    mocks.invoke.mockImplementation((name: string) => Promise.resolve(name === 'check-course-invite'
-      ? { data: invite, error: null } : { data: { success: true, status: 'enrolled' }, error: null }));
-    renderPage('/?invite=ABC123');
-    fireEvent.click(await screen.findByRole('button', { name: 'Enroll Now' }));
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('redeem-course-invite', { body: { inviteCode: 'ABC123' } }));
-    await screen.findByText('chat destination');
-    expect(mocks.auth.refreshProfile).toHaveBeenCalled();
-    expect(mocks.toastSuccess).toHaveBeenCalledWith('You have been enrolled.');
+
+  it('links navigation to real sections without nested interactive controls', () => {
+    const { container } = renderPage();
+    for (const link of container.querySelectorAll('a[href^="#"]')) {
+      expect(container.querySelector(link.getAttribute('href')!)).not.toBeNull();
+    }
+    expect(container.querySelector('a button, button a')).toBeNull();
   });
-  it('shows expired and provider validation errors', async () => {
-    mocks.invoke.mockResolvedValueOnce({ data: { valid: false, reason: 'expired' }, error: null });
-    const { unmount } = renderPage('/?invite=OLD');
-    expect(await screen.findByText('This invite has expired.')).toBeInTheDocument(); unmount();
-    mocks.invoke.mockResolvedValueOnce({ data: null, error: { message: 'Service unavailable' } });
-    renderPage('/?invite=BAD'); expect(await screen.findByText('Service unavailable')).toBeInTheDocument();
+
+  it.each([true, false])('waits for authentication and role readiness (auth loading: %s)', (isLoading) => {
+    mocks.auth = { ...mocks.auth, user: { id: 'student' }, isLoading };
+    const { rerender } = renderPage();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading your account');
+    expect(screen.queryByText('chat destination')).not.toBeInTheDocument();
+    mocks.auth = { ...mocks.auth, isLoading: false, profile: { role: 'admin' }, isAdmin: true };
+    rerender(<MemoryRouter><Page /></MemoryRouter>);
+    expect(screen.getByText('admin destination')).toBeInTheDocument();
+  });
+
+  it.each(['student', 'admin'])('redirects signed-in %s users to their app, including retired links', (role) => {
+    mocks.auth = { ...mocks.auth, user: { id: role }, profile: { role }, isAdmin: role === 'admin' };
+    renderPage('/?invite=OLD');
+    expect(screen.getByText(`${role === 'admin' ? 'admin' : 'chat'} destination`)).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.getSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['/?invite=OLD&email=student%40example.test', '/?invite='])('explains retired public links without checking or redeeming them: %s', (entry) => {
+    renderPage(entry);
+    expect(screen.getByText('Course invitation links have been retired.')).toBeInTheDocument();
+    expect(screen.getByText(/Contact your lecturer to be added to your course/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /enroll|check my account/i })).not.toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.getSession).not.toHaveBeenCalled();
+  });
+
+  it('preserves the required-password gate before any app redirect', () => {
+    mocks.auth = { ...mocks.auth, user: { app_metadata: { must_change_password: true } } };
+    renderPage('/?invite=OLD', true);
+    expect(screen.getByText('setup destination:/')).toBeInTheDocument();
+    expect(screen.queryByText('chat destination')).not.toBeInTheDocument();
   });
 });

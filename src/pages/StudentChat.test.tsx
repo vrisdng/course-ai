@@ -15,8 +15,7 @@ vi.mock('@/components/layout/MainLayout', () => ({ MainLayout: ({ children }: { 
 vi.mock('@/features/student-chat/ConversationsSidebar', () => ({ ConversationsSidebar: (props: Record<string, unknown>) => <aside>
   <span>{String(props.searchQuery)}</span><span>is-collapsed:{String(props.isCollapsed)}</span><button onClick={() => (props.onToggleCollapse as () => void)()}>toggle sidebar</button>
   <button onClick={() => (props.onStartNewConversation as () => void)()}>new conversation</button>
-  <button onClick={() => void (props.onEnroll as (code: string) => Promise<void>)('CODE123')}>enroll course</button>
-  <span>enroll-visible:{String(props.showEnroll)}</span>
+  <span>enroll-handler:{String(typeof props.onEnroll)}</span>
 </aside> }));
 vi.mock('@/features/student-chat/MessageList', () => ({ MessageList: (props: Record<string, unknown>) => <section>
   messages:{String((props.messages as unknown[]).length)} empty:{String(props.showEmptyState)}
@@ -113,17 +112,14 @@ describe('StudentChat page', () => {
     await waitFor(() => expect(screen.getByText('/chat')).toBeInTheDocument());
     expect(mocks.chat.startNewConversation).toHaveBeenCalled();
   });
-  it('redeems enrollment codes and refreshes profile and courses', async () => {
-    renderPage(); fireEvent.click(screen.getByRole('button', { name: 'enroll course' }));
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('redeem-course-invite', { body: { inviteCode: 'CODE123' } }));
-    await waitFor(() => expect(mocks.auth.refreshProfile).toHaveBeenCalled());
-    expect(mocks.chat.fetchAccessibleCourses).toHaveBeenCalled();
-    expect(mocks.toastSuccess).toHaveBeenCalledWith('Successfully enrolled!');
+  it('does not pass self-enrollment handlers to the sidebar', () => {
+    renderPage();
+    expect(screen.getByText('enroll-handler:undefined')).toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalled();
   });
-  it('hides enrollment for admins and displays course-loading state', () => {
-    mocks.auth.isAdmin = true; mocks.chat.isLoadingCourses = true; mocks.chat.selectedCourseId = null;
+  it('displays course-loading state', () => {
+    mocks.chat.isLoadingCourses = true; mocks.chat.selectedCourseId = null;
     renderPage(); expect(screen.getByText('Loading course...')).toBeInTheDocument();
-    expect(screen.getByText('enroll-visible:false')).toBeInTheDocument();
   });
   it('opens the conversations drawer on phones and closes it after choosing a conversation', () => {
     renderPage();

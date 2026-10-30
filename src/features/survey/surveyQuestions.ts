@@ -58,7 +58,7 @@ export const SURVEY_FEATURES = [
   'More file formats',
   'Offline access',
   'Group study',
-  'Export notes or flashcards',
+  'Export notes',
   'Progress tracking',
 ] as const;
 

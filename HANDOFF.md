@@ -17,7 +17,7 @@ All keys above should also be set on the Supabase project (separate from local `
 [src/pages/AdminDashboard.tsx](src/pages/AdminDashboard.tsx) does course management, term management, upload (drag/drop + validation + progress + video pipeline), material listing/filtering/pagination, linked-URL editing, filename editing, transcript viewing, reindexing, and deletion — all in one component, ~40 `useState` calls.
 
 **Update 2026-07-13:** The old half-built decomposition target (`MaterialUploadZone.tsx`, `MaterialsList.tsx`, `UploadProgressList.tsx`) was confirmed to no longer match the current upload UI (the live version has a richer pending-file list, per-file removal, and upload-index tracking those components never had) — deleted rather than resurrected. Instead extracted, all as props-driven presentational components (no state/handlers moved, parent still owns everything):
-- [LinkedUrlDialog.tsx](src/components/lecturer/LinkedUrlDialog.tsx), [TranscriptDialog.tsx](src/components/lecturer/TranscriptDialog.tsx), [EnrollmentCodeDialog.tsx](src/components/lecturer/EnrollmentCodeDialog.tsx) — the 3 standalone dialogs
+- [LinkedUrlDialog.tsx](src/components/lecturer/LinkedUrlDialog.tsx), [TranscriptDialog.tsx](src/components/lecturer/TranscriptDialog.tsx) — standalone dialogs; the enrollment-code dialog was retired in issue #104
 - [CoursesOverviewTab.tsx](src/components/lecturer/CoursesOverviewTab.tsx) — the "Courses Overview" tab's 3 cards (course create/list, academic term create/list/activate)
 
 `Material`, `Course`, `AcademicTerm`, `TranscriptSegment`, and `formatClock` are now exported from `AdminDashboard.tsx` for these to import.
@@ -83,7 +83,7 @@ The items below are **resolved** and kept here only as history. The active backl
 
 `.env` declares: `GEMINI_API_KEY`, `SUPABASE_ACCESS_TOKEN`, `VITE_SUPABASE_PROJECT_ID`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_SUPABASE_URL`, `OPENAI_API_KEY`, `ASSEMBLY_API_KEY`, `RESEND_API_KEY`. `.env.example` (names only) now exists — see it.
 
-`ASSEMBLY_API_KEY` (AssemblyAI) and `RESEND_API_KEY` (Resend email) usage wasn't traced to specific functions during this pass — likely `transcribe-video` and the course-invite functions respectively, but confirm before assuming either is dead.
+`ASSEMBLY_API_KEY` is used by video transcription. Invitation enrollment and its four Edge Functions were retired in issue #104; `RESEND_API_KEY` is no longer used by application code. Keep historical exposed-key rotation work separate from current runtime configuration.
 
 ## Page images + block citations (2026-10-07, blocks 2026-10-09)
 
@@ -159,7 +159,7 @@ DOCX/PPTX uploads are converted to PDF and then processed as PDFs, so they get p
 
 ## Model consolidation — chat swapped to OpenAI-only (2026-07-13)
 
-`rag-chat`'s `smart`/`pro` tiers and `generate-flashcards` previously called Gemini for plain text-in/text-out chat generation. Both now go through OpenAI only, via a new shared wrapper [supabase/functions/_shared/llm.ts](supabase/functions/_shared/llm.ts) built on the Vercel AI SDK (`ai` + `@ai-sdk/openai`, pulled in via `esm.sh` like every other npm dependency in these functions — no import map needed). `GEMINI_API_KEY` is no longer read for chat.
+`rag-chat`'s `smart`/`pro` tiers previously called Gemini for plain text-in/text-out chat generation. They now go through OpenAI only, via a new shared wrapper [supabase/functions/_shared/llm.ts](supabase/functions/_shared/llm.ts) built on the Vercel AI SDK (`ai` + `@ai-sdk/openai`, pulled in via `esm.sh` like every other npm dependency in these functions — no import map needed). `GEMINI_API_KEY` is no longer read for chat.
 
 **Not swapped — still on Gemini, deliberately:**
 - **`process-material-job`'s `extractTextWithGemini`** — now used only for legacy `.doc` (PDF/image OCR moved to OpenAI `gpt-5.6-luna` via `_shared/llm.ts#generateDocumentText` on 2026-09-21). It's document OCR: raw file bytes sent to Gemini's vision API (`generateContent` with `inlineData`), returning page-marked extracted text. This is the pipeline `gemini-vision.md` documents (retry/RPM tuning, 15MB file ceiling). Swapping providers here means adopting a new input format and re-validating extraction quality, not a config change — see the GLM-OCR note below for a candidate alternative.

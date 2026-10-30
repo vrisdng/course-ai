@@ -24,6 +24,17 @@ describe('survey questions', () => {
     expect(matrix?.features).toEqual(SURVEY_FEATURES);
   });
 
+  it('offers note export without advertising flashcards', () => {
+    expect(SURVEY_FEATURES).toContain('Export notes');
+    expect(SURVEY_FEATURES.some((feature) => /flashcards?/i.test(feature))).toBe(false);
+    expect(buildSurveyAnswers({
+      [matrixAnswerKey('feature-importance', 'Export notes')]: '4',
+    })).toEqual([{
+      question: '18. Rate the importance of each of the following. — Export notes',
+      answer: '4',
+    }]);
+  });
+
   it('keeps questions optional by omitting blank answers', () => {
     expect(buildSurveyAnswers({})).toEqual([]);
     expect(buildSurveyAnswers({ 'wanted-feature': '   ' })).toEqual([]);

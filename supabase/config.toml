@@ -36,19 +36,7 @@ verify_jwt = false
 [functions.backfill-embeddings]
 verify_jwt = false
 
-[functions.manage-course-invites]
-verify_jwt = false
-
-[functions.check-course-invite]
-verify_jwt = false
-
-[functions.redeem-course-invite]
-verify_jwt = false
-
 [functions.analytics-chat]
-verify_jwt = false
-
-[functions.generate-course-code]
 verify_jwt = false
 
 [functions.signed-media]
