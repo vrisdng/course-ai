@@ -152,6 +152,21 @@ describe('ResetPassword', () => {
       expect(mocks.refreshProfile).toHaveBeenCalledOnce();
       expect(mocks.updateUser).toHaveBeenCalledOnce();
     });
+    it('finishes a named import after password replacement without asking for a name again', async () => {
+      mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: true } },
+        profile: { role: 'student', full_name: 'Ada Lovelace' }, isLoading: false };
+      mocks.readProfile.mockResolvedValue({ data: { full_name: 'Ada Lovelace' }, error: null });
+      renderPage();
+      expect(screen.getByLabelText('New Password')).toBeInTheDocument();
+      fillPasswords('MyOwnPassword9!');
+      fireEvent.click(screen.getByRole('button', { name: 'Update Password' }));
+      expect(await screen.findByText('chat destination')).toBeInTheDocument();
+      expect(mocks.updateUser).toHaveBeenCalledExactlyOnceWith({ password: 'MyOwnPassword9!' });
+      expect(mocks.refreshSession).toHaveBeenCalledOnce();
+      expect(mocks.readProfile).toHaveBeenCalledOnce();
+      expect(mocks.updateProfile).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText('Full name')).not.toBeInTheDocument();
+    });
     it('resumes unfinished name setup without changing the password again', async () => {
       mocks.authState = { user: { id: 'u1', app_metadata: { must_change_password: false } },
         profile: { role: 'student', full_name: '' }, isLoading: false, refreshProfile: mocks.refreshProfile };

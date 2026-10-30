@@ -119,6 +119,15 @@ Also apply `20261020143000_student_import_auth_lookup.sql` before deploying `imp
 
 The migration adds a password-update trigger, restrictive RLS policies for existing app tables and Storage objects, and the Data API pre-request hook `public.require_password_setup` to cover RPCs. It refuses to overwrite a different pre-request hook; compose any existing hook explicitly. New tables exposed through Realtime or Storage should also enforce `public.password_setup_complete()` in restrictive policies.
 
+The import endpoint accepts either the legacy `{ courseId, emails: string[] }` body or
+`{ courseId, students: [{ email, fullName? }] }`, with 1–20 entries per request; do not
+send both lists. Names are trimmed and must contain 1–200 characters when supplied.
+Duplicate emails are merged; conflicting supplied names are rejected before any writes.
+Deploy `import-course-students` before releasing the frontend that sends `students`.
+No new migration is needed for names: the existing signup trigger copies
+`user_metadata.full_name` into `profiles.full_name` when creating the account.
+Names are applied only to new accounts; existing names, roles and passwords are preserved.
+
 New accounts have confirmed emails and the shared initial password, with server-owned `must_change_password` metadata. Changing the password clears that marker atomically; no recovery email is required. Ordinary forgot-password recovery still depends on SMTP limits. SQL assertions for the migration are in `supabase/tests/student_password_setup.sql` and must run in an isolated database.
 
 ### Stored video rollout
