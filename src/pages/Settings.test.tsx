@@ -121,7 +121,7 @@ describe('Settings', () => {
   });
 
   it('uses the Auth email instead of a stale profile email and passes it in router state', async () => {
-    mocks.auth = { ...mocks.auth, profile: { ...mocks.auth.profile, email: 'stale@example.test' } };
+    mocks.auth = { ...mocks.auth, profile: { ...(mocks.auth.profile as Record<string, unknown>), email: 'stale@example.test' } };
     renderSettings();
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('list_accessible_courses'));
     fireEvent.click(screen.getByRole('button', { name: 'Email me a reset code' }));
