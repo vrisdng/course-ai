@@ -37,12 +37,19 @@ describe('MessageList', () => {
     fireEvent.click(screen.getByRole('button', { name: /\[1\]/ }));
     expect(onCitationClick).toHaveBeenCalledWith(message, 1);
   });
-  it('groups adjacent webcast and note citations into one composite control', () => {
-    const onCitationClick = vi.fn();
-    const message: Message = { id: 'a1', role: 'assistant', content: 'Claim <<cite:1>> <<cite:2>>', citations: [citation('video', 'Lecture'), citation('pdf', 'Notes')] };
-    render(<MessageList messages={[message]} onSuggestionClick={vi.fn()} onOpenSources={vi.fn()} onCitationClick={onCitationClick} />);
-    const composite = screen.getByRole('button', { name: /\[1·2\].*Webcast.*Notes/ });
-    expect(composite).toHaveAttribute('title', 'Lecture + Notes');
-    fireEvent.click(composite); expect(onCitationClick).toHaveBeenCalledWith(message, [1, 2]);
-  });
+  it.each(['<<cite:1>> <<cite:2>>', '<<cite:1+2>>'])(
+    'renders separate clickable source families for %s', (markers) => {
+      const onCitationClick = vi.fn();
+      const message: Message = { id: 'a1', role: 'assistant', content: `Claim ${markers}`, citations: [citation('video', 'Lecture'), citation('pdf', 'Notes')] };
+      render(<MessageList messages={[message]} onSuggestionClick={vi.fn()} onOpenSources={vi.fn()} onCitationClick={onCitationClick} />);
+      const webcast = screen.getByRole('button', { name: /\[1\].*Webcast/ });
+      const notes = screen.getByRole('button', { name: /\[2\].*Notes/ });
+      expect(webcast).toHaveAttribute('title', 'Lecture');
+      expect(notes).toHaveAttribute('title', 'Notes');
+      fireEvent.click(webcast);
+      fireEvent.click(notes);
+      expect(onCitationClick).toHaveBeenNthCalledWith(1, message, 1);
+      expect(onCitationClick).toHaveBeenNthCalledWith(2, message, 2);
+    },
+  );
 });

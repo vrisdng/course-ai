@@ -21,7 +21,7 @@ describe('SystemMaintenancePanel', () => {
     );
 
     expect(screen.getAllByText('Do this when:')).toHaveLength(3);
-    expect(screen.getByText(/courses, terms, or enrollment codes look outdated/)).toBeInTheDocument();
+    expect(screen.getByText(/courses or terms look outdated/)).toBeInTheDocument();
     expect(screen.getByText(/a document stays in Queued or Processing/)).toBeInTheDocument();
     expect(screen.getByText(/the page looks outdated after a deployment/)).toBeInTheDocument();
 

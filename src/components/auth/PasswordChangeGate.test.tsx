@@ -18,11 +18,16 @@ function page(path: string) {
 }
 describe('PasswordChangeGate', () => {
   beforeEach(() => { state.auth = { user: null, isLoading: false }; });
-  it('blocks all normal pages and preserves invite parameters', () => {
+  it('blocks normal pages without forwarding retired invite parameters', () => {
     state.auth.user = { app_metadata: { must_change_password: true } };
     page('/?invite=abc&email=student%40example.test');
-    expect(screen.getByText('setup:/?invite=abc&email=student%40example.test')).toBeInTheDocument();
+    expect(screen.getByText('setup:/')).toBeInTheDocument();
     expect(screen.queryByText('normal access')).not.toBeInTheDocument();
+  });
+  it('preserves unrelated navigation parameters and anchors during setup', () => {
+    state.auth.user = { app_metadata: { must_change_password: true } };
+    page('/settings?tab=profile#password');
+    expect(screen.getByText('setup:/settings?tab=profile#password')).toBeInTheDocument();
   });
   it('allows setup itself and users who do not need setup', () => {
     state.auth.user = { app_metadata: { must_change_password: true } };
@@ -31,10 +36,10 @@ describe('PasswordChangeGate', () => {
     state.auth.user = { app_metadata: {} };
     page('/chat'); expect(screen.getByText('normal access')).toBeInTheDocument();
   });
-  it('defers invite redemption until setup when signing in from an invite', () => {
+  it('requires password setup when signing in from a retired invite', () => {
     state.auth.user = { app_metadata: { must_change_password: true } };
     page('/auth?invite=abc&email=student%40example.test');
-    expect(screen.getByText('setup:/?invite=abc&email=student%40example.test')).toBeInTheDocument();
+    expect(screen.getByText('setup:/auth')).toBeInTheDocument();
   });
   it('does not mount normal pages before authentication has loaded', () => {
     state.auth.isLoading = true;
@@ -43,6 +48,13 @@ describe('PasswordChangeGate', () => {
   it('resumes name setup after the imported student has changed their password', () => {
     state.auth.user = { app_metadata: { must_change_password: false } };
     state.auth.profile = { role: 'student', full_name: '  ' };
+    page('/chat');
+    expect(screen.getByText('setup:/chat')).toBeInTheDocument();
+    expect(screen.queryByText('normal access')).not.toBeInTheDocument();
+  });
+  it('requires password setup even when the imported student already has a name', () => {
+    state.auth.user = { app_metadata: { must_change_password: true } };
+    state.auth.profile = { role: 'student', full_name: 'Ada Lovelace' };
     page('/chat');
     expect(screen.getByText('setup:/chat')).toBeInTheDocument();
     expect(screen.queryByText('normal access')).not.toBeInTheDocument();

@@ -15,6 +15,9 @@ export function Footer() {
           <p className="text-sm text-muted-foreground">
             © {new Date().getFullYear()} CEEGPT. All rights reserved.
           </p>
+          <p className="text-center text-sm text-muted-foreground">
+            Developed by Duong Ngoc Mai and Kavishwer Sathiamorthy
+          </p>
         </div>
       </div>
     </footer>

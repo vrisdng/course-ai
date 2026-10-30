@@ -7,7 +7,7 @@ For the next developer picking this up. For *what* the app does, see [GET_STARTE
 - Node.js (any recent LTS — the repo has no `.nvmrc`/engines pin, matching the loose Lovable-scaffold origins of this project)
 - npm (use npm — the repo tracks `package-lock.json`; `bun.lockb` was removed)
 - A Supabase account with access to project `ksthojmoifnunsatmday` (see `supabase/config.toml`), or your own Supabase project if you're standing up a fresh environment
-- API keys for: Gemini, OpenAI, AssemblyAI, Resend (ask whoever owns the project for these, or provision your own — see [Environment variables](#3-environment-variables))
+- API keys for: Gemini, OpenAI, AssemblyAI (ask whoever owns the project for these, or provision your own — see [Environment variables](#3-environment-variables))
 
 ## 2. Clone and install
 
@@ -36,9 +36,6 @@ SUPABASE_ACCESS_TOKEN=
 GEMINI_API_KEY=
 OPENAI_API_KEY=
 ASSEMBLY_API_KEY=
-
-# Transactional email — used by the course-invite email flow
-RESEND_API_KEY=
 
 # PDF page renderer (api/render-pdf-pages.ts on Vercel) — set on BOTH Supabase
 # and Vercel (see steps 5 and 6). Never give these a VITE_ prefix.
@@ -89,7 +86,7 @@ supabase functions deploy
 Each function needs its own secrets set on the Supabase project (these are **separate** from your local `.env` — Edge Functions run on Supabase's infra, not your machine):
 
 ```sh
-supabase secrets set GEMINI_API_KEY=... OPENAI_API_KEY=... ASSEMBLY_API_KEY=... RESEND_API_KEY=...
+supabase secrets set GEMINI_API_KEY=... OPENAI_API_KEY=... ASSEMBLY_API_KEY=...
 supabase secrets set RENDER_SERVICE_URL=https://<production-domain>/api/render-pdf-pages RENDER_SERVICE_SECRET=...
 ```
 
@@ -113,13 +110,35 @@ supabase functions serve rag-chat --env-file .env
 
 ### Student import and required password setup
 
-Apply `20261020140000_require_imported_student_password_change.sql` before deploying `import-course-students`, `redeem-course-invite`, and `generate-flashcards`, then release the frontend normally. The importer fails closed if the migration's guard RPC is absent. Inspect hosted migration history before applying migrations; do not replay historical migrations against an existing database with incomplete migration records.
+Apply `20261020140000_require_imported_student_password_change.sql` before deploying `import-course-students`, then release the frontend normally. The importer fails closed if the migration's guard RPC is absent. Inspect hosted migration history before applying migrations; do not replay historical migrations against an existing database with incomplete migration records.
 
 Also apply `20261020143000_student_import_auth_lookup.sql` before deploying `import-course-students`. This server-only lookup resolves accounts by Auth email and reads profiles by user ID, so edited or stale profile emails cannot redirect enrollment. Its regression assertions are in `supabase/tests/student_import_lookup.sql` and must run in an isolated database.
 
 The migration adds a password-update trigger, restrictive RLS policies for existing app tables and Storage objects, and the Data API pre-request hook `public.require_password_setup` to cover RPCs. It refuses to overwrite a different pre-request hook; compose any existing hook explicitly. New tables exposed through Realtime or Storage should also enforce `public.password_setup_complete()` in restrictive policies.
 
+The import endpoint accepts either the legacy `{ courseId, emails: string[] }` body or
+`{ courseId, students: [{ email, fullName? }] }`, with 1–20 entries per request; do not
+send both lists. Names are trimmed and must contain 1–200 characters when supplied.
+Duplicate emails are merged; conflicting supplied names are rejected before any writes.
+Deploy `import-course-students` before releasing the frontend that sends `students`.
+No new migration is needed for names: the existing signup trigger copies
+`user_metadata.full_name` into `profiles.full_name` when creating the account.
+Names are applied only to new accounts; existing names, roles and passwords are preserved.
+
 New accounts have confirmed emails and the shared initial password, with server-owned `must_change_password` metadata. Changing the password clears that marker atomically; no recovery email is required. Ordinary forgot-password recovery still depends on SMTP limits. SQL assertions for the migration are in `supabase/tests/student_password_setup.sql` and must run in an isolated database.
+
+### Retire invitation enrollment
+
+Student enrollment now uses the email-and-name import on each course's **Students** page. Old `/?invite=...` links show contact-lecturer guidance without checking or redeeming codes. Academic course identifiers (`courses.code`) are unchanged.
+
+Coordinate this rollout in order:
+
+1. Deploy and verify `import-course-students` with the email-and-name import support, then release the frontend that removes invitation callers.
+2. Delete the deployed `check-course-invite`, `redeem-course-invite`, `generate-course-code`, and `manage-course-invites` Edge Functions. Removing their source/config does not delete hosted functions. Verify those four endpoint URLs are unavailable and cannot create invitations or enrollments.
+3. Apply `20261028100000_retire_course_invites.sql`. It permanently deletes invitation records and their table policies/indexes, preserves existing enrollments, and refuses unknown external dependencies instead of cascading. Run `supabase/tests/retire_course_invites.sql` against an isolated database before applying the retirement migration there.
+4. Regenerate database types with the Supabase CLI after migration. `RESEND_API_KEY` is no longer needed by the application; existing historical key-exposure rotation work still applies.
+
+Do not drop the table while an older frontend or any deployed invitation endpoint still uses it. Rollback requires restoring the table/data from a backup; existing student accounts and enrollments are independent of it.
 
 ### Stored video rollout
 

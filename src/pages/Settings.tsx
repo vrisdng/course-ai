@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -17,13 +18,13 @@ interface AccessibleCourse {
 }
 
 export default function Settings() {
-  const { profile, refreshProfile, isLoading, isAdmin } = useAuth();
+  const navigate = useNavigate();
+  const { user, profile, refreshProfile, isLoading } = useAuth();
   
   const [fullName, setFullName] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [enrollCode, setEnrollCode] = useState("");
-  const [isEnrolling, setIsEnrolling] = useState(false);
+  const [isSendingResetCode, setIsSendingResetCode] = useState(false);
   
   const [courses, setCourses] = useState<AccessibleCourse[]>([]);
   const [isLoadingCourses, setIsLoadingCourses] = useState(true);
@@ -79,43 +80,19 @@ export default function Settings() {
     }
   };
 
-  const handleEnroll = async () => {
-    if (!enrollCode.trim()) return;
-    setIsEnrolling(true);
+  const handleResetPassword = async () => {
+    const email = user?.email?.trim().toLowerCase();
+    if (!email || isSendingResetCode) return;
+
+    setIsSendingResetCode(true);
     try {
-      const { data, error } = await supabase.functions.invoke('redeem-course-invite', {
-        body: { inviteCode: enrollCode.trim().toUpperCase() },
-      });
-
-      if (error || data?.error) {
-        throw new Error(error?.message || data?.error || 'Invalid or expired code');
-      }
-
-      await refreshProfile();
-      // Refetch courses after enrolling
-      const { data: updatedCourses, error: refetchError } = await supabase.rpc('list_accessible_courses');
-      if (!refetchError && updatedCourses) {
-        setCourses(
-          updatedCourses.map((course) => ({
-            id: course.id,
-            name: course.name,
-            code: course.code,
-            accessRole: course.access_role,
-          }))
-        );
-      }
-
-      toast.success(
-        data?.status === 'already_enrolled'
-          ? 'You are already enrolled in this course.'
-          : 'Successfully enrolled!'
-      );
-      setEnrollCode("");
-    } catch (err) {
-      const message = (err as Error)?.message || 'Failed to enroll';
-      toast.error(message);
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) throw error;
+      navigate('/reset-password', { state: { email, requireRecoveryOtp: true, from: '/settings' } });
+    } catch (error) {
+      toast.error((error as Error)?.message || 'Failed to send a reset code');
     } finally {
-      setIsEnrolling(false);
+      setIsSendingResetCode(false);
     }
   };
 
@@ -175,6 +152,14 @@ export default function Settings() {
                 {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Changes
               </Button>
+              <div className="space-y-2 border-t pt-4">
+                <h2 className="text-sm font-medium">Reset password</h2>
+                <p className="text-xs text-muted-foreground">We’ll email a recovery code to {user?.email}.</p>
+                <Button variant="outline" onClick={handleResetPassword} disabled={isSendingResetCode || !user?.email}>
+                  {isSendingResetCode && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Email me a reset code
+                </Button>
+              </div>
             </div>
           </TabsContent>
 
@@ -227,26 +212,6 @@ export default function Settings() {
               ) : (
                 <div className="text-sm text-muted-foreground">
                   You are not enrolled in any courses yet.
-                </div>
-              )}
-              
-              {!isAdmin && (
-                <div className="mt-8 pt-6 border-t">
-                  <h4 className="text-md font-medium mb-2">Enroll in a New Course</h4>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Use your course invite code to gain access to a new course.
-                  </p>
-                  <div className="flex gap-2 max-w-md">
-                    <Input 
-                      placeholder="Course Invite Code" 
-                      value={enrollCode}
-                      onChange={(e) => setEnrollCode(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleEnroll()}
-                    />
-                    <Button onClick={handleEnroll} disabled={isEnrolling || !enrollCode.trim()}>
-                      {isEnrolling ? <Loader2 className="h-4 w-4 animate-spin" /> : "Enroll"}
-                    </Button>
-                  </div>
                 </div>
               )}
             </div>

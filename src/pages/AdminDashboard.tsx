@@ -5,7 +5,6 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { CoursesOverviewTab } from '@/components/lecturer/CoursesOverviewTab';
-import { EnrollmentCodeDialog } from '@/components/lecturer/EnrollmentCodeDialog';
 import { MaterialsTab } from '@/components/lecturer/MaterialsTab';
 import { CourseChatSettingsPanel } from '@/features/chat-settings/CourseChatSettingsPanel';
 import { SystemMaintenancePanel, type JobRecoveryResult } from '@/components/lecturer/SystemMaintenancePanel';
@@ -32,20 +31,9 @@ export default function AdminDashboard() {
   const [isCreatingCourse, setIsCreatingCourse] = useState(false);
   const [isCreatingTerm, setIsCreatingTerm] = useState(false);
   const [activatingTermId, setActivatingTermId] = useState<string | null>(null);
-  const [enrollmentCodeByCourseId, setEnrollmentCodeByCourseId] = useState<Record<string, string>>({});
-
-  const [addStudentsCourse, setAddStudentsCourse] = useState<Course | null>(null);
-  const [isGeneratingInvites, setIsGeneratingInvites] = useState(false);
-  const [isLoadingCourseCode, setIsLoadingCourseCode] = useState(false);
-  const [generatedCourseCode, setGeneratedCourseCode] = useState<string | null>(null);
-  const [courseCodeExpiresAt, setCourseCodeExpiresAt] = useState<string | null>(null);
-
   const fetchCourses = useCallback(async () => {
     setIsLoadingCourses(true);
-    const [coursesResult, codesResult] = await Promise.all([
-      supabase.from('courses').select('id, name, code').order('name'),
-      supabase.from('course_invites').select('course_id, invite_code').eq('is_course_code', true),
-    ]);
+    const coursesResult = await supabase.from('courses').select('id, name, code').order('name');
 
     if (coursesResult.error) {
       toast.error('Failed to load courses');
@@ -55,12 +43,6 @@ export default function AdminDashboard() {
 
     const nextCourses = (coursesResult.data || []) as Course[];
     setCourses(nextCourses);
-
-    const codeMap: Record<string, string> = {};
-    for (const row of codesResult.data || []) {
-      codeMap[row.course_id] = row.invite_code;
-    }
-    setEnrollmentCodeByCourseId(codeMap);
 
     setIsLoadingCourses(false);
   }, []);
@@ -131,7 +113,7 @@ export default function AdminDashboard() {
   const handleDeleteCourse = async (course: Course) => {
     const label = `${course.name}${course.code ? ` (${course.code})` : ''}`;
     const shouldDelete = window.confirm(
-      `Delete ${label}? This permanently removes the course and all its documents, chunks, and enrollment codes. This cannot be undone.`
+      `Delete ${label}? This permanently removes the course and all its documents, chunks, and enrollments. This cannot be undone.`
     );
     if (!shouldDelete) {
       return;
@@ -144,11 +126,6 @@ export default function AdminDashboard() {
     }
 
     setCourses((prev) => prev.filter((c) => c.id !== course.id));
-    setEnrollmentCodeByCourseId((prev) => {
-      const next = { ...prev };
-      delete next[course.id];
-      return next;
-    });
     toast.success('Course deleted');
   };
 
@@ -249,76 +226,6 @@ export default function AdminDashboard() {
     toast.success('Academic term deleted');
   };
 
-  const closeAddStudentsDialog = () => {
-    setAddStudentsCourse(null);
-    setGeneratedCourseCode(null);
-    setCourseCodeExpiresAt(null);
-    setIsGeneratingInvites(false);
-    setIsLoadingCourseCode(false);
-  };
-
-  const openAddStudentsDialog = async (course: Course) => {
-    setAddStudentsCourse(course);
-    setGeneratedCourseCode(null);
-    setCourseCodeExpiresAt(null);
-    setIsLoadingCourseCode(true);
-
-    const { data, error } = await supabase
-      .from('course_invites')
-      .select('invite_code, expires_at')
-      .eq('course_id', course.id)
-      .eq('is_course_code', true)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    setIsLoadingCourseCode(false);
-
-    if (error) {
-      console.error('Failed to load existing course code:', error);
-      return;
-    }
-
-    if (data) {
-      setGeneratedCourseCode(data.invite_code);
-      setCourseCodeExpiresAt(data.expires_at);
-    }
-  };
-
-  const copyText = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success('Copied');
-    } catch {
-      toast.error('Copy failed');
-    }
-  };
-
-  const handleGenerateCourseCode = async () => {
-    if (!addStudentsCourse) return;
-
-    setIsGeneratingInvites(true);
-
-    const { data, error } = await supabase.functions.invoke('generate-course-code', {
-      body: { courseId: addStudentsCourse.id },
-    });
-
-    setIsGeneratingInvites(false);
-
-    if (error || data?.error) {
-      toast.error(error?.message || data?.error || 'Failed to generate course code');
-      return;
-    }
-
-    const newCode = typeof data?.inviteCode === 'string' ? data.inviteCode : null;
-    setGeneratedCourseCode(newCode);
-    setCourseCodeExpiresAt(typeof data?.expiresAt === 'string' ? data.expiresAt : null);
-    if (newCode && addStudentsCourse) {
-      setEnrollmentCodeByCourseId((prev) => ({ ...prev, [addStudentsCourse.id]: newCode }));
-    }
-    toast.success('Course code generated');
-  };
-
   const handleRefreshDashboard = async (): Promise<void> => {
     await Promise.all([fetchCourses(), fetchAcademicTerms()]);
   };
@@ -335,17 +242,6 @@ export default function AdminDashboard() {
 
   return (
     <MainLayout showFooter={false}>
-      <EnrollmentCodeDialog
-        course={addStudentsCourse}
-        code={generatedCourseCode}
-        expiresAt={courseCodeExpiresAt}
-        isLoading={isLoadingCourseCode}
-        isGenerating={isGeneratingInvites}
-        onClose={closeAddStudentsDialog}
-        onCopyCode={(code) => void copyText(code)}
-        onGenerateCode={() => void handleGenerateCourseCode()}
-      />
-
       <div className="container py-6 sm:py-8">
         <div className="mb-6 flex flex-col gap-4 border-b border-border pb-6 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -393,7 +289,6 @@ export default function AdminDashboard() {
               isAdmin={profile?.role === 'admin'}
               courses={courses}
               isLoadingCourses={isLoadingCourses}
-              enrollmentCodeByCourseId={enrollmentCodeByCourseId}
               newCourseName={newCourseName}
               newCourseCode={newCourseCode}
               newCourseDescription={newCourseDescription}
@@ -403,7 +298,6 @@ export default function AdminDashboard() {
               onNewCourseDescriptionChange={setNewCourseDescription}
               onCreateCourse={() => void handleCreateCourse()}
               onDeleteCourse={(course) => void handleDeleteCourse(course)}
-              onOpenAddStudentsDialog={(course) => void openAddStudentsDialog(course)}
               academicTerms={academicTerms}
               isLoadingTerms={isLoadingTerms}
               newTermSemester={newTermSemester}

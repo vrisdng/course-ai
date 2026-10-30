@@ -1,16 +1,13 @@
 import { BookOpen, PanelLeft } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 
-import { useAuth } from '@/contexts/AuthContext';
 import { usePersistedCollapse } from '@/lib/use-persisted-collapse';
-import { supabase } from '@/integrations/supabase/client';
 
 import { ChatComposer } from '@/features/student-chat/ChatComposer';
 import { useCourseModelTiers } from '@/features/chat-settings/useCourseModelTiers';
@@ -33,13 +30,11 @@ export default function StudentChat() {
   const navigate = useNavigate();
   const location = useLocation();
   const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
-  const { refreshProfile, isAdmin } = useAuth();
 
   const {
     activeVideoSource,
     activeViewerSource,
     clearViewSource,
-    fetchAccessibleCourses,
     availableCourses,
     isLoadingCourses,
     availableDocuments,
@@ -119,23 +114,6 @@ export default function StudentChat() {
     startNewConversation();
   };
 
-  const handleEnroll = async (code: string): Promise<void> => {
-    const { data, error } = await supabase.functions.invoke('redeem-course-invite', {
-      body: { inviteCode: code },
-    });
-
-    if (error || data?.error) {
-      throw new Error(error?.message || data?.error || 'Invalid or expired code');
-    }
-
-    await Promise.all([refreshProfile(), fetchAccessibleCourses()]);
-    toast.success(
-      data?.status === 'already_enrolled'
-        ? 'You are already enrolled in this course.'
-        : 'Successfully enrolled!'
-    );
-  };
-
   const selectedCourse = availableCourses.find((course) => course.id === selectedCourseId);
   const selectedCourseLabel = isLoadingCourses
     ? 'Loading course...'
@@ -160,8 +138,6 @@ export default function StudentChat() {
     onToggleCollapse: toggleSidebarCollapse,
     onSearchChange: setConversationSearch,
     onChangeCourse: changeSelectedCourse,
-    onEnroll: handleEnroll,
-    showEnroll: !isAdmin,
   };
 
   const closeMobileNav = () => setIsMobileNavOpen(false);

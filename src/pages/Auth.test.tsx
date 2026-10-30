@@ -21,17 +21,22 @@ describe('Auth', () => {
     await waitFor(() => expect(mocks.signIn).toHaveBeenCalledWith({ email: 'student@example.test', password: 'secret12' }));
     expect(await screen.findByText('Invalid email or password. Please try again.')).toBeInTheDocument();
   });
-  it('creates an invited account with profile metadata and confirmation messaging', async () => {
-    renderPage('/auth?mode=signup&invite=JOIN1&email=INVITED%40EXAMPLE.TEST');
-    expect(screen.getByText(/joining via course invite/)).toBeInTheDocument(); expect(screen.getByLabelText('Email')).toHaveValue('invited@example.test');
+  it('creates an account with profile metadata and confirmation messaging', async () => {
+    renderPage('/auth?mode=signup&email=INVITED%40EXAMPLE.TEST');
+    expect(screen.getByLabelText('Email')).toHaveValue('invited@example.test');
     fireEvent.change(screen.getByLabelText('Full Name'), { target: { value: 'Ada Student' } }); fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret12' } }); fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: 'secret12' } }); fireEvent.click(screen.getByRole('button', { name: 'Create Account' }));
     await waitFor(() => expect(mocks.signUp).toHaveBeenCalledWith(expect.objectContaining({ email: 'invited@example.test', password: 'secret12', options: expect.objectContaining({ data: { full_name: 'Ada Student' } }) })));
     expect(await screen.findByText(/Account created! Please check your email/)).toBeInTheDocument();
   });
-  it('redirects authenticated users according to role and preserves invite enrollment', async () => {
+  it('redirects authenticated users according to role without invite enrollment', async () => {
     mocks.authState = { user: { id: 'u1' }, profile: { role: 'admin', email: 'admin@example.test' }, isLoading: false }; const { unmount } = renderPage();
     expect(await screen.findByText('admin destination')).toBeInTheDocument(); unmount();
-    renderPage('/auth?invite=JOIN1'); expect(await screen.findByText('invite destination')).toBeInTheDocument();
+    renderPage('/auth?invite=JOIN1'); expect(await screen.findByText('admin destination')).toBeInTheDocument();
+  });
+  it('explains retired invitation links on the sign-in page', () => {
+    renderPage('/auth?invite=OLD');
+    expect(screen.getByText(/Contact your lecturer to be added to your course/)).toBeInTheDocument();
+    expect(screen.queryByText(/joining via course invite/)).not.toBeInTheDocument();
   });
   it('shows an authentication loading state', () => { mocks.authState = { user: null, profile: null, isLoading: true }; const { container } = renderPage(); expect(container.querySelector('.animate-spin')).toBeInTheDocument(); });
   it.each([
