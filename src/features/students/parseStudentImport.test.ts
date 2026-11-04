@@ -33,6 +33,11 @@ describe('parseStudentImport', () => {
         { email: 'charlie@example.test', fullName: 'Charlie' }], invalid: [],
     });
   });
+  it('does not treat an email-like second cell as a headerless name', () => {
+    expect(parseStudentImport('alice@example.edu,bob@university')).toEqual({
+      students: [{ email: 'alice@example.edu' }], invalid: ['bob@university'],
+    });
+  });
   it('keeps comma-separated email lists as individual students', () => {
     expect(parseStudentImport('ada@example.test,grace@example.test\nmai@example.test,lin@example.test').students).toEqual([
       { email: 'ada@example.test' }, { email: 'grace@example.test' }, { email: 'mai@example.test' }, { email: 'lin@example.test' },
