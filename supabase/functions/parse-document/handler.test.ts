@@ -74,6 +74,15 @@ describe("handleParseDocument", () => {
     expect(d.rejectMaterial).not.toHaveBeenCalled();
   });
 
+  it("keeps an already queued document running when a client retries a lost response", async () => {
+    d = deps({ findMaterial: vi.fn().mockResolvedValue(material({ hasProcessingJob: true })) });
+    const response = await handleParseDocument(request(parseBody()), d);
+    expect(response.status).toBe(202);
+    expect(d.enqueueJob).not.toHaveBeenCalled();
+    expect(d.markQueued).not.toHaveBeenCalled();
+    expect(d.triggerWorker).toHaveBeenCalledWith(MATERIAL_ID);
+  });
+
   it("queues a PDF stored as application/octet-stream when the bytes are a PDF", async () => {
     d = deps({ readObjectHead: vi.fn().mockResolvedValue({ contentType: "application/octet-stream", head: PDF_HEAD }) });
     expect((await handleParseDocument(request(parseBody()), d)).status).toBe(202);

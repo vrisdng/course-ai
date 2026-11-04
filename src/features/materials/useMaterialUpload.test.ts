@@ -1,12 +1,19 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(), uploadStorage: vi.fn(), uploadVideo: vi.fn(), invoke: vi.fn(), from: vi.fn(),
+  storageFrom: vi.fn(), removeStorage: vi.fn(), cleanupFrom: vi.fn(), cleanupDelete: vi.fn(), cleanupEq: vi.fn(),
+  lookupSelect: vi.fn(), lookupEq: vi.fn(), lookupMaybeSingle: vi.fn(),
   toastError: vi.fn(), toastSuccess: vi.fn(), toastInfo: vi.fn(),
 }));
 vi.mock('@supabase/supabase-js', async (importOriginal) => ({ ...(await importOriginal()), createClient: mocks.createClient }));
-vi.mock('@/integrations/supabase/client', () => ({ supabase: {} }));
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: {
+    storage: { from: mocks.storageFrom },
+    from: mocks.cleanupFrom,
+  },
+}));
 vi.mock('@/lib/uploadWithProgress', () => ({ uploadToStorageWithProgress: mocks.uploadStorage }));
 vi.mock('@/lib/videoUploadPipeline', () => ({ uploadVideoForTranscription: mocks.uploadVideo }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess, info: mocks.toastInfo } }));
@@ -45,8 +52,17 @@ describe('useMaterialUpload', () => {
     mocks.createClient.mockReturnValue({ from: mocks.from, functions: { invoke: mocks.invoke } });
     mocks.uploadStorage.mockResolvedValue(undefined);
     mocks.uploadVideo.mockResolvedValue({ materialId: 'video-1' });
+    mocks.removeStorage.mockResolvedValue({ error: null });
+    mocks.storageFrom.mockReturnValue({ remove: mocks.removeStorage });
+    mocks.cleanupEq.mockResolvedValue({ error: null });
+    mocks.cleanupDelete.mockReturnValue({ eq: mocks.cleanupEq });
+    mocks.lookupMaybeSingle.mockResolvedValue({ data: null, error: null });
+    mocks.lookupEq.mockReturnValue({ maybeSingle: mocks.lookupMaybeSingle });
+    mocks.lookupSelect.mockReturnValue({ eq: mocks.lookupEq });
+    mocks.cleanupFrom.mockReturnValue({ delete: mocks.cleanupDelete, select: mocks.lookupSelect });
     onUploaded.mockResolvedValue(undefined);
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'uuid') });
+    localStorage.clear();
   });
   const setup = (uploaderId: string | undefined = 'user-1', uploadPolicy?: UploadPolicy) =>
     renderHook(() => useMaterialUpload({ uploaderId, onUploaded, uploadPolicy })).result;
@@ -145,6 +161,99 @@ describe('useMaterialUpload', () => {
     await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
     expect(mocks.toastError).toHaveBeenCalledWith('slides.pdf: Failed to enqueue parse job');
     expect(result.current.pendingFiles).toEqual([pdf]);
+  });
+
+  it('retries a document whose parse response was lost with the same material and object', async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ data: null, error: httpError(500, { error: 'Gateway timeout' }) })
+      .mockResolvedValueOnce({ data: { queued: true }, error: null });
+    const result = setup();
+    const pdf = file('slides.pdf');
+    add(result, [pdf]);
+
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+
+    expect(mocks.uploadStorage).toHaveBeenCalledTimes(1);
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'parse-document', expect.objectContaining({
+      body: { materialId: 'material-1', filePath: 'course-1/uuid-slides.pdf', fileType: 'pdf' },
+    }));
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'parse-document', expect.objectContaining({
+      body: { materialId: 'material-1', filePath: 'course-1/uuid-slides.pdf', fileType: 'pdf' },
+    }));
+  });
+
+  it('retries a failed parse enqueue without creating another document', async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ data: { error: 'Failed to enqueue parse job' }, error: null })
+      .mockResolvedValueOnce({ data: { queued: true }, error: null });
+    const result = setup();
+    const pdf = file('slides.pdf');
+    add(result, [pdf]);
+
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+
+    expect(mocks.uploadStorage).toHaveBeenCalledTimes(1);
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenLastCalledWith('parse-document', expect.objectContaining({
+      body: { materialId: 'material-1', filePath: 'course-1/uuid-slides.pdf', fileType: 'pdf' },
+    }));
+  });
+
+  it('removes the stored object when cancellation wins after storage but before material creation', async () => {
+    const result = setup();
+    let resolveStorage!: () => void;
+    mocks.uploadStorage.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveStorage = resolve;
+    }));
+    add(result, [file('slides.pdf')]);
+    let uploadPromise!: Promise<void>;
+    act(() => {
+      uploadPromise = result.current.handleUpload('course-1', 'course', 'term-1');
+    });
+    await waitFor(() => expect(result.current.isUploading).toBe(true));
+    act(() => result.current.handleCancelUpload());
+    resolveStorage();
+
+    await act(async () => { await uploadPromise; });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(mocks.removeStorage).toHaveBeenCalledWith(['course-1/uuid-slides.pdf']);
+  });
+
+  it('removes the stored object after a confirmed material insert failure', async () => {
+    db = insertChain({ data: null, error: { code: '42501', message: 'Not allowed' } });
+    mocks.from.mockReturnValue(db);
+    const result = setup();
+    add(result, [file('slides.pdf')]);
+
+    await act(async () => result.current.handleUpload('course-1', 'course', 'term-1'));
+
+    expect(mocks.removeStorage).toHaveBeenCalledWith(['course-1/uuid-slides.pdf']);
+    expect(result.current.pendingFiles).toHaveLength(1);
+  });
+
+  it('removes the material and object when cancellation wins after the material insert', async () => {
+    const result = setup();
+    let resolveInsert!: (result: { data: { id: string }; error: null }) => void;
+    db.single.mockImplementationOnce(() => new Promise((resolve) => { resolveInsert = resolve; }));
+    add(result, [file('slides.pdf')]);
+    let uploadPromise!: Promise<void>;
+    act(() => {
+      uploadPromise = result.current.handleUpload('course-1', 'course', 'term-1');
+    });
+    await waitFor(() => expect(db.single).toHaveBeenCalled());
+    act(() => result.current.handleCancelUpload());
+    resolveInsert({ data: { id: 'material-1' }, error: null });
+
+    await act(async () => { await uploadPromise; });
+
+    expect(mocks.removeStorage).toHaveBeenCalledWith(['course-1/uuid-slides.pdf']);
+    expect(mocks.cleanupDelete).toHaveBeenCalled();
+    expect(mocks.cleanupEq).toHaveBeenCalledWith('id', 'material-1');
+    expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
   it('routes DOCX/PPTX through parse-document again when the policy enables Office', async () => {
