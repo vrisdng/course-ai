@@ -408,8 +408,23 @@ export async function handleUploadSession(
     if (material.file_type !== 'video' || !isStoredVideoPath(material)) {
       return reply(400, { error: 'Material is not a stored video' });
     }
-    await store.recordCleanup(material.file_path, material.storage_provider);
+    const upload = material.storage_provider === 'r2'
+      ? await store.loadMultipartUpload(material.id)
+      : null;
+    if (upload) {
+      await store.recordCleanup(material.file_path, material.storage_provider, upload.r2UploadId);
+    } else {
+      await store.recordCleanup(material.file_path, material.storage_provider);
+    }
     await store.markDeleting(material.id);
+    if (upload) {
+      try {
+        await store.abortR2MultipartUpload(upload.objectKey, upload.r2UploadId);
+      } catch (error) {
+        // The cleanup record retains the upload ID for the reaper to retry.
+        console.error('[video-upload-session] R2 multipart abort failed during deletion', material.id, error);
+      }
+    }
     await store.removeObject(material.file_path, material.storage_provider);
     await store.deleteMaterial(material.id);
     return reply(200, { materialId: material.id, deleted: true });
