@@ -8,8 +8,17 @@ const mocks = vi.hoisted(() => ({
   from: vi.fn(),
   update: vi.fn(),
   in: vi.fn(),
+  invoke: vi.fn(),
+  storageFrom: vi.fn(),
+  remove: vi.fn(),
 }));
-vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from } }));
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: {
+    from: mocks.from,
+    functions: { invoke: mocks.invoke },
+    storage: { from: mocks.storageFrom },
+  },
+}));
 vi.mock('@/features/materials/useMaterialsList', () => ({ useMaterialsList: () => mocks.list }));
 vi.mock('@/features/materials/useMaterialUpload', () => ({
   useMaterialUpload: () => mocks.upload,
@@ -41,7 +50,15 @@ describe('MaterialsTab', () => {
     vi.clearAllMocks();
     mocks.in.mockResolvedValue({ error: null });
     mocks.update.mockReturnValue({ in: mocks.in });
-    mocks.from.mockReturnValue({ update: mocks.update });
+    mocks.invoke.mockResolvedValue({ data: {}, error: null });
+    mocks.remove.mockResolvedValue({ error: null });
+    mocks.storageFrom.mockReturnValue({ remove: mocks.remove });
+    const writeChain = { update: mocks.update, delete: vi.fn(() => writeChain), in: mocks.in };
+    const fetchChain = {
+      select: vi.fn(() => fetchChain),
+      in: vi.fn(async () => ({ data: [video, failed], error: null })),
+    };
+    mocks.from.mockImplementation(() => ({ select: fetchChain.select, ...writeChain }));
     mocks.list = { materials: [video, failed], isLoadingMaterials: false, searchQuery: '', setSearchQuery: fn(), showFilters: false, setShowFilters: fn(), courseFilter: 'all', setCourseFilter: fn(), accessFilter: 'all', setAccessFilter: fn(), academicTermFilter: 'all', setAcademicTermFilter: fn(), documentTypeFilter: 'all', setDocumentTypeFilter: fn(), dateFilter: 'all', setDateFilter: fn(), statusFilter: 'all', setStatusFilter: fn(), fetchMaterials: fn(), setMaterials: fn(), materialsPage: 1, setMaterialsPage: fn(), totalMaterialPages: 2, totalMaterialsCount: 12, visibleMaterialRangeStart: 1, visibleMaterialRangeEnd: 10 };
     mocks.upload = { fileInputRef: { current: null }, pendingFiles: [], rejectedUploads: [], dismissRejectedUploads: fn(), isUploading: false, isDragActive: false, handleFileInputChange: fn(), handleOpenFilePicker: fn(), handleDragOver: fn(), handleDragLeave: fn(), handleDrop: fn(), getPendingFileKey: (f: File) => f.name, removePendingFile: fn(), handleCancelUpload: fn(), handleUpload: fn(), currentUploadFileName: null, currentUploadFileSize: null, currentUploadIndex: null, currentUploadProgress: null, currentUploadStatusText: null };
     mocks.actions = { linkedUrlMaterial: null, linkedUrlValue: '', isSavingLinkedUrl: false, setLinkedUrlValue: fn(), closeLinkedUrlDialog: fn(), handleSaveLinkedUrl: fn(), transcriptMaterial: null, transcriptSegments: [], isLoadingTranscript: false, closeTranscriptDialog: fn(), editingFileNameMaterial: null, editingFileNameValue: '', isUpdatingFileName: false, setEditingFileNameValue: fn(), closeEditFileNameDialog: fn(), handleUpdateFileName: fn(), handleAttachLink: fn(), handleOpenTranscript: fn(), reindexingIds: new Set(), handleReindexMaterial: fn(), openEditFileNameDialog: fn(), handleDeleteMaterial: fn() };
@@ -123,6 +140,35 @@ describe('MaterialsTab', () => {
     await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ academic_term_id: 't2' }));
     expect(mocks.in).toHaveBeenCalledWith('id', ['m1', 'm2']);
     expect(mocks.list.fetchMaterials).toHaveBeenCalled();
+  });
+
+  it('deletes selected materials in bulk after confirmation', async () => {
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Update academic terms' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select lecture.mp4' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select notes.pdf' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected (2)' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent(/Permanently delete 2 selected materials/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete 2 materials' }));
+
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('video-upload-session', {
+        body: { action: 'delete', materialId: 'm1' },
+      })
+    );
+    expect(mocks.remove).toHaveBeenCalledWith(['c1/lecture.mp4']);
+    expect(mocks.list.fetchMaterials).toHaveBeenCalled();
+  });
+
+  it('enables bulk delete only when materials are selected', () => {
+    renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Update academic terms' }));
+    expect(screen.getByRole('button', { name: 'Delete selected (0)' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select notes.pdf' }));
+    expect(screen.getByRole('button', { name: 'Delete selected (1)' })).toBeEnabled();
   });
 
   it('stacks material rows into labelled cards below the sm breakpoint', () => {
