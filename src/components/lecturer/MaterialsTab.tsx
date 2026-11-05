@@ -45,6 +45,7 @@ import { ACCEPTED_FILE_TYPES, useMaterialUpload } from '@/features/materials/use
 import { AcceptedUploadsHelp, AcceptedUploadsHint, RejectedUploadsAlert } from '@/features/materials/UploadPolicyNotices';
 import { useMaterialActions } from '@/features/materials/useMaterialActions';
 import { useBulkAcademicTermUpdate } from '@/features/materials/useBulkAcademicTermUpdate';
+import { useBulkDeleteMaterials } from '@/features/materials/useBulkDeleteMaterials';
 import { useMaterialsList } from '@/features/materials/useMaterialsList';
 import type { AcademicTerm, AccessScope, Course, Material } from '@/features/materials/types';
 import { stackedTable } from '@/lib/responsiveTable';
@@ -158,6 +159,12 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
   const upload = useMaterialUpload({ uploaderId, onUploaded: list.fetchMaterials });
   const actions = useMaterialActions({ onMaterialsChanged: list.fetchMaterials, setMaterials: list.setMaterials });
   const bulkTermUpdate = useBulkAcademicTermUpdate({ onUpdated: list.fetchMaterials });
+  const bulkDelete = useBulkDeleteMaterials({
+    onDeleted: async () => {
+      await list.fetchMaterials();
+      bulkTermUpdate.cancelSelecting();
+    },
+  });
 
   const courseLabelById = courses.reduce<Record<string, string>>((acc, course) => {
     acc[course.id] = `${course.name}${course.code ? ` (${course.code})` : ''}`;
@@ -292,6 +299,33 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
             >
               {bulkTermUpdate.isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bulkDelete.isDialogOpen} onOpenChange={(open) => (open ? undefined : bulkDelete.closeDialog())}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete selected materials</DialogTitle>
+            <DialogDescription>
+              Permanently delete {bulkTermUpdate.selectedMaterialIds.size} selected materials, their indexed chunks and
+              stored files? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={bulkDelete.closeDialog} disabled={bulkDelete.isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void bulkDelete.deleteSelected(Array.from(bulkTermUpdate.selectedMaterialIds))}
+              disabled={bulkDelete.isDeleting}
+            >
+              {bulkDelete.isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete {bulkTermUpdate.selectedMaterialIds.size} material
+              {bulkTermUpdate.selectedMaterialIds.size === 1 ? '' : 's'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -630,6 +664,18 @@ export function MaterialsTab({ uploaderId, courses, academicTerms, isLoadingTerm
                   ? `Update selected (${bulkTermUpdate.selectedMaterialIds.size})`
                   : 'Update academic terms'}
               </Button>
+              {bulkTermUpdate.isSelecting && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="text-destructive hover:bg-destructive/10"
+                  onClick={bulkDelete.openDialog}
+                  disabled={bulkTermUpdate.selectedMaterialIds.size === 0}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete selected ({bulkTermUpdate.selectedMaterialIds.size})
+                </Button>
+              )}
               <Button variant="outline" onClick={() => list.setShowFilters((current) => !current)}>
                 <Filter className="mr-2 h-4 w-4" />
                 Filters
