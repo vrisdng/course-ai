@@ -114,6 +114,129 @@ describe('useStudentChat', () => {
     return result;
   }
 
+  it('does not let a stale citation source lookup overwrite the current conversation', async () => {
+    let resolveStaleMaterial!: (value: { data: unknown; error: null }) => void;
+    let staleMaterialRequested = false;
+
+    const conversationQuery = () => {
+      const chain: Record<string, unknown> = {};
+      let isOwnershipCheck = false;
+      for (const method of ['select', 'eq', 'in', 'order']) chain[method] = vi.fn(() => chain);
+      chain.maybeSingle = vi.fn(() => {
+        isOwnershipCheck = true;
+        return chain;
+      });
+      chain.then = (resolve: (value: { data: unknown; error: null }) => unknown) =>
+        Promise.resolve(isOwnershipCheck
+          ? { data: { id: 'owned-conversation' }, error: null }
+          : {
+              data: [
+                { id: 'conversation-a', title: 'A', created_at: '2026-11-04', course_id: 'course-1' },
+                { id: 'conversation-b', title: 'B', created_at: '2026-11-04', course_id: 'course-1' },
+              ],
+              error: null,
+            }).then(resolve);
+      return chain;
+    };
+
+    const messagesQuery = () => {
+      const chain: Record<string, unknown> = {};
+      let conversationId = '';
+      chain.select = vi.fn(() => chain);
+      chain.eq = vi.fn((field: string, value: string) => {
+        if (field === 'conversation_id') conversationId = value;
+        return chain;
+      });
+      chain.order = vi.fn(() => chain);
+      chain.then = (resolve: (value: { data: unknown; error: null }) => unknown) =>
+        Promise.resolve({
+          data: [{
+            id: conversationId === 'conversation-a' ? 'message-a' : 'message-b',
+            role: 'assistant',
+            content: conversationId === 'conversation-a' ? 'Answer A' : 'Answer B',
+            created_at: '2026-11-04',
+          }],
+          error: null,
+        }).then(resolve);
+      return chain;
+    };
+
+    const citationsQuery = () => {
+      const chain: Record<string, unknown> = {};
+      let messageId = '';
+      chain.select = vi.fn(() => chain);
+      chain.in = vi.fn((_field: string, values: string[]) => {
+        messageId = values[0];
+        return chain;
+      });
+      chain.then = (resolve: (value: { data: unknown; error: null }) => unknown) =>
+        Promise.resolve({
+          data: [{
+            id: `citation-${messageId}`,
+            message_id: messageId,
+            chunk_id: null,
+            material_id: messageId === 'message-a' ? 'material-a' : 'material-b',
+            relevance_score: 1,
+            excerpt: 'Evidence',
+            image_url: null,
+          }],
+          error: null,
+        }).then(resolve);
+      return chain;
+    };
+
+    const materialsQuery = () => {
+      const chain: Record<string, unknown> = {};
+      let materialId = '';
+      chain.select = vi.fn(() => chain);
+      chain.eq = vi.fn(() => chain);
+      chain.order = vi.fn(() => chain);
+      chain.in = vi.fn((_field: string, values: string[]) => {
+        materialId = values[0];
+        return chain;
+      });
+      chain.then = (resolve: (value: { data: unknown; error: null }) => unknown) => {
+        if (materialId === 'material-a') {
+          staleMaterialRequested = true;
+          return new Promise((done) => {
+            resolveStaleMaterial = (value) => done(resolve(value));
+          });
+        }
+        return Promise.resolve({
+          data: [{ id: 'material-b', file_name: 'B.pdf', file_type: 'pdf' }],
+          error: null,
+        }).then(resolve);
+      };
+      return chain;
+    };
+
+    from.mockImplementation((table: string) => {
+      if (table === 'conversations') return conversationQuery();
+      if (table === 'messages') return messagesQuery();
+      if (table === 'citations') return citationsQuery();
+      if (table === 'materials') return materialsQuery();
+      return createQueryChain(emptyResult);
+    });
+
+    const { result, rerender } = renderHook(({ conversationId }) => useStudentChat(conversationId), {
+      initialProps: { conversationId: 'conversation-a' },
+    });
+
+    await waitFor(() => expect(staleMaterialRequested).toBe(true));
+
+    rerender({ conversationId: 'conversation-b' });
+    await waitFor(() => expect(result.current.messages).toMatchObject([{ content: 'Answer B' }]));
+
+    await act(async () => {
+      resolveStaleMaterial({
+        data: [{ id: 'material-a', file_name: 'A.pdf', file_type: 'pdf' }],
+        error: null,
+      });
+    });
+
+    expect(result.current.messages).toMatchObject([{ content: 'Answer B' }]);
+  });
+
   it.each(['individual', 'all'] as const)('sends selected IDs for a comparison using %s selection', async (selection) => {
     const docs = [1, 2, 3].map((n) => ({ id: `doc-${n}`, file_name: `Notes ${n}`, file_type: 'pdf' }));
     from.mockImplementation((table: string) => createQueryChain(table === 'materials' ? { data: docs, error: null } : emptyResult));
