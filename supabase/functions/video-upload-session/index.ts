@@ -84,13 +84,10 @@ serve(async (req: Request) => {
       if (error) throw error;
       if (!data) throw new Error('Upload was cancelled or deleted during completion');
     },
-    async markCancelled(id: string): Promise<void> {
-      const { data, error } = await adminClient.from('materials')
-        .update({ video_upload_state: 'cancelled', processing_stage: 'cancelled', processing_error: null })
-        .eq('id', id).in('video_upload_state', ['uploading', 'cancelled'])
-        .select('id').maybeSingle();
+    async cancelWithCleanup(id: string): Promise<boolean> {
+      const { data, error } = await adminClient.rpc('cancel_video_upload_with_cleanup', { p_material_id: id });
       if (error) throw error;
-      if (!data) throw new Error('Upload was completed or deleted during cancellation');
+      return data === true;
     },
     async markDeleting(id: string): Promise<void> {
       const { data, error } = await adminClient.from('materials')
@@ -155,6 +152,11 @@ serve(async (req: Request) => {
         .order('next_cleanup_at', { ascending: true }).limit(limit);
       if (error) throw error;
       return data as CleanupEntry[];
+    },
+    async claimCleanup(path: string): Promise<boolean> {
+      const { data, error } = await adminClient.rpc('claim_video_storage_cleanup', { p_file_path: path });
+      if (error) throw error;
+      return data === true;
     },
     async deferCleanup(path: string, nextAt: string, errorMessage: string | null): Promise<void> {
       const { error } = await adminClient.from('video_storage_cleanup')

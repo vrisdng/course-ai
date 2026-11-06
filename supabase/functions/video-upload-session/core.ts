@@ -62,7 +62,9 @@ export interface UploadSessionStore {
   createMaterial(material: NewUploadMaterial): Promise<UploadMaterial>;
   objectInfo(path: string): Promise<StoredObjectInfo | null>;
   markUploaded(id: string): Promise<void>;
-  markCancelled(id: string): Promise<void>;
+  // Atomically records cleanup intent and changes an unfinished upload to cancelled.
+  // false means completion or deletion won the race.
+  cancelWithCleanup(id: string): Promise<boolean>;
   markDeleting(id: string): Promise<void>;
   deleteMaterial(id: string): Promise<void>;
   deleteMaterialByPath(path: string): Promise<void>;
@@ -72,6 +74,8 @@ export interface UploadSessionStore {
   transcriptionStatus(id: string): Promise<string>;
   staleUploads(before: string, limit: number): Promise<UploadMaterial[]>;
   dueCleanup(before: string, limit: number): Promise<CleanupEntry[]>;
+  // Claims a legacy cleanup record only when its material is not uploaded.
+  claimCleanup(path: string): Promise<boolean>;
   deferCleanup(path: string, nextAt: string, error: string | null): Promise<void>;
   finishCleanup(path: string): Promise<void>;
   // R2 multipart upload (Phase 1). Every method here talks to Cloudflare R2 or the
@@ -393,9 +397,9 @@ export async function handleUploadSession(
     if (material.video_upload_state === 'uploaded' || material.video_upload_state === 'deleting') {
       return reply(409, { error: 'Completed video cannot be cancelled as an upload' });
     }
-    // Record cleanup intent first so a late TUS completion cannot orphan bytes.
-    await store.recordCleanup(material.file_path, material.storage_provider);
-    await store.markCancelled(material.id);
+    if (!await store.cancelWithCleanup(material.id)) {
+      return reply(409, { error: 'Completed video cannot be cancelled as an upload' });
+    }
     await store.removeObject(material.file_path, material.storage_provider);
     await store.deleteMaterial(material.id);
     return reply(200, { materialId: material.id, cancelled: true });
@@ -490,8 +494,9 @@ export async function handleUploadSession(
       return reply(404, { error: 'Video multipart upload not found' });
     }
     const upload = await store.loadMultipartUpload(material.id);
-    await store.recordCleanup(material.file_path, 'r2', upload?.r2UploadId);
-    await store.markCancelled(material.id);
+    if (!await store.cancelWithCleanup(material.id)) {
+      return reply(409, { error: 'Completed video cannot be aborted as an upload' });
+    }
     if (upload) {
       // Abort before clearing state so a racing completed part cannot resurrect it.
       try {
@@ -529,8 +534,7 @@ export async function reapVideoUploads(
       const upload = material.storage_provider === 'r2'
         ? await store.loadMultipartUpload(material.id)
         : null;
-      await store.recordCleanup(material.file_path, material.storage_provider, upload?.r2UploadId);
-      await store.markCancelled(material.id);
+      if (!await store.cancelWithCleanup(material.id)) continue;
       if (upload) {
         await store.abortR2MultipartUpload(upload.objectKey, upload.r2UploadId);
         await store.abandonMultipartUpload(material.id);
@@ -547,6 +551,7 @@ export async function reapVideoUploads(
   const due = await store.dueCleanup(now.toISOString(), 25);
   for (const entry of due) {
     try {
+      if (!await store.claimCleanup(entry.file_path)) continue;
       const provider = entry.storage_provider ?? 'supabase';
       const objectKey = entry.object_key ?? entry.file_path;
       if (provider === 'r2' && entry.r2_multipart_upload_id) {
