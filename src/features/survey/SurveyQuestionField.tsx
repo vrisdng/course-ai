@@ -44,6 +44,56 @@ function PillGroup({ groupLabel, options, selected, onSelect }: PillGroupProps) 
   );
 }
 
+function MultiChoiceGroup({
+  groupLabel,
+  options,
+  exclusiveOptions = [],
+  selected,
+  onSelect,
+}: Omit<PillGroupProps, 'selected' | 'onSelect'> & {
+  exclusiveOptions?: readonly string[];
+  selected: readonly string[];
+  onSelect: (value: string[]) => void;
+}) {
+  const toggle = (option: string) => {
+    if (exclusiveOptions.includes(option)) {
+      onSelect(selected.includes(option) ? [] : [option]);
+      return;
+    }
+
+    const next = selected.includes(option)
+      ? selected.filter((selectedOption) => selectedOption !== option)
+      : [...selected.filter((selectedOption) => !exclusiveOptions.includes(selectedOption)), option];
+    onSelect(next);
+  };
+
+  return (
+    <div className="flex flex-wrap gap-2" role="group" aria-label={groupLabel}>
+      {options.map((option) => {
+        const isSelected = selected.includes(option);
+        return (
+          <button
+            key={option}
+            type="button"
+            role="checkbox"
+            aria-checked={isSelected}
+            aria-label={`${groupLabel} — ${option}`}
+            onClick={() => toggle(option)}
+            className={cn(
+              'rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              isSelected
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border bg-background text-foreground hover:bg-accent',
+            )}
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ScaleInput({
   groupLabel,
   question,
@@ -78,7 +128,7 @@ function ScaleInput({
 }
 
 export function SurveyQuestionField({ question, values, onChange }: SurveyQuestionFieldProps) {
-  const label = `${question.number}. ${question.prompt}`;
+  const label = question.showNumber === false ? question.prompt : `${question.number}. ${question.prompt}`;
   const toggle = (key: string, value: string) => {
     onChange(key, values[key] === value ? '' : value);
   };
@@ -118,6 +168,34 @@ export function SurveyQuestionField({ question, values, onChange }: SurveyQuesti
             </div>
           );
         })}
+      </fieldset>
+    );
+  }
+
+  if (question.kind === 'multiChoice') {
+    const selected = values[question.id]?.split('\n').filter(Boolean) ?? [];
+    const hasOther = question.otherOption && selected.includes(question.otherOption);
+
+    return (
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium text-foreground">{label}</legend>
+        <MultiChoiceGroup
+          groupLabel={label}
+          options={question.options ?? []}
+          exclusiveOptions={question.exclusiveOptions}
+          selected={selected}
+          onSelect={(next) => onChange(question.id, next.join('\n'))}
+        />
+        {hasOther && (
+          <Textarea
+            aria-label={`${label} — ${question.otherOption}`}
+            value={values[`${question.id}:other`] ?? ''}
+            onChange={(event) => onChange(`${question.id}:other`, event.target.value)}
+            placeholder="Please specify"
+            rows={2}
+            maxLength={5000}
+          />
+        )}
       </fieldset>
     );
   }
