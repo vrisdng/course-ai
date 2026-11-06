@@ -222,6 +222,38 @@ describe('video upload session', () => {
     expect(db.deleteMaterial).toHaveBeenCalledWith(ID);
   });
 
+  it('aborts an unfinished R2 multipart upload before deleting its ledger', async () => {
+    const upload = { objectKey: R2_PATH, r2UploadId: 'u1', partSize: 64 * 1024 * 1024, expiresAt: '' };
+    const db = store({
+      findMaterial: vi.fn().mockResolvedValue(r2Material()),
+      loadMultipartUpload: vi.fn().mockResolvedValue(upload),
+      abortR2MultipartUpload: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(handleUploadSession({ action: 'delete', materialId: ID }, USER, db))
+      .resolves.toEqual({ status: 200, body: { materialId: ID, deleted: true } });
+    expect(db.recordCleanup).toHaveBeenCalledWith(R2_PATH, 'r2', 'u1');
+    expect(db.abortR2MultipartUpload).toHaveBeenCalledWith(R2_PATH, 'u1');
+    expect(vi.mocked(db.recordCleanup).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(db.abortR2MultipartUpload).mock.invocationCallOrder[0]);
+    expect(vi.mocked(db.abortR2MultipartUpload).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(db.deleteMaterial).mock.invocationCallOrder[0]);
+  });
+
+  it('keeps the multipart cleanup record when deleting an unfinished R2 upload cannot abort immediately', async () => {
+    const db = store({
+      findMaterial: vi.fn().mockResolvedValue(r2Material()),
+      loadMultipartUpload: vi.fn().mockResolvedValue({ objectKey: R2_PATH, r2UploadId: 'u1', partSize: 64 * 1024 * 1024, expiresAt: '' }),
+      abortR2MultipartUpload: vi.fn().mockRejectedValue(new Error('R2 unavailable')),
+    });
+
+    await expect(handleUploadSession({ action: 'delete', materialId: ID }, USER, db))
+      .resolves.toEqual({ status: 200, body: { materialId: ID, deleted: true } });
+    expect(db.recordCleanup).toHaveBeenCalledWith(R2_PATH, 'r2', 'u1');
+    expect(db.deleteMaterial).toHaveBeenCalledWith(ID);
+    expect(db.finishCleanup).not.toHaveBeenCalled();
+  });
+
   it('reaps at most 25 abandoned uploads and 25 due cleanup paths', async () => {
     const now = new Date('2026-10-06T00:00:00Z');
     const db = store({
