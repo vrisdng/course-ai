@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ from: vi.fn(), toastError: vi.fn(), toastSuccess: vi.fn() }));
+const mocks = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), toastError: vi.fn(), toastSuccess: vi.fn() }));
 vi.mock('@/components/layout/MainLayout', () => ({ MainLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from } }));
+vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from, rpc: mocks.rpc } }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
 import CourseStudents from './CourseStudents';
 
@@ -24,7 +24,15 @@ function query(result: unknown) {
   return chain;
 }
 
-function arrange(options: { enrollmentError?: string; profileError?: string; deleteError?: string; rows?: typeof enrollments } = {}) {
+const defaultCounts = [{ user_id: 'u1', question_count: 3, last_question_at: '2026-11-14T08:00:00Z' }];
+
+function arrange(options: {
+  enrollmentError?: string; profileError?: string; deleteError?: string; rows?: typeof enrollments;
+  counts?: typeof defaultCounts; countsError?: string;
+} = {}) {
+  mocks.rpc.mockResolvedValue(options.countsError
+    ? { data: null, error: { message: options.countsError } }
+    : { data: options.counts ?? defaultCounts, error: null });
   const courseQuery = query({ data: { name: 'Algorithms', code: 'CS101' }, error: null });
   const enrollmentQuery = query({ data: options.rows ?? enrollments, error: options.enrollmentError ? { message: options.enrollmentError } : null });
   const profileQuery = query({ data: profiles, error: options.profileError ? { message: options.profileError } : null });
@@ -83,6 +91,44 @@ describe('CourseStudents', () => {
 
     vi.clearAllMocks(); arrange({ enrollmentError: 'load failed' }); renderPage();
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('load failed'));
+  });
+
+  it('shows how many questions each student asked and when they last asked, without question text', async () => {
+    arrange(); renderPage();
+    await screen.findByText('Ada Lovelace');
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_student_question_counts', { in_course_id: 'c1' });
+
+    const ada = screen.getByText('Ada Lovelace').closest('tr') as HTMLTableRowElement;
+    expect(within(ada).getByText('3')).toHaveAttribute('data-label', 'Questions');
+    expect(within(ada).getByText(new Date('2026-11-14T08:00:00Z').toLocaleDateString())).toHaveAttribute('data-label', 'Last asked');
+
+    const grace = screen.getByText('Grace Hopper').closest('tr') as HTMLTableRowElement;
+    expect(within(grace).getByText('0')).toHaveAttribute('data-label', 'Questions');
+    expect(within(grace).getByText('Never')).toHaveAttribute('data-label', 'Last asked');
+  });
+
+  it('sorts the roster by question count from the column header', async () => {
+    arrange({ counts: [
+      { user_id: 'u1', question_count: 1, last_question_at: '2026-11-14T08:00:00Z' },
+      { user_id: 'u2', question_count: 5, last_question_at: '2026-11-13T08:00:00Z' },
+    ] });
+    renderPage();
+    await screen.findByText('Ada Lovelace');
+    const names = () => screen.getAllByRole('row').slice(1).map((row) => within(row).getAllByRole('cell')[1].textContent);
+
+    expect(names()).toEqual(['Ada Lovelace', 'Grace Hopper']);
+    fireEvent.click(screen.getByRole('button', { name: /Questions/ }));
+    expect(names()).toEqual(['Grace Hopper', 'Ada Lovelace']);
+    fireEvent.click(screen.getByRole('button', { name: /Questions/ }));
+    expect(names()).toEqual(['Ada Lovelace', 'Grace Hopper']);
+  });
+
+  it('keeps the roster usable when question counts fail to load', async () => {
+    arrange({ countsError: 'Access denied' }); renderPage();
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Could not load question counts: Access denied'));
+    const ada = screen.getByText('Ada Lovelace').closest('tr') as HTMLTableRowElement;
+    expect(within(ada).getAllByText('—')).toHaveLength(2);
   });
 
   it('stacks each roster row into a labelled card below the sm breakpoint', async () => {
