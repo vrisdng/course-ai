@@ -38,7 +38,7 @@ const lastRange = () => api.fetchQuestionOverview.mock.lastCall?.[1] as Range;
 const lastFilters = () => api.fetchQuestions.mock.lastCall?.[2];
 
 const OVERVIEW = {
-  questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21,
+  questionCount: 27, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21, materialsJudgedCount: 30,
   needsAttentionCount: 8, nonStudyCount: 4, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
 };
 const question = (id: string, queryText: string) => ({
@@ -83,7 +83,8 @@ describe('AdminAnalytics', () => {
     expect(new Date(range.endAt).getTime() - new Date(range.startAt).getTime()).toBe(30 * DAY);
     expect(lastFilters()).toMatchObject({ needsAttention: false, studyOnly: true, topicText: null });
     expect(api.fetchQuestionDetail).toHaveBeenLastCalledWith('c1', range, 'q1');
-    expect(api.fetchCitedFiles).toHaveBeenLastCalledWith('c1', range);
+    expect(api.fetchCitedFiles).toHaveBeenLastCalledWith('c1', range, true);
+    expect(api.fetchQuestionOverview).toHaveBeenLastCalledWith('c1', range, true);
     expect(api.labelQuestions).toHaveBeenCalledWith('c1', range);
     expect(mocks.useAnalyticsChat).toHaveBeenLastCalledWith('c1', range.startAt, range.endAt);
 
@@ -119,6 +120,9 @@ describe('AdminAnalytics', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Hide greetings and logistics' }));
     await waitFor(() => expect(lastFilters()).toMatchObject({ category: 'comparison', studyOnly: false }));
+    // The file and overview counts follow the toggle, so they match the list.
+    await waitFor(() => expect(api.fetchCitedFiles).toHaveBeenLastCalledWith('c1', lastRange(), false));
+    expect(api.fetchQuestionOverview).toHaveBeenLastCalledWith('c1', lastRange(), false);
   });
 
   it('searches a topic in the materials and the questions', async () => {

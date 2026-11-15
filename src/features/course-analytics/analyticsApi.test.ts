@@ -31,10 +31,10 @@ describe('analyticsApi RPCs', () => {
       data: [{ file_name: 'A.pdf', file_type: 'pdf', material_ids: ['m1', 'm2'], question_count: 3, student_count: 2 }],
       error: null,
     });
-    await expect(fetchCitedFiles(COURSE, RANGE)).resolves.toEqual([
+    await expect(fetchCitedFiles(COURSE, RANGE, true)).resolves.toEqual([
       { fileName: 'A.pdf', fileType: 'pdf', materialIds: ['m1', 'm2'], questionCount: 3, studentCount: 2 },
     ]);
-    expect(mocks.rpc).toHaveBeenCalledWith('get_course_cited_files', rangeArgs);
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_cited_files', { ...rangeArgs, in_study_only: true });
   });
 
   it('fetches one question with its answer and related questions', async () => {
@@ -73,19 +73,19 @@ describe('analyticsApi RPCs', () => {
   it('maps the overview numbers', async () => {
     mocks.rpc.mockResolvedValue({
       data: [{
-        question_count: 31, student_count: 2, labeled_count: 30, answered_from_materials_count: 21,
+        question_count: 31, student_count: 2, labeled_count: 30, answered_from_materials_count: 21, materials_judged_count: 28,
         needs_attention_count: 8, non_study_count: 4, cited_question_count: 25, document_question_count: 25, video_question_count: 3,
       }],
       error: null,
     });
-    await expect(fetchQuestionOverview(COURSE, RANGE)).resolves.toEqual({
-      questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21,
+    await expect(fetchQuestionOverview(COURSE, RANGE, false)).resolves.toEqual({
+      questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21, materialsJudgedCount: 28,
       needsAttentionCount: 8, nonStudyCount: 4, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
     });
-    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_overview', rangeArgs);
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_overview', { ...rangeArgs, in_study_only: false });
 
     mocks.rpc.mockResolvedValue({ data: [], error: null });
-    await expect(fetchQuestionOverview(COURSE, RANGE)).rejects.toThrow('Unexpected response');
+    await expect(fetchQuestionOverview(COURSE, RANGE, true)).rejects.toThrow('Unexpected response');
   });
 
   it('fetches a page of questions with the filters and validates the JSON shape', async () => {
@@ -121,7 +121,7 @@ describe('analyticsApi RPCs', () => {
 
   it('throws the database error message', async () => {
     mocks.rpc.mockResolvedValue({ data: null, error: { message: 'Access denied' } });
-    await expect(fetchCitedFiles(COURSE, RANGE)).rejects.toThrow('Access denied');
+    await expect(fetchCitedFiles(COURSE, RANGE, false)).rejects.toThrow('Access denied');
   });
 });
 

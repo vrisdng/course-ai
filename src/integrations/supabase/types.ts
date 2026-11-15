@@ -1556,7 +1556,12 @@ export type Database = {
             Returns: number
           }
       get_course_cited_files: {
-        Args: { in_end_at?: string; in_course_id: string; in_start_at?: string }
+        Args: {
+          in_course_id: string
+          in_end_at?: string
+          in_start_at?: string
+          in_study_only?: boolean
+        }
         Returns: {
           file_name: string
           file_type: string
@@ -1676,10 +1681,16 @@ export type Database = {
         Returns: Json
       }
       get_course_question_overview: {
-        Args: { in_course_id: string; in_start_at?: string; in_end_at?: string }
+        Args: {
+          in_course_id: string
+          in_end_at?: string
+          in_start_at?: string
+          in_study_only?: boolean
+        }
         Returns: {
           labeled_count: number
           answered_from_materials_count: number
+          materials_judged_count: number
           needs_attention_count: number
           non_study_count: number
           cited_question_count: number

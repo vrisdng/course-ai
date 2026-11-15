@@ -42,6 +42,20 @@ describe('useLoader', () => {
     expect(result.current).toEqual({ data: null, isLoading: false, error: null });
   });
 
+  it("never shows the previous key's data while the new key loads", async () => {
+    let resolveB: (value: string) => void = () => {};
+    const load = vi.fn()
+      .mockResolvedValueOnce('question A')
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { resolveB = resolve; }));
+    const { result, rerender } = renderHook(({ key }) => useLoader(key, load), { initialProps: { key: 'a' } });
+    await waitFor(() => expect(result.current.data).toBe('question A'));
+
+    rerender({ key: 'b' });
+    expect(result.current).toEqual({ data: null, isLoading: true, error: null });
+    await act(async () => resolveB('question B'));
+    expect(result.current.data).toBe('question B');
+  });
+
   it('reports errors and ignores a stale response', async () => {
     let resolveSlow: (value: string) => void = () => {};
     const load = vi.fn()
@@ -143,6 +157,24 @@ describe('useTopicSearch', () => {
     act(() => result.current.setInput(''));
     await act(async () => result.current.setMode('both'));
     expect(onTopic).not.toHaveBeenCalled();
+  });
+
+  it('reset clears the box and drops a search still in flight', async () => {
+    const onTopic = vi.fn();
+    let resolveMatch: (value: unknown[]) => void = () => {};
+    api.matchKeyword.mockImplementation(() => new Promise((resolve) => { resolveMatch = resolve; }));
+    const { result } = renderHook(() => useTopicSearch(COURSE, onTopic));
+    act(() => result.current.setInput('recursion'));
+    let pending: Promise<void> = Promise.resolve();
+    act(() => { pending = result.current.submit(); });
+    expect(result.current.isMatching).toBe(true);
+
+    act(() => result.current.reset());
+    expect(result.current).toMatchObject({ input: '', isMatching: false, note: null });
+    await act(async () => { resolveMatch([place]); await pending; });
+
+    expect(onTopic).not.toHaveBeenCalled();
+    expect(result.current.isMatching).toBe(false);
   });
 
   it('falls back to question text when the materials search fails', async () => {

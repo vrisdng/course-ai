@@ -15,7 +15,7 @@ const loaded = <T,>(data: T) => ({ data, isLoading: false, error: null });
 const loading = { data: null, isLoading: true, error: null };
 
 const OVERVIEW: QuestionOverview = {
-  questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21,
+  questionCount: 31, studentCount: 2, labeledCount: 30, answeredFromMaterialsCount: 21, materialsJudgedCount: 30,
   needsAttentionCount: 8, nonStudyCount: 4, citedQuestionCount: 25, documentQuestionCount: 25, videoQuestionCount: 3,
 };
 const FILES: CitedFile[] = [{ fileName: 'Hashing.pdf', fileType: 'pdf', materialIds: ['m1', 'm2'], questionCount: 20, studentCount: 2 }];
@@ -31,7 +31,7 @@ function labels(overrides: Partial<QuestionLabelsState> = {}): QuestionLabelsSta
 describe('NavPane', () => {
   it('lists views, files and question types with counts, and picks one', () => {
     const onSelect = vi.fn();
-    render(<NavPane overview={loaded(OVERVIEW)} files={loaded(FILES)} labels={labels()} selection={ALL_QUESTIONS} studyOnly={false} onSelect={onSelect} />);
+    render(<NavPane overview={loaded(OVERVIEW)} files={loaded(FILES)} labels={labels()} selection={ALL_QUESTIONS} onSelect={onSelect} />);
 
     expect(screen.getByRole('button', { name: 'All questions, 31' })).toHaveAttribute('aria-current', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Not from materials, 8' }));
@@ -44,16 +44,17 @@ describe('NavPane', () => {
   });
 
   it('marks the current selection and shows labelling progress', () => {
-    render(<NavPane overview={loaded(OVERVIEW)} files={loaded(FILES)} labels={labels({ isLabelling: true, remaining: 4 })} selection={{ kind: 'type', category: 'comparison' }} studyOnly onSelect={vi.fn()} />);
+    render(<NavPane overview={loaded(OVERVIEW)} files={loaded(FILES)} labels={labels({ isLabelling: true, remaining: 4 })} selection={{ kind: 'type', category: 'comparison' }} onSelect={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Comparison, 3' })).toHaveAttribute('aria-current', 'true');
-    expect(screen.getByRole('button', { name: 'All questions, 27' })).not.toHaveAttribute('aria-current');
+    // The overview is already filtered by the study-only toggle on the server.
+    expect(screen.getByRole('button', { name: 'All questions, 31' })).not.toHaveAttribute('aria-current');
     expect(screen.getByText(/Labelling questions… 4 left/)).toBeInTheDocument();
   });
 
   it('explains empty sections, loading and errors', () => {
-    const { rerender } = render(<NavPane overview={loading} files={loaded([])} labels={labels({ buckets: [] })} selection={ALL_QUESTIONS} studyOnly onSelect={vi.fn()} />);
+    const { rerender } = render(<NavPane overview={loading} files={loaded([])} labels={labels({ buckets: [] })} selection={ALL_QUESTIONS} onSelect={vi.fn()} />);
     expect(screen.getByText('No answers cited your materials.')).toBeInTheDocument();
-    rerender(<NavPane overview={loaded(OVERVIEW)} files={{ data: null, isLoading: false, error: 'Access denied' }} labels={labels({ labelError: 'Decisions API error (403)' })} selection={ALL_QUESTIONS} studyOnly onSelect={vi.fn()} />);
+    rerender(<NavPane overview={loaded(OVERVIEW)} files={{ data: null, isLoading: false, error: 'Access denied' }} labels={labels({ labelError: 'Decisions API error (403)' })} selection={ALL_QUESTIONS} onSelect={vi.fn()} />);
     expect(screen.getByText('Access denied')).toBeInTheDocument();
     expect(screen.getByText(/Some questions couldn't be labelled: Decisions API error \(403\)/)).toBeInTheDocument();
   });

@@ -88,6 +88,15 @@ BEGIN
   ASSERT row.non_study_count = 1, format('q4 is logistics: %s', row);
   ASSERT row.cited_question_count = 3 AND row.document_question_count = 2 AND row.video_question_count = 2,
     format('Source split: %s', row);
+  ASSERT row.materials_judged_count = 3, format('Three questions have an answered-from-materials label: %s', row);
+
+  -- Study only (migration 20261115130000): q4 (logistics) drops out of every
+  -- count except non_study_count, which still says how many were hidden.
+  SELECT * INTO STRICT row FROM public.get_course_question_overview(course, s, e, true);
+  ASSERT row.question_count = 4 AND row.student_count = 2, format('Study-only counts: %s', row);
+  ASSERT row.labeled_count = 2 AND row.materials_judged_count = 2 AND row.answered_from_materials_count = 1,
+    format('Study-only labels: %s', row);
+  ASSERT row.non_study_count = 1, format('Hidden count stays: %s', row);
 
   -- Question list, no filters: newest first, sources deduplicated, no student ids.
   result := public.get_course_questions(course, s, e);
@@ -145,6 +154,9 @@ BEGIN
   ASSERT row.question_count = 2 AND row.student_count = 2 AND cardinality(row.material_ids) = 2,
     format('Hashing.pdf across both copies: %s', row);
   ASSERT (SELECT count(*) = 2 FROM public.get_course_cited_files(course, s, e)), 'Hashing.pdf and Lecture 4.mp4';
+  -- q4 (logistics) cites nothing, so study-only leaves the file counts alone.
+  SELECT * INTO STRICT row FROM public.get_course_cited_files(course, s, e, true) WHERE file_name = 'Hashing.pdf';
+  ASSERT row.question_count = 2, format('Study-only Hashing.pdf: %s', row);
 
   -- Question types: study only drops q4's course_logistics bucket.
   ASSERT (SELECT sum(question_count) = 5 FROM public.get_course_question_buckets(course, s, e));

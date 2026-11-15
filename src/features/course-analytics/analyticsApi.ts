@@ -20,8 +20,10 @@ export interface QuestionOverview {
   studentCount: number;
   labeledCount: number;
   answeredFromMaterialsCount: number;
+  // Questions with an answered-from-materials label: the % denominator.
+  materialsJudgedCount: number;
   needsAttentionCount: number;
-  // Greetings and logistics: hidden when the list shows study questions only.
+  // Greetings and logistics in the whole window, even when they are hidden.
   nonStudyCount: number;
   citedQuestionCount: number;
   documentQuestionCount: number;
@@ -92,8 +94,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const toNumber = (value: unknown): number | null => (value === null || value === undefined ? null : Number(value));
 const toFlag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
 
-export async function fetchQuestionOverview(courseId: string, range: AnalyticsRange): Promise<QuestionOverview> {
-  const rows = unwrap(await supabase.rpc('get_course_question_overview', rangeArgs(courseId, range)));
+// With studyOnly, every count except nonStudyCount leaves out greetings and
+// logistics, as the question list does.
+export async function fetchQuestionOverview(
+  courseId: string,
+  range: AnalyticsRange,
+  studyOnly: boolean,
+): Promise<QuestionOverview> {
+  const rows = unwrap(await supabase.rpc('get_course_question_overview', { ...rangeArgs(courseId, range), in_study_only: studyOnly }));
   const row = rows?.[0];
   if (!row) throw new Error('Unexpected response from get_course_question_overview');
   return {
@@ -101,6 +109,7 @@ export async function fetchQuestionOverview(courseId: string, range: AnalyticsRa
     studentCount: Number(row.student_count),
     labeledCount: Number(row.labeled_count),
     answeredFromMaterialsCount: Number(row.answered_from_materials_count),
+    materialsJudgedCount: Number(row.materials_judged_count),
     needsAttentionCount: Number(row.needs_attention_count),
     nonStudyCount: Number(row.non_study_count),
     citedQuestionCount: Number(row.cited_question_count),
@@ -109,8 +118,8 @@ export async function fetchQuestionOverview(courseId: string, range: AnalyticsRa
   };
 }
 
-export async function fetchCitedFiles(courseId: string, range: AnalyticsRange): Promise<CitedFile[]> {
-  const rows = unwrap(await supabase.rpc('get_course_cited_files', rangeArgs(courseId, range)));
+export async function fetchCitedFiles(courseId: string, range: AnalyticsRange, studyOnly: boolean): Promise<CitedFile[]> {
+  const rows = unwrap(await supabase.rpc('get_course_cited_files', { ...rangeArgs(courseId, range), in_study_only: studyOnly }));
   return (rows ?? []).map((row) => ({
     fileName: row.file_name,
     fileType: row.file_type,

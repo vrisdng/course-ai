@@ -14,8 +14,6 @@ interface NavPaneProps {
   files: LoadState<CitedFile[]>;
   labels: QuestionLabelsState;
   selection: Selection;
-  // Whether greetings and logistics are hidden, so counts match the list.
-  studyOnly: boolean;
   onSelect(selection: Selection): void;
 }
 
@@ -75,7 +73,7 @@ const iconClass = 'h-4 w-4 shrink-0 text-muted-foreground';
 
 // The left pane: what to look at. Each item selects the questions shown in
 // the middle pane.
-export function NavPane({ overview, files, labels, selection, studyOnly, onSelect }: NavPaneProps) {
+export function NavPane({ overview, files, labels, selection, onSelect }: NavPaneProps) {
   const pick = (next: Selection) => () => onSelect(next);
   const current = (candidate: Selection) => isSameSelection(selection, candidate);
   const bucketState: LoadState<QuestionLabelsState['buckets']> = {
@@ -89,7 +87,7 @@ export function NavPane({ overview, files, labels, selection, studyOnly, onSelec
       <ul className="space-y-0.5">
         <NavItem
           label="All questions"
-          count={overview.data ? overview.data.questionCount - (studyOnly ? overview.data.nonStudyCount : 0) : null}
+          count={overview.data?.questionCount ?? null}
           icon={<Inbox className={iconClass} aria-hidden="true" />}
           isCurrent={current(ALL_QUESTIONS)}
           onClick={pick(ALL_QUESTIONS)}

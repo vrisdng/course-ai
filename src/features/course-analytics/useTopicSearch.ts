@@ -18,6 +18,9 @@ export interface TopicSearchState {
   isMatching: boolean;
   // Shown when the materials search failed.
   note: string | null;
+  // Clears the box and drops any search still running, so a late result
+  // can't replace a view or course picked since.
+  reset(): void;
 }
 
 // The question search box. Depending on the mode, a search matches
@@ -75,5 +78,12 @@ export function useTopicSearch(
     if (input.trim()) void run(input, next);
   }, [input, run]);
 
-  return { input, setInput, submit, mode, setMode, isMatching, note };
+  const reset = useCallback(() => {
+    request.current += 1;
+    setInput('');
+    setNote(null);
+    setIsMatching(false);
+  }, []);
+
+  return { input, setInput, submit, mode, setMode, isMatching, note, reset };
 }

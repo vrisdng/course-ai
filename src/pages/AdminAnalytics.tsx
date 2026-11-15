@@ -55,11 +55,11 @@ function daysFor(preset: RangePreset): number {
   return RANGE_PRESETS.find((option) => option.value === preset)?.days ?? 30;
 }
 
-function summary(overview: QuestionOverview, studyOnly: boolean): string {
-  const questions = overview.questionCount - (studyOnly ? overview.nonStudyCount : 0);
-  const parts = [plural(questions, 'question'), plural(overview.studentCount, 'student')];
-  if (overview.labeledCount > 0) {
-    parts.push(`${Math.round((overview.answeredFromMaterialsCount / overview.labeledCount) * 100)}% answered from materials`);
+// The overview is already filtered by the study-only toggle.
+function summary(overview: QuestionOverview): string {
+  const parts = [plural(overview.questionCount, 'question'), plural(overview.studentCount, 'student')];
+  if (overview.materialsJudgedCount > 0) {
+    parts.push(`${Math.round((overview.answeredFromMaterialsCount / overview.materialsJudgedCount) * 100)}% answered from materials`);
   }
   return parts.join(' · ');
 }
@@ -119,8 +119,15 @@ export default function AdminAnalytics() {
 
   const rangeKey = courseId && range ? `${courseId}|${range.startAt}|${range.endAt}` : null;
   const labelledKey = rangeKey && `${rangeKey}|${labels.version}`;
-  const overview = useLoader(labelledKey && `overview|${labelledKey}`, () => fetchQuestionOverview(courseId!, range!));
-  const files = useLoader(rangeKey && `files|${rangeKey}`, () => fetchCitedFiles(courseId!, range!));
+  // The counts follow the study-only toggle so they match the list they open.
+  const overview = useLoader(
+    labelledKey && `overview|${labelledKey}|${studyOnly}`,
+    () => fetchQuestionOverview(courseId!, range!, studyOnly),
+  );
+  const files = useLoader(
+    labelledKey && `files|${labelledKey}|${studyOnly}`,
+    () => fetchCitedFiles(courseId!, range!, studyOnly),
+  );
 
   const filters = useMemo(() => filtersFor(selection, studyOnly), [selection, studyOnly]);
   const feed = useQuestionFeed(courseId, range, filters, labels.version);
@@ -144,10 +151,12 @@ export default function AdminAnalytics() {
     setMobilePane('list');
   }, []);
   const search = useTopicSearch(courseId, onSearch);
-  const { setInput: setSearchInput } = search;
+  const { reset: resetSearch } = search;
 
+  // Picking a view or course drops any search still running, so its late
+  // result can't replace what was picked.
   const select = (next: Selection) => {
-    setSearchInput('');
+    resetSearch();
     setSelection(next);
     setMobilePane('list');
   };
@@ -157,7 +166,7 @@ export default function AdminAnalytics() {
   };
   const changeCourse = (id: string) => {
     setSelectedCourseId(id);
-    setSearchInput('');
+    resetSearch();
     setSelection(ALL_QUESTIONS);
   };
 
@@ -193,7 +202,7 @@ export default function AdminAnalytics() {
                 rangeLabel={rangeLabel}
               />
               <p className="text-sm text-muted-foreground">
-                {overview.data ? summary(overview.data, studyOnly) : rangeLabel}
+                {overview.data ? summary(overview.data) : rangeLabel}
               </p>
               <div className="ml-auto">
                 <AskAnalyticsSheet chat={chat} disabledReason={rangeError} rangeLabel={rangeLabel} />
@@ -225,7 +234,6 @@ export default function AdminAnalytics() {
                 files={files}
                 labels={labels}
                 selection={selection}
-                studyOnly={studyOnly}
                 onSelect={select}
               />
             </aside>
