@@ -6,6 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { createOpenAIDecisionsClient, createOpenAIEmbeddingService } from "../_shared/llm.ts";
 import type { MatchedChunk } from "../_shared/analyticsPlaces.ts";
+import { createQuestionLabelStore } from "../_shared/questionLabelling.ts";
 import { handleCourseAnalytics, type AnalyticsRange, type UnlabeledQuestion } from "./handler.ts";
 
 interface UnlabeledEventRow {
@@ -103,20 +104,6 @@ serve(async (req: Request) => {
 
     decide: createOpenAIDecisionsClient(openAiApiKey),
 
-    async saveLabels(questionId, labels, model) {
-      const { error } = await admin
-        .from("query_events")
-        .update({
-          ai_category: labels.category,
-          ai_category_confidence: labels.categoryConfidence,
-          ai_is_study_question: labels.isStudyQuestion,
-          ai_answered_from_materials: labels.answeredFromMaterials,
-          ai_labeled_at: new Date().toISOString(),
-          ai_label_model: model,
-        })
-        .eq("id", questionId)
-        .is("ai_labeled_at", null);
-      if (error) throw new Error(`Could not save labels: ${error.message}`);
-    },
+    saveLabels: createQuestionLabelStore(admin),
   });
 });

@@ -9,6 +9,9 @@ const state = vi.hoisted(() => ({
   generationFails: false,
   noRagPrompt: "",
   abort: null as null | AbortController,
+  labelUpdates: [] as Array<Record<string, unknown>>,
+  background: [] as Array<Promise<unknown>>,
+  decide: null as null | ReturnType<typeof vi.fn>,
 }));
 
 vi.mock("https://deno.land/std@0.168.0/http/server.ts", () => ({
@@ -20,10 +23,15 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
     auth: { getUser: async () => ({ data: { user: { id: "user" } }, error: null }) },
     from: (table: string) => {
       let inserted: Record<string, unknown> | null = null;
+      let updated: Record<string, unknown> | null = null;
       const result = () => {
+        if (table === "query_events" && updated) {
+          state.labelUpdates.push(updated);
+          return { data: null, error: null };
+        }
         if (table === "query_events") {
           state.events.push(inserted!);
-          return { data: null, error: null };
+          return { data: { id: "event-1" }, error: null };
         }
         if (table === "conversations") return { data: { id: "conversation", course_id: "course", user_id: state.otherOwner ? "other" : "user" }, error: null };
         if (table === "messages" && inserted) return state.persistenceFails
@@ -33,8 +41,8 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
         return { data: null, error: null };
       };
       const builder = {
-        select: () => builder, eq: () => builder, order: () => builder, limit: () => builder,
-        update: () => builder,
+        select: () => builder, eq: () => builder, is: () => builder, order: () => builder, limit: () => builder,
+        update: (payload: Record<string, unknown>) => { updated = payload; return builder; },
         insert: (payload: Record<string, unknown>) => { inserted = payload; return builder; },
         single: async () => result(), maybeSingle: async () => result(),
         then: (resolve: (value: ReturnType<typeof result>) => unknown) => Promise.resolve(result()).then(resolve),
@@ -46,6 +54,7 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
 vi.mock("../_shared/llm.ts", () => ({
   HttpError: class extends Error { constructor(public status: number, message: string) { super(message); } },
   createOpenAIEmbeddingService: () => ({ model: "embedding", embedQuery: async () => [1] }),
+  createOpenAIDecisionsClient: () => (request: unknown) => state.decide!(request),
   generateAgentTextStream: async (options: {
     tool: { execute: (query: string) => Promise<string> };
     onToolCall: (query: string) => void;
@@ -79,7 +88,18 @@ describe("RAG terminal telemetry wiring", () => {
     state.otherOwner = false;
     state.generationFails = false;
     state.abort = null;
+    state.labelUpdates = [];
+    state.background = [];
+    state.decide = vi.fn().mockResolvedValue({
+      answers: [
+        { type: "choice", name: "category", choice: "calculation", confidence: 0.8, probabilities: [] },
+        { type: "predicate", name: "is_study_question", probability: 0.9 },
+        { type: "predicate", name: "answered_from_materials", probability: 0.7 },
+      ],
+      inputTokens: 100,
+    });
     vi.stubGlobal("Deno", { env: { get: () => "test" } });
+    vi.stubGlobal("EdgeRuntime", { waitUntil: (work: Promise<unknown>) => { state.background.push(work); } });
     await import("./index");
   });
 
@@ -154,5 +174,43 @@ describe("RAG terminal telemetry wiring", () => {
     expect(response.status).toBe(403);
     expect(state.events).toHaveLength(1);
     expect(state.events[0]).toMatchObject({ outcome: "error", error_code: "http_403", course_id: null, conversation_id: null });
+  });
+
+  it("labels a delivered, saved question in the background", async () => {
+    const { body } = await run();
+    expect(body).toContain("event: final");
+    expect(state.background).toHaveLength(1);
+    await Promise.all(state.background);
+
+    expect(state.decide).toHaveBeenCalledTimes(1);
+    const turn = state.decide!.mock.calls[0][0].input[1].content[0].text as string;
+    expect(turn).toContain("hello");
+    expect(turn).toContain("answer");
+    expect(state.labelUpdates).toEqual([expect.objectContaining({
+      ai_category: "calculation", ai_is_study_question: true, ai_answered_from_materials: true,
+      ai_labeled_at: expect.any(String),
+    })]);
+  });
+
+  it("does not label a turn that failed or was not saved", async () => {
+    state.generationFails = true;
+    await run(false);
+    state.generationFails = false;
+    state.persistenceFails = true;
+    await run();
+
+    expect(state.background).toHaveLength(0);
+    expect(state.decide).not.toHaveBeenCalled();
+    expect(state.labelUpdates).toHaveLength(0);
+  });
+
+  it("keeps the chat unaffected when labelling fails", async () => {
+    state.decide!.mockRejectedValue(new Error("Decision admission timed out"));
+    const { body } = await run();
+    expect(body).toContain("event: final");
+    expect(body).not.toContain("event: error");
+    await expect(Promise.all(state.background)).resolves.toBeDefined();
+    expect(state.labelUpdates).toHaveLength(0);
+    expect(state.events).toHaveLength(1);
   });
 });

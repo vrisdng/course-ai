@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import {
   HttpError,
+  createOpenAIDecisionsClient,
   createOpenAIEmbeddingService,
   generateAgentTextStream,
   generateChatTextStream,
@@ -49,6 +50,8 @@ import {
   type CourseChatSettingsRow,
 } from "../_shared/chatSettings.ts";
 import { ChatTelemetry, classifyChatFailure, finishChatTelemetry, type ChatOutcome, type ChatTelemetryFields } from "../_shared/chatTelemetry.ts";
+import { createQuestionLabelStore, labelQuestion, type QuestionToLabel } from "../_shared/questionLabelling.ts";
+import type { DecideFn } from "../_shared/decisions.ts";
 import type { TokenUsage } from "../_shared/llmUsage.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { formatSseEvent, throwIfAborted } from "../_shared/sse.ts";
@@ -210,17 +213,39 @@ async function getActiveAcademicTermId(
   return data?.id || null;
 }
 
+// Returns the new row's id, or null if the insert failed.
 async function insertQueryEvent(
   supabaseClient: SupabaseClient,
   payload: QueryEventInsert & ChatTelemetryFields,
-): Promise<void> {
-  const { error } = await supabaseClient
+): Promise<string | null> {
+  const { data, error } = await supabaseClient
     .from("query_events")
-    .insert(payload);
+    .insert(payload)
+    .select("id")
+    .single();
 
   if (error) {
     console.error("Failed to insert query analytics event:", error);
+    return null;
   }
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+declare const EdgeRuntime: { waitUntil(work: Promise<unknown>): void } | undefined;
+
+// Keeps the worker alive for `work` after the response has finished.
+function runInBackground(work: Promise<unknown>): void {
+  if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(work);
+}
+
+// Labels the question for course analytics once its turn is saved. Never
+// throws: a failed label is logged and retried later by course-analytics.
+function labelInBackground(question: QuestionToLabel, decide: DecideFn, supabaseAdminClient: SupabaseClient): void {
+  runInBackground(
+    labelQuestion(question, decide, createQuestionLabelStore(supabaseAdminClient)).catch((error) => {
+      console.error(`Labelling question ${question.id} failed:`, error instanceof Error ? error.message : error);
+    }),
+  );
 }
 
 // Inserts the user question and assistant answer with timestamps 1ms apart
@@ -586,6 +611,7 @@ serve(async (req: Request) => {
     let chatModelConfig: ChatModelConfig = CHAT_MODEL_CONFIGS.fast;
     const chatApiKey: string = openAiApiKey;
     const embeddingService = createOpenAIEmbeddingService(openAiApiKey);
+    const decide = createOpenAIDecisionsClient(openAiApiKey);
 
     const supabaseClient = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: authHeader } },
@@ -643,9 +669,10 @@ serve(async (req: Request) => {
       unresolved: false, unresolved_reason: null,
     };
     const context = eventContext;
+    let queryEventId: string | null = null;
     recordEvent = (outcome, errorCode = null) => finishChatTelemetry(
       chatTelemetry,
-      (fields) => insertQueryEvent(supabaseAdminClient, { ...context, ...fields }),
+      async (fields) => { queryEventId = await insertQueryEvent(supabaseAdminClient, { ...context, ...fields }); },
       outcome, errorCode,
     );
     const recordUsage = (usage: TokenUsage) => chatTelemetry.recordUsage(usage);
@@ -924,6 +951,8 @@ ${retrievalScopeInstruction}`;
           let outcome: ChatOutcome = "error";
           let errorCode: string | null = "incomplete_request";
           let answerDelivered = false;
+          // The answer as saved, for labelling once the turn is recorded.
+          let savedAnswer: string | null = null;
           try {
             ensureStreamActive();
 
@@ -1082,6 +1111,7 @@ ${retrievalScopeInstruction}`;
             }
 
             const assistantMessage = assistantMessageResult.data;
+            savedAnswer = answer;
 
             // Citations and conversation update can run in parallel.
             await Promise.all([
@@ -1138,6 +1168,15 @@ ${retrievalScopeInstruction}`;
             sendEvent("error", { error: message, status });
           } finally {
             await recordEvent!(outcome, errorCode);
+            // Only completed, saved turns count in analytics, so only they are labelled.
+            if (outcome === "success" && errorCode === null && queryEventId && savedAnswer !== null) {
+              labelInBackground({
+                id: queryEventId,
+                queryText: trimmedMessage,
+                answer: savedAnswer,
+                citationCount: context.citation_count,
+              }, decide, supabaseAdminClient);
+            }
             if (!streamCancelled) {
               controller.close();
             }

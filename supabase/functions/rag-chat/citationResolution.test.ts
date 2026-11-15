@@ -74,6 +74,8 @@ vi.mock("../_shared/llm.ts", () => {
   return {
     HttpError: class extends Error { constructor(public status: number, message: string) { super(message); } },
     createOpenAIEmbeddingService: () => ({ model: "embedding", embedQuery: async () => [1] }),
+    // Labelling is covered in index.test.ts; here it just has nothing to label.
+    createOpenAIDecisionsClient: () => async () => ({ answers: [], inputTokens: 0 }),
     generateAgentTextStream: async (options: {
       messages: Array<{ role: string; content: string }>;
       tool: { execute: (query: string) => Promise<string> };

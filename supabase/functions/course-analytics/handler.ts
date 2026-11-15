@@ -8,9 +8,9 @@
 //                    The page then lists questions whose answers cited them
 //                    through the get_course_questions RPC.
 //   label-questions  Label up to `limit` not-yet-labelled questions in the
-//                    window with the Decisions API (questionLabels.ts). The
-//                    admin page calls this when it opens, so each question is
-//                    labelled once, shortly after anyone looks.
+//                    window with the Decisions API (questionLabelling.ts).
+//                    rag-chat labels each question when it is asked; this
+//                    catches any whose labelling failed there.
 import { corsHeaders } from "../_shared/cors.ts";
 import {
   KEYWORD_MATCH_COUNT,
@@ -19,8 +19,8 @@ import {
   type AnalyticsPlace,
   type MatchedChunk,
 } from "../_shared/analyticsPlaces.ts";
-import { DECISIONS_MODEL, type DecideFn } from "../_shared/decisions.ts";
-import { buildQuestionLabelRequest, parseQuestionLabels, type QuestionLabels } from "../_shared/questionLabels.ts";
+import type { DecideFn } from "../_shared/decisions.ts";
+import { labelQuestion, type QuestionToLabel, type SaveQuestionLabels } from "../_shared/questionLabelling.ts";
 
 export type AuthorizationResult = "admin" | "unauthorized" | "forbidden";
 
@@ -29,12 +29,7 @@ export interface AnalyticsRange {
   endAt: string | null;
 }
 
-export interface UnlabeledQuestion {
-  id: string;
-  queryText: string;
-  answer: string | null;
-  citationCount: number;
-}
+export type UnlabeledQuestion = QuestionToLabel;
 
 export interface CourseAnalyticsDeps {
   authorize(authHeader: string): Promise<AuthorizationResult>;
@@ -50,7 +45,7 @@ export interface CourseAnalyticsDeps {
   findUnlabeledQuestions(courseId: string, range: AnalyticsRange, limit: number): Promise<UnlabeledQuestion[]>;
   countUnlabeledQuestions(courseId: string, range: AnalyticsRange): Promise<number>;
   decide: DecideFn;
-  saveLabels(questionId: string, labels: QuestionLabels, model: string): Promise<void>;
+  saveLabels: SaveQuestionLabels;
 }
 
 interface MatchKeywordRequest {
@@ -147,12 +142,7 @@ async function labelQuestions(body: LabelQuestionsRequest, deps: CourseAnalytics
   let lastError: string | undefined;
   await forEachLimited(questions, LABEL_CONCURRENCY, async (question) => {
     try {
-      const result = await deps.decide(buildQuestionLabelRequest({
-        question: question.queryText,
-        answer: question.answer,
-        citationCount: question.citationCount,
-      }));
-      await deps.saveLabels(question.id, parseQuestionLabels(result.answers), DECISIONS_MODEL);
+      await labelQuestion(question, deps.decide, deps.saveLabels);
       labeled += 1;
     } catch (error) {
       // Not saved, so it's tried again next time.
