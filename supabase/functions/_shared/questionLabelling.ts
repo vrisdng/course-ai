@@ -1,7 +1,6 @@
 // Labels one saved question (a query_events row) with the Decisions API and
 // stores the result. rag-chat labels each question right after its turn is
 // saved; course-analytics labels any that are still unlabelled.
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { DECISIONS_MODEL, type DecideFn } from "./decisions.ts";
 import { buildQuestionLabelRequest, parseQuestionLabels, type QuestionLabels } from "./questionLabels.ts";
 
@@ -27,9 +26,21 @@ export async function labelQuestion(question: QuestionToLabel, decide: DecideFn,
   await save(question.id, parseQuestionLabels(result.answers), DECISIONS_MODEL);
 }
 
+// The slice of the Supabase client the label store uses. Typed structurally so
+// this module has no URL import and stays checkable from the Vite tsconfig.
+export interface LabelStoreClient {
+  from(table: "query_events"): {
+    update(values: Record<string, unknown>): {
+      eq(column: "id", value: string): {
+        is(column: "ai_labeled_at", value: null): PromiseLike<{ error: { message: string } | null }>;
+      };
+    };
+  };
+}
+
 // Writes labels with the service-role client. Only an unlabelled row is
 // updated, so a question is never relabelled by a second, overlapping run.
-export function createQuestionLabelStore(admin: SupabaseClient): SaveQuestionLabels {
+export function createQuestionLabelStore(admin: LabelStoreClient): SaveQuestionLabels {
   return async (questionId, labels, model) => {
     const { error } = await admin
       .from("query_events")

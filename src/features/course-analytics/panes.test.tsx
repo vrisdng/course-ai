@@ -74,7 +74,7 @@ function feed(overrides: Partial<QuestionFeedState> = {}): QuestionFeedState {
 }
 
 function search(overrides: Partial<TopicSearchState> = {}): TopicSearchState {
-  return { input: '', setInput: vi.fn(), submit: vi.fn(), isMatching: false, note: null, mode: 'both', setMode: vi.fn(), ...overrides };
+  return { input: '', setInput: vi.fn(), submit: vi.fn(), isMatching: false, note: null, mode: 'both', setMode: vi.fn(), reset: vi.fn(), ...overrides };
 }
 
 describe('QuestionsPane', () => {
