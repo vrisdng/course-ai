@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, Search, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Loader2, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -12,12 +12,42 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { supabase } from '@/integrations/supabase/client';
 import { ImportStudentsDialog } from '@/features/students/ImportStudentsDialog';
+import {
+  fetchStudentQuestionCounts,
+  sortRosterByQuestions,
+  type QuestionSort,
+  type StudentQuestionCount,
+} from '@/features/students/studentQuestionCounts';
 
 interface RosterEntry {
   enrollmentId: string;
   name: string;
   email: string;
   enrolledAt: string;
+  /** null when the counts could not be loaded. */
+  questionCount: number | null;
+  lastQuestionAt: string | null;
+}
+
+const NEXT_SORT: Record<'none' | 'desc' | 'asc', QuestionSort> = { none: 'desc', desc: 'asc', asc: null };
+
+const SORT_ICON = { none: ArrowUpDown, desc: ArrowDown, asc: ArrowUp } as const;
+
+const ARIA_SORT = { none: 'none', desc: 'descending', asc: 'ascending' } as const;
+
+// Counts are best-effort: a failure leaves the roster usable and shows dashes.
+async function loadQuestionCounts(courseId: string): Promise<Map<string, StudentQuestionCount> | null> {
+  try {
+    return await fetchStudentQuestionCounts(courseId);
+  } catch (error) {
+    toast.error(`Could not load question counts: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function lastAskedLabel(entry: RosterEntry): string {
+  if (entry.questionCount === null) return '—';
+  return entry.lastQuestionAt ? new Date(entry.lastQuestionAt).toLocaleDateString() : 'Never';
 }
 
 export default function CourseStudents() {
@@ -29,19 +59,21 @@ export default function CourseStudents() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isRemoving, setIsRemoving] = useState(false);
+  const [questionSort, setQuestionSort] = useState<QuestionSort>(null);
 
   const fetchRoster = useCallback(async () => {
     if (!courseId) return;
     setIsLoading(true);
     setSelectedIds(new Set());
 
-    const [courseResult, enrollmentsResult] = await Promise.all([
+    const [courseResult, enrollmentsResult, questionCounts] = await Promise.all([
       supabase.from('courses').select('name, code').eq('id', courseId).maybeSingle(),
       supabase
         .from('enrollments')
         .select('id, user_id, enrolled_at')
         .eq('course_id', courseId)
         .order('enrolled_at', { ascending: true }),
+      loadQuestionCounts(courseId),
     ]);
 
     if (courseResult.data) {
@@ -81,11 +113,14 @@ export default function CourseStudents() {
     setRoster(
       enrollments.map((e) => {
         const profile = profileByUserId.get(e.user_id);
+        const asked = questionCounts?.get(e.user_id);
         return {
           enrollmentId: e.id,
           name: profile?.full_name || '—',
           email: profile?.email || '—',
           enrolledAt: e.enrolled_at,
+          questionCount: questionCounts ? asked?.questionCount ?? 0 : null,
+          lastQuestionAt: asked?.lastQuestionAt ?? null,
         };
       })
     );
@@ -98,9 +133,14 @@ export default function CourseStudents() {
 
   const filteredRoster = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return roster;
-    return roster.filter((r) => r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q));
-  }, [roster, searchQuery]);
+    const matches = q
+      ? roster.filter((r) => r.name.toLowerCase().includes(q) || r.email.toLowerCase().includes(q))
+      : roster;
+    return sortRosterByQuestions(matches, questionSort);
+  }, [roster, searchQuery, questionSort]);
+
+  const sortKey = questionSort ?? 'none';
+  const SortIcon = SORT_ICON[sortKey];
 
   const allVisibleSelected =
     filteredRoster.length > 0 && filteredRoster.every((r) => selectedIds.has(r.enrollmentId));
@@ -234,13 +274,26 @@ export default function CourseStudents() {
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Enrolled</TableHead>
+                  <TableHead aria-sort={ARIA_SORT[sortKey]}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="-ml-3 h-8 gap-1"
+                      onClick={() => setQuestionSort(NEXT_SORT[sortKey])}
+                    >
+                      Questions
+                      <SortIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>Last asked</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={5}>
+                    <TableCell colSpan={7}>
                       <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Loading students...
@@ -249,7 +302,7 @@ export default function CourseStudents() {
                   </TableRow>
                 ) : filteredRoster.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
                       {searchQuery ? 'No students match your search.' : 'No students enrolled yet.'}
                     </TableCell>
                   </TableRow>
@@ -267,6 +320,12 @@ export default function CourseStudents() {
                       <TableCell data-label="Email" className={`${stackedTable.cell} break-all text-muted-foreground`}>{entry.email}</TableCell>
                       <TableCell data-label="Enrolled" className={`${stackedTable.cell} text-muted-foreground`}>
                         {new Date(entry.enrolledAt).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell data-label="Questions" className={`${stackedTable.cell} tabular-nums`}>
+                        {entry.questionCount ?? '—'}
+                      </TableCell>
+                      <TableCell data-label="Last asked" className={`${stackedTable.cell} text-muted-foreground`}>
+                        {lastAskedLabel(entry)}
                       </TableCell>
                       <TableCell className={stackedTable.actionsCell}>
                         <div className={stackedTable.actions}>

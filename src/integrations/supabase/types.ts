@@ -1561,6 +1561,14 @@ export type Database = {
               keyword: string
             }[]
           }
+      get_course_student_question_counts: {
+        Args: { in_course_id: string }
+        Returns: {
+          last_question_at: string
+          question_count: number
+          user_id: string
+        }[]
+      }
       get_course_top_questions:
         | {
             Args: {
