@@ -39,6 +39,9 @@ verify_jwt = false
 [functions.analytics-chat]
 verify_jwt = false
 
+[functions.course-analytics]
+verify_jwt = false
+
 [functions.signed-media]
 verify_jwt = false
 

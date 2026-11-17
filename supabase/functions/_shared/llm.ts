@@ -29,6 +29,7 @@ import {
 } from "./llmConfig.ts";
 
 import { mergeTokenUsage, normalizeTokenUsage, type TokenUsage } from "./llmUsage.ts";
+import { createDecisionsClient, type DecideFn } from "./decisions.ts";
 
 export interface ChatTextResult {
   text: string;
@@ -307,4 +308,10 @@ export function createOpenAIEmbeddingService(
     }
   };
   return createEmbeddingService(embedBatch, config);
+}
+
+// The OpenAI Decisions API (structured predicate/choice/score answers; see
+// decisions.ts). Retries 429s and 5xx before surfacing a DecisionsApiError.
+export function createOpenAIDecisionsClient(apiKey: string): DecideFn {
+  return createDecisionsClient(apiKey);
 }
