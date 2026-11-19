@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders } from '../_shared/cors.ts';
 import { handleUploadSession, reapVideoUploads, type CleanupEntry, type NewUploadMaterial, type R2MultipartUpload, type R2Part, type StoredObjectInfo, type UploadMaterial, type UploadSessionStore } from './core.ts';
-import { r2AbortMultipartUpload, r2CreateMultipartUpload, r2CompleteMultipartUpload, r2DeleteObject, r2IssueCredentials, r2ListParts, selectR2Env } from '../_shared/r2.ts';
+import { r2AbortMultipartUpload, r2CreateMultipartUpload, r2CompleteMultipartUpload, r2DeleteObject, r2HeadObject, r2IssueCredentials, r2ListParts, selectR2Env } from '../_shared/r2.ts';
 
 const BUCKET = 'course-materials';
 const MATERIAL_FIELDS = 'id, course_id, academic_term_id, access_scope, uploaded_by, file_name, file_size, file_type, file_path, video_content_type, video_upload_key, video_upload_state, storage_provider';
@@ -70,7 +70,17 @@ serve(async (req: Request) => {
       if (error) throw error;
       return data as UploadMaterial;
     },
-    async objectInfo(path: string): Promise<StoredObjectInfo | null> {
+    async objectInfo(path: string, provider: 'supabase' | 'r2'): Promise<StoredObjectInfo | null> {
+      if (provider === 'r2') {
+        try {
+          const info = await r2HeadObject(path);
+          return { size: info.contentLength, contentType: info.contentType };
+        } catch (error) {
+          const details = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+          if (details.name === 'NoSuchKey' || details.name === 'NotFound' || details.$metadata?.httpStatusCode === 404) return null;
+          throw error;
+        }
+      }
       const { data, error } = await adminClient.rpc('get_video_storage_object_info', { target_path: path });
       if (error) throw error;
       const info = data?.[0] as { size_bytes: number | string | null; content_type: string | null } | undefined;

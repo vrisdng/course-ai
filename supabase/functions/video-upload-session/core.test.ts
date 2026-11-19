@@ -360,6 +360,56 @@ describe('video upload session', () => {
       expect(db.enqueueTranscription).toHaveBeenCalledWith(ID);
     });
 
+    it('recovers a completed R2 object when marking it uploaded failed after provider completion', async () => {
+      const parts = [{ partNumber: 1, etag: '"etag-1"', size: 1024 }];
+      const db = store({
+        findMaterial: vi.fn().mockResolvedValue(r2Material()),
+        objectInfo: vi.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue({ size: 1024, contentType: 'video/mp4' }),
+        loadMultipartUpload: vi.fn().mockResolvedValue(r2Upload),
+        listR2Parts: vi.fn().mockResolvedValueOnce(parts).mockRejectedValueOnce(new Error('NoSuchUpload')),
+        completeR2MultipartUpload: vi.fn().mockResolvedValue({ size: 1024, contentType: 'video/mp4' }),
+        markUploaded: vi.fn().mockRejectedValueOnce(new Error('temporary database failure')).mockResolvedValue(undefined),
+      });
+
+      await expect(handleUploadSession({ action: 'complete-multipart', materialId: ID }, USER, db, () => ID))
+        .rejects.toThrow('temporary database failure');
+
+      await expect(handleUploadSession({ action: 'complete-multipart', materialId: ID }, USER, db, () => ID))
+        .resolves.toEqual({ status: 200, body: { materialId: ID, filePath: R2_PATH, uploaded: true, transcriptionStatus: 'pending' } });
+      expect(db.completeR2MultipartUpload).toHaveBeenCalledTimes(1);
+      expect(db.finishMultipartUpload).toHaveBeenCalledWith(ID);
+    });
+
+    it('recovers when R2 committed but the completion response or verification failed', async () => {
+      const parts = [{ partNumber: 1, etag: '"etag-1"', size: 1024 }];
+      const db = store({
+        findMaterial: vi.fn().mockResolvedValue(r2Material()),
+        objectInfo: vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ size: 1024, contentType: 'video/mp4' }),
+        loadMultipartUpload: vi.fn().mockResolvedValue(r2Upload),
+        listR2Parts: vi.fn().mockResolvedValue(parts),
+        completeR2MultipartUpload: vi.fn().mockRejectedValue(new Error('response lost after R2 committed')),
+      });
+
+      await expect(handleUploadSession({ action: 'complete-multipart', materialId: ID }, USER, db, () => ID))
+        .resolves.toEqual({ status: 200, body: { materialId: ID, filePath: R2_PATH, uploaded: true, transcriptionStatus: 'pending' } });
+      expect(db.finishMultipartUpload).toHaveBeenCalledWith(ID);
+      expect(db.markUploaded).toHaveBeenCalledWith(ID);
+    });
+
+    it('makes an already-uploaded multipart completion request idempotent after verifying the object', async () => {
+      const db = store({
+        findMaterial: vi.fn().mockResolvedValue(r2Material({ video_upload_state: 'uploaded' })),
+        objectInfo: vi.fn().mockResolvedValue({ size: 1024, contentType: 'video/mp4' }),
+      });
+
+      await expect(handleUploadSession({ action: 'complete-multipart', materialId: ID }, USER, db, () => ID))
+        .resolves.toEqual({ status: 200, body: { materialId: ID, filePath: R2_PATH, uploaded: true, transcriptionStatus: 'pending' } });
+      expect(db.completeR2MultipartUpload).not.toHaveBeenCalled();
+      expect(db.listR2Parts).not.toHaveBeenCalled();
+    });
+
     it('abandons the upload when the stored size does not match the record', async () => {
       const db = store({ findMaterial: vi.fn().mockResolvedValue(r2Material({ file_size: 2048 })), loadMultipartUpload: vi.fn().mockResolvedValue(r2Upload), listR2Parts: vi.fn().mockResolvedValue([{ partNumber: 1, etag: '"etag-1"', size: 2048 }]) });
       db.completeR2MultipartUpload = vi.fn().mockResolvedValue({ size: 1024, contentType: 'video/mp4' });

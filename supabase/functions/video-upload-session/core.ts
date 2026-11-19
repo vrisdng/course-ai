@@ -60,7 +60,7 @@ export interface UploadSessionStore {
   findByKey(profileId: string, key: string): Promise<UploadMaterial | null>;
   findMaterial(id: string): Promise<UploadMaterial | null>;
   createMaterial(material: NewUploadMaterial): Promise<UploadMaterial>;
-  objectInfo(path: string): Promise<StoredObjectInfo | null>;
+  objectInfo(path: string, provider: StorageProvider): Promise<StoredObjectInfo | null>;
   markUploaded(id: string): Promise<void>;
   markCancelled(id: string): Promise<void>;
   markDeleting(id: string): Promise<void>;
@@ -115,7 +115,7 @@ function sameUpload(material: UploadMaterial, input: ValidatedCreateParams): boo
 }
 
 async function uploaded(material: UploadMaterial, store: UploadSessionStore): Promise<boolean> {
-  const info = await store.objectInfo(material.file_path);
+  const info = await store.objectInfo(material.file_path, material.storage_provider);
   return info !== null && info.size === material.file_size && info.contentType === material.video_content_type;
 }
 
@@ -229,6 +229,26 @@ async function ensureR2MultipartUpload(
     if (raced) return raced;
     throw error;
   }
+}
+
+async function finishR2Upload(material: UploadMaterial, store: UploadSessionStore): Promise<SessionResult> {
+  await store.markUploaded(material.id);
+  await store.finishMultipartUpload(material.id);
+  let transcriptionStatus: string;
+  try {
+    const job = await store.enqueueTranscription(material.id);
+    transcriptionStatus = job.status;
+  } catch (error) {
+    // The durable upload is complete. A provider or function failure belongs
+    // to transcription, and the reconciler can resubmit a pending job.
+    console.error('[video-upload-session] Transcription enqueue failed', material.id, error);
+    try {
+      transcriptionStatus = await store.transcriptionStatus(material.id);
+    } catch {
+      transcriptionStatus = 'pending';
+    }
+  }
+  return reply(200, { materialId: material.id, filePath: material.file_path, uploaded: true, transcriptionStatus });
 }
 
 export async function handleUploadSession(
@@ -432,8 +452,14 @@ export async function handleUploadSession(
     if (!UUID.test(String(body.materialId))) return reply(400, { error: 'Invalid material ID' });
     const material = await store.findMaterial(body.materialId as string);
     if (!material || material.uploaded_by !== user.profileId || material.file_type !== 'video' ||
-      material.storage_provider !== 'r2' || material.video_upload_state !== 'uploading') {
+      material.storage_provider !== 'r2' || !['uploading', 'uploaded'].includes(material.video_upload_state)) {
       return reply(404, { error: 'Video multipart upload not found' });
+    }
+    // CompleteMultipartUpload may have committed before its response, follow-up
+    // HEAD, or database update failed. The owned object is the recovery source.
+    if (await uploaded(material, store)) return finishR2Upload(material, store);
+    if (material.video_upload_state === 'uploaded') {
+      return reply(409, { error: 'Stored video is missing, incomplete, or has unexpected metadata' });
     }
     const upload = await store.loadMultipartUpload(material.id);
     if (!upload) return reply(404, { error: 'Multipart upload state is missing' });
@@ -452,6 +478,7 @@ export async function handleUploadSession(
       contentType = verified.contentType;
     } catch (error) {
       console.error('[video-upload-session] R2 multipart completion failed', material.id, error);
+      if (await uploaded(material, store)) return finishR2Upload(material, store);
       return reply(502, { error: 'Failed to finalize the uploaded video parts' });
     }
     // R2 verifies checksums, but never trust the result blindly: a size or content
@@ -460,23 +487,7 @@ export async function handleUploadSession(
       await store.abandonMultipartUpload(material.id);
       return reply(409, { error: 'Stored video size or content type did not match the record' });
     }
-    await store.markUploaded(material.id);
-    await store.finishMultipartUpload(material.id);
-    let transcriptionStatus: string;
-    try {
-      const job = await store.enqueueTranscription(material.id);
-      transcriptionStatus = job.status;
-    } catch (error) {
-      // The durable upload is complete. A provider or function failure belongs
-      // to transcription, and the reconciler can resubmit a pending job.
-      console.error('[video-upload-session] Transcription enqueue failed', material.id, error);
-      try {
-        transcriptionStatus = await store.transcriptionStatus(material.id);
-      } catch {
-        transcriptionStatus = 'pending';
-      }
-    }
-    return reply(200, { materialId: material.id, filePath: material.file_path, uploaded: true, transcriptionStatus });
+    return finishR2Upload(material, store);
   }
 
   if (body.action === 'abort-multipart') {
