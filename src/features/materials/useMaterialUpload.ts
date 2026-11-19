@@ -23,6 +23,13 @@ import type { AccessScope, UploadOutcome, UploadRejection } from './types';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const DOCUMENT_UPLOAD_KEY_PREFIX = 'educhat.document-upload.v1:';
+
+interface StoredDocumentUpload {
+  filePath: string;
+  materialId?: string;
+  storageUploaded: boolean;
+}
 
 // The file chooser offers only what the upload policy accepts. The server
 // enforces the same policy, so this is a convenience, not the guard.
@@ -43,6 +50,38 @@ function getFileType(fileName: string) {
 
 function getPendingFileKey(candidate: File) {
   return `${candidate.name}-${candidate.size}-${candidate.lastModified}`;
+}
+
+function documentUploadStorageKey(
+  uploaderId: string,
+  courseId: string,
+  academicTermId: string,
+  accessScope: AccessScope,
+  file: File
+) {
+  return DOCUMENT_UPLOAD_KEY_PREFIX + JSON.stringify([
+    uploaderId, courseId, academicTermId, accessScope, file.name, file.size, file.lastModified,
+  ]);
+}
+
+function readStoredDocumentUpload(storageKey: string): StoredDocumentUpload | null {
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Partial<StoredDocumentUpload>;
+    if (typeof parsed.filePath !== 'string' || typeof parsed.storageUploaded !== 'boolean' ||
+      (parsed.materialId !== undefined && typeof parsed.materialId !== 'string')) {
+      localStorage.removeItem(storageKey);
+      return null;
+    }
+    return parsed as StoredDocumentUpload;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredDocumentUpload(storageKey: string, upload: StoredDocumentUpload) {
+  localStorage.setItem(storageKey, JSON.stringify(upload));
 }
 
 interface UseMaterialUploadOptions {
@@ -281,64 +320,120 @@ export function useMaterialUpload({ uploaderId, onUploaded, uploadPolicy = UPLOA
     setCurrentUploadStatusText(`Uploading ${targetFile.name}... 0%`);
     setCurrentUploadProgress(0);
 
-    // Storage object keys are restricted to an S3-safe character set, so the
-    // key uses a sanitised copy of the name. The original name is kept in
-    // materials.file_name for display.
+    // A retry must address the same object and material. Unlike a new UUID on
+    // every attempt, this survives a lost parse response without duplicating a
+    // document that was already queued.
+    const storageKey = documentUploadStorageKey(uploaderId!, courseId, academicTermId, accessScope, targetFile);
     const storageFileName = toStorageSafeFileName(targetFile.name);
-    const filePath = `${courseId}/${crypto.randomUUID()}-${storageFileName}`;
-    console.log('[admin-upload]', `Uploading "${targetFile.name}" (${(targetFile.size / 1024 / 1024).toFixed(1)} MB) to ${filePath}`);
-    const uploadStart = performance.now();
+    const savedUpload = readStoredDocumentUpload(storageKey);
+    const documentUpload = savedUpload ?? {
+      filePath: `${courseId}/${crypto.randomUUID()}-${storageFileName}`,
+      storageUploaded: false,
+    };
+    if (!savedUpload) saveStoredDocumentUpload(storageKey, documentUpload);
 
-    await uploadToStorageWithProgress({
-      bucket: 'course-materials',
-      path: filePath,
-      body: targetFile,
-      // Store the canonical type, not whatever the browser guessed.
-      contentType: decision.contentType,
-      signal: uploadController.signal,
-      onProgress: (fraction) => {
-        const pct = Math.round(fraction * 100);
-        setCurrentUploadStatusText(`Uploading ${targetFile.name}... ${pct}%`);
-        setCurrentUploadProgress(pct * 0.5); // upload is 0-50%, processing is 50-100%
-      },
-    });
+    const discardUnqueuedDocument = async () => {
+      const { error: storageError } = await supabase.storage
+        .from('course-materials')
+        .remove([documentUpload.filePath]);
+      if (storageError) throw new Error(`Failed to remove cancelled upload: ${storageError.message}`);
+      if (documentUpload.materialId) {
+        const { error: materialError } = await supabase
+          .from('materials')
+          .delete()
+          .eq('id', documentUpload.materialId);
+        if (materialError) throw new Error(`Failed to remove cancelled material: ${materialError.message}`);
+      }
+      localStorage.removeItem(storageKey);
+    };
 
-    console.log('[admin-upload]', `Upload complete in ${((performance.now() - uploadStart) / 1000).toFixed(1)}s`);
+    if (!documentUpload.storageUploaded) {
+      console.log('[admin-upload]', `Uploading "${targetFile.name}" (${(targetFile.size / 1024 / 1024).toFixed(1)} MB) to ${documentUpload.filePath}`);
+      const uploadStart = performance.now();
+      try {
+        await uploadToStorageWithProgress({
+          bucket: 'course-materials',
+          path: documentUpload.filePath,
+          body: targetFile,
+          // Store the canonical type, not whatever the browser guessed.
+          contentType: decision.contentType,
+          signal: uploadController.signal,
+          onProgress: (fraction) => {
+            const pct = Math.round(fraction * 100);
+            setCurrentUploadStatusText(`Uploading ${targetFile.name}... ${pct}%`);
+            setCurrentUploadProgress(pct * 0.5); // upload is 0-50%, processing is 50-100%
+          },
+        });
+      } catch (error) {
+        if (cancelUploadRef.current || uploadController.signal.aborted) {
+          await discardUnqueuedDocument();
+        }
+        throw error;
+      }
+      documentUpload.storageUploaded = true;
+      saveStoredDocumentUpload(storageKey, documentUpload);
+      console.log('[admin-upload]', `Upload complete in ${((performance.now() - uploadStart) / 1000).toFixed(1)}s`);
+    }
 
     if (cancelUploadRef.current || uploadController.signal.aborted) {
+      await discardUnqueuedDocument();
       throw new Error('Upload cancelled');
     }
 
-    const { data: material, error: insertError } = await supabaseAbortable
-      .from('materials')
-      .insert({
-        course_id: courseId,
-        file_name: targetFile.name,
-        file_path: filePath,
-        file_type: getFileType(targetFile.name),
-        file_size: targetFile.size,
-        topic: null,
-        week_number: null,
-        processing_status: 'processing',
-        access_scope: accessScope,
-        is_public: accessScope === 'public',
-        academic_term_id: academicTermId,
-        uploaded_by: uploaderId,
-      })
-      .select('id')
-      .single();
+    let materialId = documentUpload.materialId;
+    if (!materialId) {
+      const { data: material, error: insertError } = await supabaseAbortable
+        .from('materials')
+        .insert({
+          course_id: courseId,
+          file_name: targetFile.name,
+          file_path: documentUpload.filePath,
+          file_type: getFileType(targetFile.name),
+          file_size: targetFile.size,
+          topic: null,
+          week_number: null,
+          processing_status: 'processing',
+          access_scope: accessScope,
+          is_public: accessScope === 'public',
+          academic_term_id: academicTermId,
+          uploaded_by: uploaderId,
+        })
+        .select('id')
+        .single();
+
+      if (insertError || !material) {
+        if (insertError?.message?.toLowerCase().includes('access_scope')) {
+          throw new Error('Database is missing access scope support. Run the latest migrations.');
+        }
+        // A timeout may have committed the INSERT. Confirm that it did not
+        // before removing the uploaded object; otherwise the retry can resume.
+        const { data: existing, error: lookupError } = await supabase
+          .from('materials')
+          .select('id')
+          .eq('file_path', documentUpload.filePath)
+          .maybeSingle();
+        if (!lookupError && existing) {
+          materialId = existing.id;
+          documentUpload.materialId = materialId;
+          saveStoredDocumentUpload(storageKey, documentUpload);
+        } else {
+          if (!lookupError && insertError?.code) {
+            await discardUnqueuedDocument();
+          }
+          throw new Error(insertError?.message || 'Failed to create material record');
+        }
+      } else {
+        materialId = material.id;
+        documentUpload.materialId = materialId;
+        saveStoredDocumentUpload(storageKey, documentUpload);
+      }
+    }
 
     setCurrentUploadStatusText('Processing...');
     setCurrentUploadProgress(50);
 
-    if (insertError || !material) {
-      if (insertError?.message?.toLowerCase().includes('access_scope')) {
-        throw new Error('Database is missing access scope support. Run the latest migrations.');
-      }
-      throw new Error(insertError?.message || 'Failed to create material record');
-    }
-
     if (cancelUploadRef.current || uploadController.signal.aborted) {
+      await discardUnqueuedDocument();
       throw new Error('Upload cancelled');
     }
 
@@ -346,7 +441,7 @@ export function useMaterialUpload({ uploaderId, onUploaded, uploadPolicy = UPLOA
       const text = await targetFile.text();
       const { data: ingestResult, error: ingestError } = await supabaseAbortable.functions.invoke('ingest-material', {
         body: {
-          materialId: material.id,
+          materialId,
           text,
         },
         signal: uploadController.signal,
@@ -359,13 +454,14 @@ export function useMaterialUpload({ uploaderId, onUploaded, uploadPolicy = UPLOA
       if (ingestResult?.error) {
         throw new Error(ingestResult.error);
       }
+      localStorage.removeItem(storageKey);
       return 'indexed';
     }
 
     const { data: parseResult, error: parseError } = await supabaseAbortable.functions.invoke('parse-document', {
       body: {
-        materialId: material.id,
-        filePath,
+        materialId,
+        filePath: documentUpload.filePath,
         fileType: decision.extension,
       },
       signal: uploadController.signal,
@@ -379,6 +475,7 @@ export function useMaterialUpload({ uploaderId, onUploaded, uploadPolicy = UPLOA
       throw new Error(parseResult.error);
     }
 
+    localStorage.removeItem(storageKey);
     return parseResult?.queued ? 'processing' : 'indexed';
   };
 

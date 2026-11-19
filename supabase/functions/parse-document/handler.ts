@@ -134,8 +134,12 @@ export async function handleParseDocument(req: Request, deps: ParseDocumentDeps)
       return await refuse(material, byContents, deps);
     }
 
-    await deps.markQueued(materialId);
-    await deps.enqueueJob(materialId, { filePath, fileType: byContents.extension, bucketName: bucket });
+    // A client may retry after losing the 202 response. Do not reset an
+    // in-flight job back to pending: its existing worker must keep ownership.
+    if (!material.hasProcessingJob) {
+      await deps.enqueueJob(materialId, { filePath, fileType: byContents.extension, bucketName: bucket });
+      await deps.markQueued(materialId);
+    }
     deps.triggerWorker(materialId);
 
     return json({

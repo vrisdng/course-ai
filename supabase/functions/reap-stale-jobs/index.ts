@@ -8,6 +8,11 @@ interface ProcessingJob {
   material_id: string;
 }
 
+interface UnqueuedPdfMaterial {
+  id: string;
+  file_path: string;
+}
+
 export default {
   fetch: withSupabase({ auth: "user" }, async (_req, ctx) => {
     const { data: authData, error: authError } = await ctx.supabase.auth.getUser();
@@ -55,6 +60,51 @@ export default {
         .eq("processing_status", "processing");
     }
 
+    // Older browser uploads set a PDF to processing before parse-document had
+    // durably created its job. Recreate only that missing job; upsert keeps a
+    // concurrent recovery from scheduling duplicate workers.
+    const { data: unqueuedMaterials, error: unqueuedMaterialsError } = await ctx.supabaseAdmin
+      .from("materials")
+      .select("id, file_path, material_processing_jobs()")
+      .eq("processing_status", "processing")
+      .eq("file_type", "pdf")
+      .is("material_processing_jobs", null)
+      .order("created_at")
+      .limit(5);
+    if (unqueuedMaterialsError) {
+      return Response.json({ error: unqueuedMaterialsError.message }, { status: 500 });
+    }
+
+    for (const material of (unqueuedMaterials ?? []) as UnqueuedPdfMaterial[]) {
+      const { error: enqueueError } = await ctx.supabaseAdmin
+        .from("material_processing_jobs")
+        .upsert(
+          {
+            material_id: material.id,
+            job_type: "parse_document",
+            status: "pending",
+            attempt_count: 0,
+            last_error: null,
+            locked_at: null,
+            locked_by: null,
+            payload: { filePath: material.file_path, fileType: "pdf", bucketName: "course-materials" },
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "material_id,job_type", ignoreDuplicates: true },
+        );
+      if (enqueueError) {
+        return Response.json({ error: enqueueError.message }, { status: 500 });
+      }
+
+      const { error: markQueuedError } = await ctx.supabaseAdmin
+        .from("materials")
+        .update({ processing_stage: "queueing", processing_progress: 10, processing_error: null })
+        .eq("id", material.id);
+      if (markQueuedError) {
+        return Response.json({ error: markQueuedError.message }, { status: 500 });
+      }
+    }
+
     const { data: pendingJobs, error: pendingJobsError } = await ctx.supabaseAdmin
       .from("material_processing_jobs")
       .select("material_id")
@@ -80,6 +130,7 @@ export default {
 
     return Response.json({
       reaped: Number(reaped ?? 0),
+      recoveredUnqueuedMaterials: unqueuedMaterials?.length ?? 0,
       triggeredWorkers: jobs.length,
       materialIds: jobs.map((job) => job.material_id),
     });
