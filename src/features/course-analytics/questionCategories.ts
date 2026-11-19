@@ -18,3 +18,8 @@ export function categoryLabel(category: string): string {
 export function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
 }
+
+// A question sent as only an image has no text to show.
+export function questionTitle(queryText: string): string {
+  return queryText.trim() || 'Image question';
+}

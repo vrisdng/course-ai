@@ -1,6 +1,7 @@
 // Typed calls for the admin analytics page: the RPCs from migrations
 // 20261024120000, 20261025090000 and 20261025120000, and the
 // course-analytics edge function.
+import { signQuestionImages } from '@/features/student-chat/questionImages';
 import { supabase } from '@/integrations/supabase/client';
 
 import type { AnalyticsPlace, PlaceFilter } from '../../../supabase/functions/_shared/analyticsPlaces.ts';
@@ -76,6 +77,8 @@ export interface QuestionDetail extends AnalyticsQuestion {
   answerText: string | null;
   relatedCount: number;
   related: RelatedQuestion[];
+  // Short-lived links to the images the student attached, in order.
+  images: string[];
 }
 
 function rangeArgs(courseId: string, range: AnalyticsRange) {
@@ -194,16 +197,30 @@ export async function fetchQuestions(
   return parseQuestionPage(data);
 }
 
+// Best-effort: a question still shows if its images can't be loaded.
+async function fetchQuestionImageUrls(courseId: string, questionId: string): Promise<string[]> {
+  try {
+    const rows = unwrap(await supabase.rpc('get_course_question_images', { in_course_id: courseId, in_question_id: questionId }));
+    const paths = (Array.isArray(rows) ? rows : []).map((row) => String(row.storage_path));
+    const urls = await signQuestionImages(paths);
+    return paths.map((path) => urls[path]).filter((url): url is string => Boolean(url));
+  } catch (error) {
+    console.error('Failed to load question images:', error);
+    return [];
+  }
+}
+
 // null when the question isn't in this course and window.
 export async function fetchQuestionDetail(
   courseId: string,
   range: AnalyticsRange,
   questionId: string,
 ): Promise<QuestionDetail | null> {
-  const data = unwrap(await supabase.rpc('get_course_question_detail', {
-    ...rangeArgs(courseId, range),
-    in_question_id: questionId,
-  }));
+  const [result, images] = await Promise.all([
+    supabase.rpc('get_course_question_detail', { ...rangeArgs(courseId, range), in_question_id: questionId }),
+    fetchQuestionImageUrls(courseId, questionId),
+  ]);
+  const data = unwrap(result);
   const value: unknown = data;
   if (value === null) return null;
   if (!isRecord(value) || typeof value.id !== 'string') {
@@ -220,6 +237,7 @@ export async function fetchQuestionDetail(
       createdAt: String(item.created_at ?? ''),
       needsAttention: item.needs_attention === true,
     })),
+    images,
   };
 }
 

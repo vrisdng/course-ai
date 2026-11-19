@@ -62,7 +62,7 @@ describe('AdminAnalytics', () => {
     }));
     api.fetchQuestionDetail.mockImplementation(async (_course, _range, id) => ({
       ...question(id, id === 'q9' ? 'a related question' : `question ${id}`),
-      answerText: `Answer for ${id}`, relatedCount: 1,
+      answerText: `Answer for ${id}`, relatedCount: 1, images: [],
       related: [{ id: 'q9', queryText: 'a related question', createdAt: '2026-10-09T00:00:00Z', needsAttention: false }],
     }));
     api.fetchCitedFiles.mockResolvedValue([{ fileName: 'Hashing.pdf', fileType: 'pdf', materialIds: ['m1', 'm2'], questionCount: 20, studentCount: 2 }]);

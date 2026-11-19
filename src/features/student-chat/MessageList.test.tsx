@@ -52,4 +52,14 @@ describe('MessageList', () => {
       expect(onCitationClick).toHaveBeenNthCalledWith(2, message, 2);
     },
   );
+  it('shows the images on a student question, each opening full size', () => {
+    const callbacks = { onSuggestionClick: vi.fn(), onOpenSources: vi.fn(), onCitationClick: vi.fn() };
+    const message: Message = { id: 'u1', role: 'user', content: 'Is this right?', images: [{ url: 'https://s/a.png' }, { url: 'https://s/b.png' }] };
+    render(<MessageList messages={[message]} {...callbacks} />);
+    const images = screen.getAllByRole('img', { name: 'Attached image' });
+    expect(images.map((image) => image.getAttribute('src'))).toEqual(['https://s/a.png', 'https://s/b.png']);
+    expect(images[0].closest('a')).toHaveAttribute('href', 'https://s/a.png');
+    expect(images[0].closest('a')).toHaveAttribute('target', '_blank');
+    expect(screen.getByText('Is this right?')).toBeInTheDocument();
+  });
 });

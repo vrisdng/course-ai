@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn() }));
+const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn(), createSignedUrls: vi.fn() }));
 vi.mock('@/integrations/supabase/client', () => ({
-  supabase: { rpc: mocks.rpc, functions: { invoke: mocks.invoke } },
+  supabase: {
+    rpc: mocks.rpc,
+    functions: { invoke: mocks.invoke },
+    storage: { from: () => ({ createSignedUrls: mocks.createSignedUrls }) },
+  },
 }));
 
 import { ALL_QUESTIONS, filtersFor, toQuestionArgs } from './questionFilters';
@@ -37,7 +41,17 @@ describe('analyticsApi RPCs', () => {
     expect(mocks.rpc).toHaveBeenCalledWith('get_course_cited_files', { ...rangeArgs, in_study_only: true });
   });
 
+  it('fetches the images a student attached to a question', async () => {
+    mocks.rpc.mockImplementation(async (fn: string) => fn === 'get_course_question_images'
+      ? { data: [{ storage_path: 'u/a.png', content_type: 'image/png' }], error: null }
+      : { data: { id: 'q1', query_text: '', sources: [], related: [] }, error: null });
+    mocks.createSignedUrls.mockResolvedValue({ data: [{ path: 'u/a.png', signedUrl: 'https://s/a.png' }], error: null });
+    await expect(fetchQuestionDetail(COURSE, RANGE, 'q1')).resolves.toMatchObject({ id: 'q1', images: ['https://s/a.png'] });
+    expect(mocks.rpc).toHaveBeenCalledWith('get_course_question_images', { in_course_id: COURSE, in_question_id: 'q1' });
+  });
+
   it('fetches one question with its answer and related questions', async () => {
+    mocks.rpc.mockImplementation(async (fn: string) => fn === 'get_course_question_images' ? { data: [], error: null } : { data: null, error: null });
     mocks.rpc.mockResolvedValueOnce({
       data: {
         id: 'q1', query_text: 'what is x', created_at: '2026-10-02T00:00:00Z', category: 'comparison',

@@ -94,6 +94,11 @@ describe('QuestionsPane', () => {
     expect(onSelectQuestion).toHaveBeenCalledWith('q2');
   });
 
+  it('names a question that was only an image', () => {
+    render(<QuestionsPane {...props} feed={feed({ questions: [question({ id: 'q3', queryText: '' })] })} />);
+    expect(screen.getByRole('button', { name: /Image question/ })).toBeInTheDocument();
+  });
+
   it('toggles greetings and logistics', () => {
     const onStudyOnlyChange = vi.fn();
     render(<QuestionsPane {...props} feed={feed()} onStudyOnlyChange={onStudyOnlyChange} />);
@@ -162,7 +167,20 @@ describe('QuestionDetailPane', () => {
     answerText: 'Double hashing uses **a second hash**. <<cite:1>>',
     relatedCount: 3,
     related: [{ id: 'q9', queryText: 'when is double hashing used', createdAt: '2026-10-09T14:41:00Z', needsAttention: false }],
+    images: [],
   };
+
+  it('shows the images the student attached, each opening full size', () => {
+    render(<QuestionDetailPane detail={loaded({ ...detail, images: ['https://s/a.png', 'https://s/b.png'] })} hasSelection onSelectQuestion={vi.fn()} />);
+    const images = screen.getAllByRole('img', { name: /Attached image/ });
+    expect(images.map((image) => image.getAttribute('src'))).toEqual(['https://s/a.png', 'https://s/b.png']);
+    expect(images[1].closest('a')).toHaveAttribute('href', 'https://s/b.png');
+  });
+
+  it('names a question that was only an image', () => {
+    render(<QuestionDetailPane detail={loaded({ ...detail, queryText: '', images: ['https://s/a.png'] })} hasSelection onSelectQuestion={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Image question' })).toBeInTheDocument();
+  });
 
   it('shows the question, the answer it got, what it cited and related questions', () => {
     const onSelectQuestion = vi.fn();

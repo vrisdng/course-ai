@@ -24,11 +24,18 @@ export interface Citation {
   evidenceSegments?: VideoEvidenceSegment[] | null;
 }
 
+// An image a student attached to a question, ready to show.
+export interface MessageImage {
+  url: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
+  // Student questions only.
+  images?: MessageImage[];
   // While answering: what the assistant is doing (e.g. which search is running).
   status?: string;
 }

@@ -70,7 +70,20 @@ export function MessageList({
               message.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'
             )}
           >
-            {message.role === 'assistant' && message.content === '' ? (
+            {message.images?.length ? (
+              <div className={cn('flex flex-wrap justify-end gap-2', message.content && 'mb-2')}>
+                {message.images.map((image) => (
+                  <a key={image.url} href={image.url} target="_blank" rel="noopener noreferrer">
+                    <img
+                      src={image.url}
+                      alt="Attached image"
+                      className="max-h-48 max-w-full rounded-md border border-border object-contain"
+                    />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            {message.role === 'user' && !message.content ? null : message.role === 'assistant' && message.content === '' ? (
               <div className="flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span className="text-sm text-muted-foreground">{message.status || 'Thinking...'}</span>
