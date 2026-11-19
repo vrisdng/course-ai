@@ -1,6 +1,7 @@
 export interface ImportStudent { email: string; fullName?: string }
 interface ParsedStudents { students: ImportStudent[]; invalid: string[] }
 const validEmail = (email: string): boolean => email.length <= 254 && /^[^\s@",]+@[^\s@",]+\.[^\s@",]+$/.test(email);
+const emailLike = (value: string): boolean => value.includes('@');
 
 export function parseStudentImport(text: string): ParsedStudents {
   const rows: string[][] = [];
@@ -43,7 +44,7 @@ export function parseStudentImport(text: string): ParsedStudents {
   const students = new Map<string, ImportStudent>();
   const invalid: string[] = [];
   const entries = nonempty.flatMap((cells) => {
-    const namedRow = cells.length === 2 && validEmail(cells[0]) && cells[1] && !validEmail(cells[1]);
+    const namedRow = cells.length === 2 && validEmail(cells[0]) && cells[1] && !emailLike(cells[1]);
     return namedHeader || namedRow ? [cells] : cells.filter(Boolean).map((email) => [email]);
   });
   for (const cells of entries) {
