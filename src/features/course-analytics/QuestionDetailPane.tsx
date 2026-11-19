@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { RichMarkdown } from '@/features/student-chat/RichMarkdown';
 
 import type { QuestionDetail } from './analyticsApi';
-import { categoryLabel } from './questionCategories';
+import { categoryLabel, questionTitle } from './questionCategories';
 import { groupSourcesByFile, stripCitationMarkers } from './questionFilters';
 import type { LoadState } from './useLoader';
 
@@ -93,13 +93,31 @@ export function QuestionDetailPane({ detail, hasSelection, onSelectQuestion, onB
     <article className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
       {back}
       <header className="space-y-2">
-        <h2 className="text-lg font-semibold leading-snug">{question.queryText}</h2>
+        <h2 className="text-lg font-semibold leading-snug">{questionTitle(question.queryText)}</h2>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           <span>{formatDateTime(question.createdAt)}</span>
           <span>{categoryLabel(question.category)}</span>
           <AnswerStatus detail={question} />
         </div>
       </header>
+
+      {question.images.length > 0 && (
+        <Block title="Attached images">
+          <ul className="flex flex-wrap gap-2">
+            {question.images.map((url, index) => (
+              <li key={url}>
+                <a href={url} target="_blank" rel="noopener noreferrer">
+                  <img
+                    src={url}
+                    alt={`Attached image ${index + 1}`}
+                    className="max-h-56 max-w-full rounded-lg border border-border object-contain"
+                  />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Block>
+      )}
 
       <Block title="Answer given">
         {question.answerText ? (
@@ -151,7 +169,7 @@ export function QuestionDetailPane({ detail, hasSelection, onSelectQuestion, onB
                     className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     {related.needsAttention && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-label="Not from materials" />}
-                    <span className="line-clamp-2">{related.queryText}</span>
+                    <span className="line-clamp-2">{questionTitle(related.queryText)}</span>
                   </button>
                 </li>
               ))}

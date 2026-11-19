@@ -1,5 +1,5 @@
-import { ReactNode, useEffect, useRef } from 'react';
-import { Bot, ChevronDown, Send, Square } from 'lucide-react';
+import { ReactNode, useEffect, useRef, type ClipboardEvent } from 'react';
+import { Bot, ChevronDown, ImagePlus, Send, Square, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { ACCEPTED_IMAGE_TYPES, MAX_QUESTION_IMAGES, type PendingImage } from './questionImages';
 import { CHAT_MODEL_OPTIONS, type ChatModelTier } from './useStudentChat';
 
 interface ChatComposerProps {
@@ -27,6 +28,11 @@ interface ChatComposerProps {
   onModelChange?: (model: ChatModelTier) => void;
   // Tiers the course allows; every tier when omitted.
   modelOptions?: ChatModelTier[];
+  // Images to send with the question; attaching is offered only when
+  // onAddImages is set.
+  images?: PendingImage[];
+  onAddImages?: (files: File[]) => void;
+  onRemoveImage?: (id: string) => void;
 }
 
 export function ChatComposer({
@@ -43,10 +49,15 @@ export function ChatComposer({
   selectedModel,
   onModelChange,
   modelOptions,
+  images = [],
+  onAddImages,
+  onRemoveImage,
 }: ChatComposerProps) {
   const selectedModelOption = CHAT_MODEL_OPTIONS.find((modelOption) => modelOption.value === selectedModel);
   const selectedModelLabel = selectedModelOption?.label ?? 'GPT-5.6 Luna';
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const canSend = Boolean(input.trim()) || images.length > 0;
 
   useEffect(() => {
     if (!textareaRef.current) return;
@@ -62,6 +73,15 @@ export function ChatComposer({
     }
   };
 
+  // Screenshots pasted into the box become attachments; text pastes as usual.
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onAddImages) return;
+    const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    if (!event.clipboardData.getData('text/plain')) event.preventDefault();
+    onAddImages(files);
+  };
+
   return (
     <div className="border-t border-border bg-background p-4">
       <div className="mx-auto max-w-5xl space-y-3">
@@ -74,19 +94,73 @@ export function ChatComposer({
           </div>
         ) : null}
 
+        {images.length > 0 ? (
+          <ul className="flex flex-wrap gap-2" aria-label="Attached images">
+            {images.map((image) => (
+              <li key={image.id} className="relative">
+                <img
+                  src={image.previewUrl}
+                  alt={image.file.name}
+                  className="h-16 w-16 rounded-md border border-border object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemoveImage?.(image.id)}
+                  aria-label={`Remove ${image.file.name}`}
+                  disabled={isLoading}
+                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-foreground disabled:opacity-50"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
         <div className="relative" data-tour="composer">
           <Textarea
             ref={textareaRef}
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={placeholder}
             className="min-h-[80px] max-h-[200px] resize-none pb-8 pr-14"
             rows={1}
             disabled={isLoading || disabled}
           />
+          <div className="absolute bottom-2 left-2 flex items-center gap-1">
+          {onAddImages ? (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPTED_IMAGE_TYPES.join(',')}
+                multiple
+                hidden
+                aria-label="Image files"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.target.value = '';
+                  if (files.length > 0) onAddImages(files);
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                aria-label="Attach images"
+                title="Attach images (or paste a screenshot)"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading || disabled || images.length >= MAX_QUESTION_IMAGES}
+              >
+                <ImagePlus className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : null}
           {onModelChange ? (
-            <div className="absolute bottom-2 left-2" data-tour="model-picker">
+            <div data-tour="model-picker">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -123,10 +197,12 @@ export function ChatComposer({
               </DropdownMenu>
             </div>
           ) : null}
+          </div>
           <div className="absolute bottom-2 right-2">
             <Button
               onClick={isLoading ? onStop : onSend}
-              disabled={(!isLoading && !input.trim()) || disabled}
+              aria-label={isLoading ? undefined : 'Send'}
+              disabled={(!isLoading && !canSend) || disabled}
               size={isLoading ? 'default' : 'icon'}
               variant={isLoading ? 'outline' : 'default'}
               className={cn(

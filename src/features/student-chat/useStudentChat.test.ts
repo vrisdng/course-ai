@@ -24,7 +24,12 @@ const authGetSession = vi.fn(async () => ({
 const rpc = vi.fn(async () => emptyResult);
 const from = vi.fn((_table: string) => createQueryChain(emptyResult));
 const createSignedUrl = vi.fn(async (_path: string) => ({ data: { signedUrl: 'https://storage.test/notes.pdf' }, error: null }));
-const storageFrom = vi.fn((_bucket: string) => ({ createSignedUrl }));
+const upload = vi.fn(async (_path: string) => ({ data: {}, error: null as null | { message: string } }));
+const createSignedUrls = vi.fn(async (paths: string[]) => ({
+  data: paths.map((path) => ({ path, signedUrl: `https://storage.test/${path}` })),
+  error: null,
+}));
+const storageFrom = vi.fn((_bucket: string) => ({ createSignedUrl, createSignedUrls, upload }));
 
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
@@ -80,6 +85,10 @@ describe('useStudentChat', () => {
     from.mockClear();
     storageFrom.mockClear();
     createSignedUrl.mockClear();
+    upload.mockClear();
+    createSignedUrls.mockClear();
+    URL.createObjectURL = vi.fn((file: Blob) => `blob:${(file as File).name}`);
+    URL.revokeObjectURL = vi.fn();
     vi.mocked(toast.error).mockClear();
     vi.mocked(toast.success).mockClear();
     signedMediaMocks.prefetchSignedMediaUrl.mockReset().mockResolvedValue(undefined);
@@ -780,4 +789,79 @@ describe('useStudentChat', () => {
     expect(result.current.selectedMessage).toBeNull();
   });
 
+
+  describe('question images', () => {
+    const png = (name = 'working.png') => new File(['x'], name, { type: 'image/png' });
+
+    it('uploads attached images and sends their paths, even with no text', async () => {
+      const result = await setupWithCourse();
+      vi.mocked(fetch).mockResolvedValueOnce(streamResponse(sseEvent('final', { answer: 'ok', citations: [], conversationId: 'conv-1' })));
+
+      act(() => { result.current.addImages([png()]); });
+      expect(result.current.pendingImages).toHaveLength(1);
+      await act(async () => { await result.current.handleSend(); });
+
+      expect(storageFrom).toHaveBeenCalledWith('question-images');
+      const [path] = upload.mock.calls[0];
+      expect(path).toMatch(/^user-1\/.+\.png$/);
+      const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+      expect(body).toMatchObject({ message: '', imagePaths: [path] });
+      expect(result.current.messages[0]).toMatchObject({ role: 'user', content: '', images: [{ url: 'blob:working.png' }] });
+      expect(result.current.pendingImages).toEqual([]);
+    });
+
+    it('turns away files that are not images', async () => {
+      const result = await setupWithCourse();
+      act(() => { result.current.addImages([new File(['x'], 'notes.pdf', { type: 'application/pdf' })]); });
+      expect(result.current.pendingImages).toEqual([]);
+      expect(toast.error).toHaveBeenCalledWith('notes.pdf isn’t a PNG, JPEG or WebP image.');
+    });
+
+    it('removes an attached image before sending', async () => {
+      const result = await setupWithCourse();
+      act(() => { result.current.addImages([png()]); });
+      act(() => { result.current.removeImage(result.current.pendingImages[0].id); });
+      expect(result.current.pendingImages).toEqual([]);
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:working.png');
+    });
+
+    it('keeps the images to retry when the upload fails', async () => {
+      const result = await setupWithCourse();
+      upload.mockResolvedValueOnce({ data: {}, error: { message: 'quota' } });
+      act(() => { result.current.addImages([png()]); result.current.setInput('check this'); });
+      await act(async () => { await result.current.handleSend(); });
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith('Couldn’t upload working.png: quota');
+      expect(result.current.pendingImages).toHaveLength(1);
+      expect(result.current.messages).toEqual([]);
+    });
+
+    it('shows the images on saved questions', async () => {
+      rpc.mockResolvedValueOnce({ data: [{ id: 'course-1', name: 'Course', code: 'C1', access_role: 'student' }], error: null });
+      from.mockImplementation((table: string) => {
+        if (table === 'conversations') {
+          const chain = createQueryChain({ data: [{ id: 'conv-1', title: 'Q', created_at: '2026-11-19', course_id: 'course-1' }], error: null });
+          chain.maybeSingle = vi.fn(async () => ({ data: { id: 'conv-1' }, error: null }));
+          return chain;
+        }
+        if (table === 'messages') return createQueryChain({ data: [
+          { id: 'msg-q', role: 'user', content: '', created_at: '2026-11-19' },
+          { id: 'msg-a', role: 'assistant', content: 'Answer', created_at: '2026-11-19' },
+        ], error: null });
+        if (table === 'message_attachments') return createQueryChain({ data: [
+          { message_id: 'msg-q', storage_path: 'user-1/b.png', position: 1 },
+          { message_id: 'msg-q', storage_path: 'user-1/a.png', position: 0 },
+        ], error: null });
+        return createQueryChain(emptyResult);
+      });
+
+      const { result } = renderHook(() => useStudentChat('conv-1'));
+      await waitFor(() => expect(result.current.messages[0]?.images).toEqual([
+        { url: 'https://storage.test/user-1/a.png' },
+        { url: 'https://storage.test/user-1/b.png' },
+      ]));
+      expect(result.current.messages[1].images).toBeUndefined();
+    });
+  });
 });

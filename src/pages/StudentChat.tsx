@@ -60,6 +60,9 @@ export default function StudentChat() {
     setInput,
     setShowSidePanel,
     handleSend,
+    pendingImages,
+    addImages,
+    removeImage,
     stopGenerating,
     startNewConversation,
     selectConversation,
@@ -212,6 +215,9 @@ export default function StudentChat() {
             onInputChange={setInput}
             onSend={handleSend}
             onStop={stopGenerating}
+            images={pendingImages}
+            onAddImages={addImages}
+            onRemoveImage={removeImage}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}
             modelOptions={courseModelTiers.allowedTiers}

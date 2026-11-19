@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 
-import { categoryLabel, plural } from './questionCategories';
+import { categoryLabel, plural, questionTitle } from './questionCategories';
 import type { QuestionFeedState } from './useQuestionFeed';
 
 interface QuestionsPaneProps {
@@ -83,7 +83,7 @@ export function QuestionsPane({
                         isCurrent ? 'bg-secondary' : 'hover:bg-muted/60',
                       )}
                     >
-                      <span className="line-clamp-2 text-sm">{question.queryText}</span>
+                      <span className="line-clamp-2 text-sm">{questionTitle(question.queryText)}</span>
                       <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         <span>{formatDay(question.createdAt)}</span>
                         <span aria-hidden="true">·</span>

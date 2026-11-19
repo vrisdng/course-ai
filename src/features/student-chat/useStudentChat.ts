@@ -20,6 +20,12 @@ import {
   sanitizeSelectedDocumentIds,
 } from './documentScope';
 import { loadBlockBoxes, loadPageImage } from './pageImage';
+import {
+  acceptImageFiles,
+  loadMessageImages,
+  uploadQuestionImages,
+  type PendingImage,
+} from './questionImages';
 import { prefetchSignedMediaUrl } from './signedMedia';
 import { parseMaybeJson, parseSseEventBlock, type ParsedSseEvent } from './sse';
 import type { ActiveVideoSource } from './VideoSourceDialog';
@@ -180,6 +186,8 @@ export async function resolveCitationSource(citation: Citation): Promise<Resolve
 export function useStudentChat(routeConversationId: string | null = null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  // Images attached in the composer, not sent yet.
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ChatModelTier>('fast');
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
@@ -535,11 +543,17 @@ export function useStudentChat(routeConversationId: string | null = null) {
       citationsByMessageId[citation.message_id].push(normalizedCitation);
     }
 
+    const imagesByMessageId = await loadMessageImages(rows.filter((row) => row.role === 'user').map((row) => row.id));
+    if (conversationLoadRequestIdRef.current !== requestId) {
+      return;
+    }
+
     const hydratedMessages: Message[] = rows.map((row) => ({
       id: row.id,
       role: row.role === 'assistant' ? 'assistant' : 'user',
       content: row.content,
       citations: citationsByMessageId[row.id] || undefined,
+      images: imagesByMessageId[row.id],
     }));
 
     setMessages(hydratedMessages);
@@ -622,22 +636,39 @@ export function useStudentChat(routeConversationId: string | null = null) {
     void loadConversationMessages(currentConversationId);
   }, [currentConversationId, loadConversationMessages]);
 
+  const addImages = useCallback((files: File[]) => {
+    const { added, errors } = acceptImageFiles(pendingImages, files);
+    errors.forEach((error) => toast.error(error));
+    if (added.length > 0) setPendingImages([...pendingImages, ...added]);
+  }, [pendingImages]);
+
+  const removeImage = useCallback((id: string) => {
+    setPendingImages((current) => {
+      const removed = current.find((image) => image.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((image) => image.id !== id);
+    });
+  }, []);
+
   const handleSend = useCallback(async () => {
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && pendingImages.length === 0) || isLoading) return;
     if (!currentConversationId && !selectedCourseId) {
       toast.error('Select a course before starting a new chat');
       return;
     }
 
+    const sentImages = pendingImages;
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
       content: input.trim(),
+      ...(sentImages.length > 0 ? { images: sentImages.map((image) => ({ url: image.previewUrl })) } : {}),
     };
     const assistantMessageId = crypto.randomUUID();
 
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
+    setPendingImages([]);
     setIsLoading(true);
 
     const requestId = activeRequestIdRef.current + 1;
@@ -668,6 +699,15 @@ export function useStudentChat(routeConversationId: string | null = null) {
         throw new Error('Your session has expired. Please sign in again.');
       }
 
+      let imagePaths: string[] = [];
+      if (sentImages.length > 0) {
+        const userId = sessionData.session?.user?.id ?? (await supabase.auth.getUser()).data.user?.id;
+        if (!userId) {
+          throw new Error('Your session has expired. Please sign in again.');
+        }
+        imagePaths = await uploadQuestionImages(userId, sentImages);
+      }
+
       const response = await fetch(RAG_CHAT_FUNCTION_URL, {
         method: 'POST',
         headers: {
@@ -683,6 +723,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
           selectedDocumentIds,
           model: selectedModel,
           skipRag: availableDocuments.length > 0 && selectedDocumentIds.length === 0,
+          imagePaths,
         }),
       });
 
@@ -870,6 +911,8 @@ export function useStudentChat(routeConversationId: string | null = null) {
       toast.error(message);
 
       setMessages((prev) => prev.filter((messageItem) => messageItem.id !== assistantMessageId && messageItem.id !== userMessage.id));
+      // Nothing was answered, so the images go back in the box to retry.
+      if (sentImages.length > 0) setPendingImages(sentImages);
     } finally {
       if (activeRequestIdRef.current === requestId) {
         abortControllerRef.current = null;
@@ -877,7 +920,7 @@ export function useStudentChat(routeConversationId: string | null = null) {
         setIsLoading(false);
       }
     }
-  }, [availableDocuments.length, currentConversationId, fetchConversations, input, isLoading, selectedCourseId, selectedDocumentIds, selectedModel]);
+  }, [availableDocuments.length, currentConversationId, fetchConversations, input, isLoading, pendingImages, selectedCourseId, selectedDocumentIds, selectedModel]);
 
   const stopGenerating = useCallback(() => {
     const activeAssistantMessageId = activeAssistantMessageIdRef.current;
@@ -1204,6 +1247,9 @@ export function useStudentChat(routeConversationId: string | null = null) {
     messages,
     input,
     isLoading,
+    pendingImages,
+    addImages,
+    removeImage,
     selectedMessage,
     showSidePanel,
     highlightedCitationKey,

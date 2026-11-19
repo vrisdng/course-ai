@@ -4,8 +4,11 @@ import {
   buildConversationHistoryTurns,
   buildHistoryContext,
   buildOpenAIConversationMessages,
+  IMAGE_ONLY_PROMPT,
   sanitizeMessageForMemory,
 } from "./history.ts";
+
+const IMAGE = { base64Data: "aGk=", mimeType: "image/png" };
 
 describe("sanitizeMessageForMemory", () => {
   it("strips citation tokens from assistant messages", () => {
@@ -122,5 +125,49 @@ describe("buildOpenAIConversationMessages", () => {
       { role: "system", content: "sys" },
       { role: "user", content: "question" },
     ]);
+  });
+});
+
+describe("question images", () => {
+  it("keeps a student's image-only turn and the images on it", () => {
+    const turns = buildConversationHistoryTurns([
+      { role: "user", content: "", images: [IMAGE] },
+      { role: "assistant", content: "That is a fixed-fixed column." },
+    ]);
+    expect(turns).toEqual([
+      { role: "user", content: "", images: [IMAGE] },
+      { role: "assistant", content: "That is a fixed-fixed column." },
+    ]);
+  });
+
+  it("ignores images on assistant turns", () => {
+    const turns = buildConversationHistoryTurns([{ role: "assistant", content: "ok", images: [IMAGE] }]);
+    expect(turns).toEqual([{ role: "assistant", content: "ok" }]);
+  });
+
+  it("sends images as content parts after the text", () => {
+    const messages = buildOpenAIConversationMessages(
+      "sys",
+      "is my answer right?",
+      [{ role: "user", content: "", images: [IMAGE] }, { role: "assistant", content: "a" }],
+      [IMAGE, IMAGE],
+    );
+    expect(messages).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: [{ type: "text", text: IMAGE_ONLY_PROMPT }, { type: "image", image: "aGk=", mimeType: "image/png" }] },
+      { role: "assistant", content: "a" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "is my answer right?" },
+          { type: "image", image: "aGk=", mimeType: "image/png" },
+          { type: "image", image: "aGk=", mimeType: "image/png" },
+        ],
+      },
+    ]);
+  });
+
+  it("notes attached images in the plain-text history", () => {
+    expect(buildHistoryContext([{ role: "user", content: "see this", images: [IMAGE] }])).toBe("Student: see this [image attached]");
   });
 });

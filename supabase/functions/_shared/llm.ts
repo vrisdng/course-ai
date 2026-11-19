@@ -44,10 +44,14 @@ export class HttpError extends Error {
   }
 }
 
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
+// A student message may carry images (base64 bytes) after its text.
+export type ChatUserContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; image: string; mimeType: string };
+
+export type ChatMessage =
+  | { role: "system" | "assistant"; content: string }
+  | { role: "user"; content: string | ChatUserContentPart[] };
 
 export interface ChatTextOptions {
   apiKey: string;

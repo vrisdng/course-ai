@@ -33,8 +33,18 @@ import {
 import {
   buildConversationHistoryTurns,
   buildOpenAIConversationMessages,
+  IMAGE_ONLY_PROMPT,
   type ConversationHistoryTurn,
+  type PromptImage,
 } from "../_shared/history.ts";
+import {
+  MAX_HISTORY_IMAGES,
+  QUESTION_IMAGE_BUCKET,
+  attachmentRows,
+  encodeQuestionImages,
+  parseQuestionImagePaths,
+  type QuestionImage,
+} from "../_shared/questionImages.ts";
 import {
   classifyQueryCategory,
   formatDocumentNameList,
@@ -100,6 +110,8 @@ interface ChatRequest {
   selectedDocumentIds?: string[];
   model?: string;
   skipRag?: boolean;
+  // The student's uploads in the question-images bucket ("<user id>/<uuid>.<ext>").
+  imagePaths?: string[];
 }
 
 interface RetrievedChunk {
@@ -139,6 +151,7 @@ interface ChatTextGenerationOptions {
   systemPrompt: string;
   userPrompt: string;
   historyTurns?: ConversationHistoryTurn[];
+  userImages?: PromptImage[];
   temperature?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
@@ -153,7 +166,7 @@ async function generateModelTextStream(options: ChatStreamGenerationOptions): Pr
   const { text } = await generateChatTextStream({
     apiKey: options.apiKey,
     model: options.modelConfig.modelId,
-    messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns),
+    messages: buildOpenAIConversationMessages(options.systemPrompt, options.userPrompt, options.historyTurns, options.userImages),
     temperature: options.temperature,
     maxOutputTokens: options.maxOutputTokens,
     signal: options.signal,
@@ -561,6 +574,43 @@ async function resolveConversation(
   };
 }
 
+// Images from the most recent earlier questions in the conversation, by
+// message id. Best-effort: an image that can't be read is left out.
+async function loadHistoryImages(
+  supabaseClient: SupabaseClient,
+  priorMessages: Array<{ id: string; role: string }>,
+  download: (path: string) => Promise<Uint8Array | null>,
+): Promise<Map<string, PromptImage[]>> {
+  const byMessage = new Map<string, PromptImage[]>();
+  const questionIds = priorMessages.filter((message) => message.role === "user").map((message) => message.id);
+  if (questionIds.length === 0) return byMessage;
+
+  const { data, error } = await supabaseClient
+    .from("message_attachments")
+    .select("message_id, storage_path, position")
+    .in("message_id", questionIds)
+    .order("created_at", { ascending: false })
+    .limit(MAX_HISTORY_IMAGES);
+  if (error) {
+    console.warn(`Could not load earlier question images: ${error.message}`);
+    return byMessage;
+  }
+
+  const rows = ((data ?? []) as Array<{ message_id: string; storage_path: string; position: number }>)
+    .sort((a, b) => a.position - b.position);
+  const encoded = await Promise.all(rows.map((row) =>
+    encodeQuestionImages([row.storage_path], download).catch((): QuestionImage[] => [])
+  ));
+  rows.forEach((row, index) => {
+    const image = encoded[index][0];
+    if (!image) return;
+    const images = byMessage.get(row.message_id) ?? [];
+    images.push({ base64Data: image.base64Data, mimeType: image.mimeType });
+    byMessage.set(row.message_id, images);
+  });
+  return byMessage;
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -647,12 +697,22 @@ serve(async (req: Request) => {
       selectedDocumentIds: rawSelectedDocumentIds,
       model: rawModel,
       skipRag: rawSkipRag,
+      imagePaths: rawImagePaths,
     } = await req.json() as ChatRequest;
     const trimmedMessage = typeof message === "string" ? message.trim() : "";
     const selectedDocumentIds = normalizeSelectedDocumentIds(rawSelectedDocumentIds);
     const skipRag = rawSkipRag === true;
 
-    if (!trimmedMessage) {
+    const parsedImagePaths = parseQuestionImagePaths(rawImagePaths, user.id);
+    if (!parsedImagePaths.ok) {
+      return new Response(
+        JSON.stringify({ error: parsedImagePaths.error }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    const imagePaths = parsedImagePaths.paths;
+
+    if (!trimmedMessage && imagePaths.length === 0) {
       return new Response(
         JSON.stringify({ error: "Message is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -681,7 +741,7 @@ serve(async (req: Request) => {
     const resolved = await resolveConversation(
       supabaseClient,
       user.id,
-      trimmedMessage,
+      trimmedMessage || "Image question",
       conversationId,
       courseId,
     );
@@ -698,7 +758,7 @@ serve(async (req: Request) => {
       getActiveAcademicTermId(supabaseClient),
       supabaseClient
         .from("messages")
-        .select("role, content")
+        .select("id, role, content")
         .eq("conversation_id", activeConversationId)
         .order("created_at", { ascending: false })
         .limit(CONVERSATION_HISTORY_FETCH_LIMIT),
@@ -717,12 +777,35 @@ serve(async (req: Request) => {
       ? `\n\nCOURSE INSTRUCTIONS (set by the course staff):\n${chatSettings.courseInstructions}`
       : "";
 
-    const priorMessages = [...(recentMessages || [])].reverse();
+    const downloadQuestionImage = async (path: string): Promise<Uint8Array | null> => {
+      const { data, error } = await supabaseAdminClient.storage.from(QUESTION_IMAGE_BUCKET).download(path);
+      if (error || !data) {
+        console.warn(`Could not read question image ${path}: ${error?.message ?? "no data"}`);
+        return null;
+      }
+      return new Uint8Array(await data.arrayBuffer());
+    };
+
+    const priorRows = [...(recentMessages || [])].reverse() as Array<{ id: string; role: string; content: string }>;
+    const [questionImages, historyImagesByMessage] = await Promise.all([
+      encodeQuestionImages(imagePaths, downloadQuestionImage).catch((error: unknown) => {
+        throw new HttpError(400, error instanceof Error ? error.message : "Couldn't read an attached image.");
+      }),
+      loadHistoryImages(supabaseClient, priorRows, downloadQuestionImage),
+    ]);
+    throwIfAborted(requestAbortController.signal);
+
+    const priorMessages = priorRows.map((row) => ({ ...row, images: historyImagesByMessage.get(row.id) }));
     const historyTurns = buildConversationHistoryTurns(priorMessages, {
       turnLimit: chatSettings.historyTurnLimit,
       charBudget: chatSettings.historyCharBudget,
       messageClip: chatSettings.historyMessageClip,
     });
+
+    const hasStudentImages = questionImages.length > 0 || historyTurns.some((turn) => turn.images?.length);
+    const studentImagesBlock = hasStudentImages
+      ? "\n\nSTUDENT IMAGES: The student attached images to their messages (for example a photo of a problem, a diagram, or their working). Read them closely and treat what they show as part of the question."
+      : "";
 
     // ── Variables shared by both RAG and no-RAG paths ─────────────────
     let retrievedChunks: RetrievedChunk[] = [];
@@ -751,7 +834,7 @@ FORMATTING: Every section title or topic heading MUST use ## markdown headings. 
 
 Do NOT include any citation markers (<<cite:N>>) since there are no retrieved sources.
 
-Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}`;
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${studentImagesBlock}${courseInstructionsBlock}${customInstructionsBlock}`;
     } else {
       // ── Agentic RAG path: the model searches the course materials itself ──
       selectedMaterials = await resolveSelectedMaterials(
@@ -804,7 +887,7 @@ RELEVANCE: Before citing a source, verify it genuinely answers the question — 
 
 NOT IN THE MATERIALS: If your searches find nothing that answers the question, say so first, then answer from general knowledge without any citations, e.g. "I couldn't find this in your course materials, but based on general knowledge: ...". Never cite a source for a claim it doesn't support. If a document filter is active, follow DOCUMENT SCOPE instead and don't answer from general knowledge.
 
-Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${courseInstructionsBlock}${customInstructionsBlock}
+Use prior conversation turns to resolve follow-up references like "this", "that", "it", or "the previous example".${studentImagesBlock}${courseInstructionsBlock}${customInstructionsBlock}
 
 ${retrievalScopeInstruction}`;
     }
@@ -970,6 +1053,7 @@ ${retrievalScopeInstruction}`;
                   systemPrompt,
                   userPrompt: trimmedMessage,
                   historyTurns,
+                  userImages: questionImages,
                   temperature: chatSettings.answerTemperature,
                   maxOutputTokens: chatSettings.maxAnswerTokens,
                   signal: requestAbortController.signal,
@@ -986,7 +1070,7 @@ ${retrievalScopeInstruction}`;
                 const { text } = await generateAgentTextStream({
                   apiKey: chatApiKey,
                   model: chatModelConfig.modelId,
-                  messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns),
+                  messages: buildOpenAIConversationMessages(systemPrompt, trimmedMessage, historyTurns, questionImages),
                   maxSteps: MAX_AGENT_STEPS,
                   maxToolCalls: MAX_AGENT_SEARCHES,
                   temperature: chatSettings.answerTemperature,
@@ -1110,6 +1194,17 @@ ${retrievalScopeInstruction}`;
               return;
             }
 
+            if (questionImages.length > 0) {
+              const { error: attachmentsError } = await supabaseClient
+                .from("message_attachments")
+                .insert(attachmentRows(userMessageResult.data.id, questionImages));
+              if (attachmentsError) {
+                errorCode = "attachment_persistence_failed";
+                console.error(`Failed to save question images: ${attachmentsError.message}`);
+                return;
+              }
+            }
+
             const assistantMessage = assistantMessageResult.data;
             savedAnswer = answer;
 
@@ -1172,7 +1267,7 @@ ${retrievalScopeInstruction}`;
             if (outcome === "success" && errorCode === null && queryEventId && savedAnswer !== null) {
               labelInBackground({
                 id: queryEventId,
-                queryText: trimmedMessage,
+                queryText: trimmedMessage || IMAGE_ONLY_PROMPT,
                 answer: savedAnswer,
                 citationCount: context.citation_count,
               }, decide, supabaseAdminClient);
