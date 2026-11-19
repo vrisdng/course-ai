@@ -24,11 +24,12 @@ function store(overrides: Partial<UploadSessionStore> = {}): UploadSessionStore 
     findByKey: vi.fn().mockResolvedValue(null), findMaterial: vi.fn().mockResolvedValue(material()),
     createMaterial: vi.fn(async (record) => record),
     objectInfo: vi.fn().mockResolvedValue(null), markUploaded: vi.fn().mockResolvedValue(undefined),
-    markCancelled: vi.fn().mockResolvedValue(undefined), removeObject: vi.fn().mockResolvedValue(undefined),
+    cancelWithCleanup: vi.fn().mockResolvedValue(true), removeObject: vi.fn().mockResolvedValue(undefined),
     markDeleting: vi.fn().mockResolvedValue(undefined), deleteMaterial: vi.fn().mockResolvedValue(undefined),
     deleteMaterialByPath: vi.fn().mockResolvedValue(undefined),
     recordCleanup: vi.fn().mockResolvedValue(undefined),
     staleUploads: vi.fn().mockResolvedValue([]), dueCleanup: vi.fn().mockResolvedValue([]),
+    claimCleanup: vi.fn().mockResolvedValue(true),
     deferCleanup: vi.fn().mockResolvedValue(undefined), finishCleanup: vi.fn().mockResolvedValue(undefined),
     enqueueTranscription: vi.fn().mockResolvedValue({ status: 'pending' }),
     transcriptionStatus: vi.fn().mockResolvedValue('pending'),
@@ -184,19 +185,43 @@ describe('video upload session', () => {
   });
 
   it('cancels an incomplete upload and keeps a cleanup record for late TUS completion', async () => {
-    const db = store({ markCancelled: vi.fn().mockResolvedValue(undefined), removeObject: vi.fn().mockResolvedValue(undefined) });
+    const db = store({ cancelWithCleanup: vi.fn().mockResolvedValue(true), removeObject: vi.fn().mockResolvedValue(undefined) });
     const response = await handleUploadSession({ action: 'cancel', materialId: ID }, USER, db);
     expect(response.status).toBe(200);
-    expect(db.markCancelled).toHaveBeenCalledWith(ID);
-    expect(db.recordCleanup).toHaveBeenCalledWith(material().file_path, 'supabase');
+    expect(db.cancelWithCleanup).toHaveBeenCalledWith(ID);
     expect(db.removeObject).toHaveBeenCalledWith(material().file_path, 'supabase');
     expect(db.deleteMaterial).toHaveBeenCalledWith(ID);
+  });
+
+  it('does not retain cleanup intent when completion wins cancellation', async () => {
+    let resolveCompletion: () => void;
+    const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
+    let state = 'uploading';
+    let cleanupRecorded = false;
+    const db = store() as UploadSessionStore;
+    db.cancelWithCleanup = vi.fn(async () => {
+      await completion;
+      if (state === 'uploaded') return false;
+      cleanupRecorded = true;
+      state = 'cancelled';
+      return true;
+    });
+
+    const cancelling = handleUploadSession({ action: 'cancel', materialId: ID }, USER, db);
+    await Promise.resolve();
+    state = 'uploaded';
+    resolveCompletion!();
+
+    await expect(cancelling).resolves.toEqual({ status: 409, body: { error: 'Completed video cannot be cancelled as an upload' } });
+    expect(db.cancelWithCleanup).toHaveBeenCalledWith(ID);
+    expect(cleanupRecorded).toBe(false);
+    expect(db.removeObject).not.toHaveBeenCalled();
   });
 
   it('will not cancel an already completed upload', async () => {
     const db = store({ findMaterial: vi.fn().mockResolvedValue(material({ video_upload_state: 'uploaded' })) });
     expect((await handleUploadSession({ action: 'cancel', materialId: ID }, USER, db)).status).toBe(409);
-    expect(db.markCancelled).not.toHaveBeenCalled();
+    expect(db.cancelWithCleanup).not.toHaveBeenCalled();
   });
 
   it('makes retrying cancellation after row deletion safe', async () => {
@@ -235,6 +260,16 @@ describe('video upload session', () => {
     expect(db.deleteMaterialByPath).toHaveBeenCalledWith('videos/old.mp4');
   });
 
+  it('does not reap an upload that completed after the stale read', async () => {
+    const db = store({ staleUploads: vi.fn().mockResolvedValue([material()]), cancelWithCleanup: vi.fn().mockResolvedValue(false) });
+
+    expect(await reapVideoUploads(db, new Date('2026-10-06T00:00:00Z')))
+      .toEqual({ abandoned: 0, cleaned: 0, errors: 0 });
+    expect(db.cancelWithCleanup).toHaveBeenCalledWith(ID);
+    expect(db.recordCleanup).not.toHaveBeenCalled();
+    expect(db.removeObject).not.toHaveBeenCalled();
+  });
+
   it('keeps cleanup intent and retries when Storage removal fails', async () => {
     const db = store({
       dueCleanup: vi.fn().mockResolvedValue([{ file_path: 'videos/late.mp4', created_at: '2026-10-05T00:00:00Z', storage_provider: null, object_key: null, r2_multipart_upload_id: null }]),
@@ -246,6 +281,17 @@ describe('video upload session', () => {
     expect(db.deferCleanup).toHaveBeenCalledWith('videos/late.mp4', '2026-10-06T00:15:00.000Z', 'Storage unavailable');
   });
 
+  it('does not remove an uploaded video from a legacy cleanup entry', async () => {
+    const db = store({
+      dueCleanup: vi.fn().mockResolvedValue([{ file_path: material().file_path, created_at: '2026-10-05T00:00:00Z', storage_provider: 'supabase', object_key: null, r2_multipart_upload_id: null }]),
+      claimCleanup: vi.fn().mockResolvedValue(false),
+    });
+    expect(await reapVideoUploads(db, new Date('2026-10-06T00:00:00Z')))
+      .toEqual({ abandoned: 0, cleaned: 0, errors: 0 });
+    expect(db.claimCleanup).toHaveBeenCalledWith(material().file_path);
+    expect(db.removeObject).not.toHaveBeenCalled();
+  });
+
   it('reaps an abandoned R2 multipart upload before removing its object', async () => {
     const now = new Date('2026-10-06T00:00:00Z');
     const upload = { objectKey: R2_PATH, r2UploadId: 'u1', partSize: 64 * 1024 * 1024, expiresAt: '' };
@@ -255,7 +301,7 @@ describe('video upload session', () => {
       abortR2MultipartUpload: vi.fn().mockResolvedValue(undefined),
     });
     expect(await reapVideoUploads(db, now)).toEqual({ abandoned: 1, cleaned: 0, errors: 0 });
-    expect(db.recordCleanup).toHaveBeenCalledWith(R2_PATH, 'r2', 'u1');
+    expect(db.cancelWithCleanup).toHaveBeenCalledWith(ID);
     expect(db.abortR2MultipartUpload).toHaveBeenCalledWith(R2_PATH, 'u1');
     expect(db.abandonMultipartUpload).toHaveBeenCalledWith(ID);
     expect(db.removeObject).toHaveBeenCalledWith(R2_PATH, 'r2');
@@ -399,9 +445,8 @@ describe('video upload session', () => {
       expect(response).toEqual({ status: 200, body: { materialId: ID, aborted: true } });
       expect(db.abortR2MultipartUpload).toHaveBeenCalledWith(R2_PATH, 'u1');
       expect(db.abandonMultipartUpload).toHaveBeenCalledWith(ID);
-      expect(db.recordCleanup).toHaveBeenCalledWith(R2_PATH, 'r2', 'u1');
+      expect(db.cancelWithCleanup).toHaveBeenCalledWith(ID);
       expect(db.removeObject).toHaveBeenCalledWith(R2_PATH, 'r2');
-      expect(db.markCancelled).toHaveBeenCalledWith(ID);
       expect(db.deleteMaterial).toHaveBeenCalledWith(ID);
     });
 
