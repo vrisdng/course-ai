@@ -12,6 +12,11 @@ const state = vi.hoisted(() => ({
   labelUpdates: [] as Array<Record<string, unknown>>,
   background: [] as Array<Promise<unknown>>,
   decide: null as null | ReturnType<typeof vi.fn>,
+  history: [] as Array<Record<string, unknown>>,
+  historyAttachments: [] as Array<Record<string, unknown>>,
+  attachmentInserts: [] as unknown[],
+  downloads: [] as string[],
+  modelMessages: [] as Array<{ role: string; content: unknown }>,
 }));
 
 vi.mock("https://deno.land/std@0.168.0/http/server.ts", () => ({
@@ -20,6 +25,14 @@ vi.mock("https://deno.land/std@0.168.0/http/server.ts", () => ({
 vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
   createClient: () => ({
     rpc: async () => ({ data: [], error: null }),
+    storage: {
+      from: (bucket: string) => ({
+        download: async (path: string) => {
+          state.downloads.push(`${bucket}:${path}`);
+          return { data: new Blob([new Uint8Array([104, 105])]), error: null };
+        },
+      }),
+    },
     auth: { getUser: async () => ({ data: { user: { id: "user" } }, error: null }) },
     from: (table: string) => {
       let inserted: Record<string, unknown> | null = null;
@@ -37,11 +50,16 @@ vi.mock("https://esm.sh/@supabase/supabase-js@2.49.1", () => ({
         if (table === "messages" && inserted) return state.persistenceFails
           ? { data: null, error: { message: "save failed" } }
           : { data: { id: `${inserted.role}-message` }, error: null };
-        if (table === "messages") return { data: [], error: null };
+        if (table === "messages") return { data: state.history, error: null };
+        if (table === "message_attachments" && inserted) {
+          state.attachmentInserts.push(inserted);
+          return { data: null, error: null };
+        }
+        if (table === "message_attachments") return { data: state.historyAttachments, error: null };
         return { data: null, error: null };
       };
       const builder = {
-        select: () => builder, eq: () => builder, is: () => builder, order: () => builder, limit: () => builder,
+        select: () => builder, eq: () => builder, is: () => builder, in: () => builder, order: () => builder, limit: () => builder,
         update: (payload: Record<string, unknown>) => { updated = payload; return builder; },
         insert: (payload: Record<string, unknown>) => { inserted = payload; return builder; },
         single: async () => result(), maybeSingle: async () => result(),
@@ -71,6 +89,7 @@ vi.mock("../_shared/llm.ts", () => ({
   generateChatText: vi.fn(),
   generateChatTextStream: async (options: { messages: Array<{ role: string; content: string }>; onTextDelta: (text: string) => void; onUsage: (usage: { promptTokens: number; completionTokens: number }) => void }) => {
     state.noRagPrompt = options.messages[0].content;
+    state.modelMessages = options.messages;
     if (state.abort) {
       state.abort.abort();
       throw new Error("Chat API error: wrapped cancellation");
@@ -90,6 +109,11 @@ describe("RAG terminal telemetry wiring", () => {
     state.abort = null;
     state.labelUpdates = [];
     state.background = [];
+    state.history = [];
+    state.historyAttachments = [];
+    state.attachmentInserts = [];
+    state.downloads = [];
+    state.modelMessages = [];
     state.decide = vi.fn().mockResolvedValue({
       answers: [
         { type: "choice", name: "category", choice: "calculation", confidence: 0.8, probabilities: [] },
@@ -103,10 +127,10 @@ describe("RAG terminal telemetry wiring", () => {
     await import("./index");
   });
 
-  async function run(skipRag = true) {
+  async function run(skipRag = true, extra: Record<string, unknown> = {}) {
     const response = await state.handler!(new Request("http://localhost/rag-chat", {
       method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "hello", conversationId: "conversation", courseId: "course", skipRag }),
+      body: JSON.stringify({ message: "hello", conversationId: "conversation", courseId: "course", skipRag, ...extra }),
       signal: state.abort?.signal,
     }));
     return { response, body: await response.text() };
@@ -212,5 +236,52 @@ describe("RAG terminal telemetry wiring", () => {
     await expect(Promise.all(state.background)).resolves.toBeDefined();
     expect(state.labelUpdates).toHaveLength(0);
     expect(state.events).toHaveLength(1);
+  });
+
+  describe("question images", () => {
+    const IMAGE = "user/0b6c1d2e-0000-4000-8000-000000000001.png";
+    const IMAGE_PART = { type: "image", image: "aGk=", mimeType: "image/png" };
+
+    it("sends attached images to the model and links them to the saved question", async () => {
+      const { body } = await run(true, { imagePaths: [IMAGE] });
+      expect(body).toContain("event: final");
+      expect(state.downloads).toEqual([`question-images:${IMAGE}`]);
+      expect(state.modelMessages.at(-1)).toEqual({ role: "user", content: [{ type: "text", text: "hello" }, IMAGE_PART] });
+      expect(state.attachmentInserts).toEqual([[
+        { message_id: "user-message", storage_path: IMAGE, content_type: "image/png", size_bytes: 2, position: 0 },
+      ]]);
+      expect(state.events[0]).toMatchObject({ outcome: "success", error_code: null });
+    });
+
+    it("accepts a question that is only an image", async () => {
+      const { body } = await run(true, { message: "", imagePaths: [IMAGE] });
+      expect(body).toContain("event: final");
+      expect(state.events[0]).toMatchObject({ outcome: "success", query_text: "" });
+    });
+
+    it("still requires text or an image", async () => {
+      const { response } = await run(true, { message: "  " });
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects images outside the student's own folder without reading them", async () => {
+      const { response } = await run(true, { imagePaths: ["other/0b6c1d2e-0000-4000-8000-000000000001.png"] });
+      expect(response.status).toBe(400);
+      expect(state.downloads).toEqual([]);
+    });
+
+    it("replays images from earlier questions in follow-ups", async () => {
+      state.history = [
+        { id: "answer-1", role: "assistant", content: "It buckles." },
+        { id: "question-1", role: "user", content: "" },
+      ];
+      state.historyAttachments = [{ message_id: "question-1", storage_path: IMAGE, position: 0 }];
+      await run(true, { message: "why?" });
+      expect(state.modelMessages.slice(1)).toEqual([
+        { role: "user", content: [{ type: "text", text: expect.any(String) }, IMAGE_PART] },
+        { role: "assistant", content: "It buckles." },
+        { role: "user", content: "why?" },
+      ]);
+    });
   });
 });

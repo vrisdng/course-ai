@@ -2,15 +2,30 @@
 import { clipText, stripTrailingSourcesSection } from "./citations.ts";
 import { DEFAULT_CHAT_SETTINGS } from "./chatSettings.ts";
 
+// An image the student attached, as the model receives it.
+export interface PromptImage {
+  // Base64-encoded bytes (no data: prefix).
+  base64Data: string;
+  mimeType: string;
+}
+
 export interface ConversationHistoryTurn {
   role: "user" | "assistant";
   content: string;
+  // Student turns only.
+  images?: PromptImage[];
 }
 
-export interface OpenAIChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
+export type UserContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; image: string; mimeType: string };
+
+export type OpenAIChatMessage =
+  | { role: "system" | "assistant"; content: string }
+  | { role: "user"; content: string | UserContentPart[] };
+
+// Stands in for the question text when the student sent only an image.
+export const IMAGE_ONLY_PROMPT = "(The student sent only the attached image.)";
 
 export interface HistoryLimits {
   // Most recent messages kept.
@@ -39,7 +54,7 @@ export function sanitizeMessageForMemory(content: string): string {
 }
 
 export function buildConversationHistoryTurns(
-  rawMessages: Array<{ role: string; content: string }>,
+  rawMessages: Array<{ role: string; content: string; images?: PromptImage[] }>,
   limits: HistoryLimits = DEFAULT_HISTORY_LIMITS,
 ): ConversationHistoryTurn[] {
   if (limits.turnLimit <= 0) {
@@ -60,13 +75,15 @@ export function buildConversationHistoryTurns(
             .replace(/\n{3,}/g, "\n\n")
             .trim();
 
-      if (!cleaned) {
+      const images = role === "user" && message.images?.length ? message.images : undefined;
+      if (!cleaned && !images) {
         return null;
       }
 
       return {
         role,
         content: clipText(cleaned, limits.messageClip),
+        ...(images ? { images } : {}),
       };
     })
     .filter((message): message is ConversationHistoryTurn => Boolean(message));
@@ -92,23 +109,30 @@ export function buildConversationHistoryTurns(
 
 export function buildHistoryContext(historyTurns: ConversationHistoryTurn[]): string {
   return historyTurns
-    .map((turn) => `${turn.role === "assistant" ? "Assistant" : "Student"}: ${turn.content}`)
+    .map((turn) => `${turn.role === "assistant" ? "Assistant" : "Student"}: ${turn.content}${turn.images?.length ? " [image attached]" : ""}`)
     .join("\n");
+}
+
+// Plain text, or the text followed by the images as content parts.
+function userContent(text: string, images: PromptImage[] = []): string | UserContentPart[] {
+  if (images.length === 0) return text;
+  return [
+    { type: "text", text: text || IMAGE_ONLY_PROMPT },
+    ...images.map((image): UserContentPart => ({ type: "image", image: image.base64Data, mimeType: image.mimeType })),
+  ];
 }
 
 export function buildOpenAIConversationMessages(
   systemPrompt: string,
   userPrompt: string,
-  historyTurns: ConversationHistoryTurn[] = []
+  historyTurns: ConversationHistoryTurn[] = [],
+  userImages: PromptImage[] = [],
 ): OpenAIChatMessage[] {
-  const messages: OpenAIChatMessage[] = [
+  return [
     { role: "system", content: systemPrompt },
-    ...historyTurns.map((turn) => ({
-      role: turn.role === "assistant" ? ("assistant" as const) : ("user" as const),
-      content: turn.content,
-    })),
-    { role: "user" as const, content: userPrompt },
+    ...historyTurns.map((turn): OpenAIChatMessage => turn.role === "assistant"
+      ? { role: "assistant", content: turn.content }
+      : { role: "user", content: userContent(turn.content, turn.images) }),
+    { role: "user", content: userContent(userPrompt, userImages) },
   ];
-
-  return messages;
 }
