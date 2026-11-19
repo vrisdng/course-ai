@@ -374,6 +374,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
     }
 
     const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (conversationLoadRequestIdRef.current !== requestId) {
+      return;
+    }
+
     if (userError || !userData?.user) {
       console.error('Failed to resolve current user for messages:', userError);
       setMessages([]);
@@ -556,6 +560,10 @@ export function useStudentChat(routeConversationId: string | null = null) {
       images: imagesByMessageId[row.id],
     }));
 
+    if (conversationLoadRequestIdRef.current !== requestId) {
+      return;
+    }
+
     setMessages(hydratedMessages);
     setSelectedMessage(null);
     setHighlightedCitationKey(null);
@@ -630,10 +638,13 @@ export function useStudentChat(routeConversationId: string | null = null) {
     setActiveViewerSource(null);
 
     if (!currentConversationId) {
-      return;
+      return undefined;
     }
 
     void loadConversationMessages(currentConversationId);
+    return () => {
+      conversationLoadRequestIdRef.current += 1;
+    };
   }, [currentConversationId, loadConversationMessages]);
 
   const addImages = useCallback((files: File[]) => {
