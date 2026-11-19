@@ -7,6 +7,11 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.1"
+  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -351,6 +356,60 @@ export type Database = {
             columns: ["course_id"]
             isOneToOne: true
             referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      course_invites: {
+        Row: {
+          course_id: string
+          created_at: string
+          created_by: string | null
+          expires_at: string
+          id: string
+          invite_code: string
+          invited_email: string | null
+          is_course_code: boolean
+          redeemed_at: string | null
+          redeemed_by: string | null
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string
+          id?: string
+          invite_code: string
+          invited_email?: string | null
+          is_course_code?: boolean
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string
+          id?: string
+          invite_code?: string
+          invited_email?: string | null
+          is_course_code?: boolean
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_invites_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "course_invites_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -703,6 +762,44 @@ export type Database = {
             columns: ["material_id"]
             isOneToOne: true
             referencedRelation: "materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      message_attachments: {
+        Row: {
+          content_type: string
+          created_at: string
+          id: string
+          message_id: string
+          position: number
+          size_bytes: number
+          storage_path: string
+        }
+        Insert: {
+          content_type: string
+          created_at?: string
+          id?: string
+          message_id: string
+          position?: number
+          size_bytes: number
+          storage_path: string
+        }
+        Update: {
+          content_type?: string
+          created_at?: string
+          id?: string
+          message_id?: string
+          position?: number
+          size_bytes?: number
+          storage_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_attachments_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
             referencedColumns: ["id"]
           },
         ]
@@ -1440,26 +1537,26 @@ export type Database = {
       analytics_citation_at_places: {
         Args: {
           in_end_ms: number
+          in_material_id: string
+          in_page_number: number
           in_places: Json
           in_start_ms: number
-          in_page_number: number
-          in_material_id: string
         }
         Returns: boolean
       }
       analytics_counted_questions: {
-        Args: { in_course_id: string; in_start_at: string; in_end_at: string }
+        Args: { in_course_id: string; in_end_at: string; in_start_at: string }
         Returns: {
+          answered_from_materials: boolean
           assistant_message_id: string
-          id: string
-          user_id: string
-          query_text: string
-          created_at: string
           category: string
+          created_at: string
+          id: string
           is_labeled: boolean
           is_study_question: boolean
-          answered_from_materials: boolean
           needs_attention: boolean
+          query_text: string
+          user_id: string
         }[]
       }
       chunk_visible_for_search: {
@@ -1566,40 +1663,40 @@ export type Database = {
           file_name: string
           file_type: string
           material_ids: string[]
-          student_count: number
           question_count: number
+          student_count: number
         }[]
       }
       get_course_cited_materials: {
         Args: { in_course_id: string; in_end_at?: string; in_start_at?: string }
         Returns: {
-          file_type: string
           citation_count: number
-          last_cited_at: string
-          student_count: number
-          question_count: number
           file_name: string
+          file_type: string
+          last_cited_at: string
           material_id: string
+          question_count: number
+          student_count: number
         }[]
       }
       get_course_cited_places: {
         Args: {
-          in_start_at?: string
           in_course_id: string
           in_end_at?: string
-          in_material_id?: string
-          in_video_bucket_ms?: number
           in_limit?: number
+          in_material_id?: string
+          in_start_at?: string
+          in_video_bucket_ms?: number
         }
         Returns: {
-          material_id: string
+          citation_count: number
+          end_ms: number
           file_name: string
           file_type: string
+          material_id: string
           page_number: number
-          start_ms: number
-          end_ms: number
           question_count: number
-          citation_count: number
+          start_ms: number
         }[]
       }
       get_course_document_reference_stats:
@@ -1657,28 +1754,35 @@ export type Database = {
           }
       get_course_question_buckets: {
         Args: {
-          in_study_only?: boolean
+          in_course_id: string
           in_end_at?: string
           in_start_at?: string
-          in_course_id: string
+          in_study_only?: boolean
         }
         Returns: {
-          question_count: number
-          labeled_count: number
-          study_question_count: number
           answered_from_materials_count: number
           category: string
+          labeled_count: number
+          question_count: number
+          study_question_count: number
         }[]
       }
       get_course_question_detail: {
         Args: {
-          in_start_at?: string
-          in_end_at?: string
-          in_related_limit?: number
-          in_question_id: string
           in_course_id: string
+          in_end_at?: string
+          in_question_id: string
+          in_related_limit?: number
+          in_start_at?: string
         }
         Returns: Json
+      }
+      get_course_question_images: {
+        Args: { in_course_id: string; in_question_id: string }
+        Returns: {
+          content_type: string
+          storage_path: string
+        }[]
       }
       get_course_question_overview: {
         Args: {
@@ -1688,49 +1792,49 @@ export type Database = {
           in_study_only?: boolean
         }
         Returns: {
-          labeled_count: number
           answered_from_materials_count: number
+          cited_question_count: number
+          document_question_count: number
+          labeled_count: number
           materials_judged_count: number
           needs_attention_count: number
           non_study_count: number
-          cited_question_count: number
-          document_question_count: number
-          video_question_count: number
           question_count: number
           student_count: number
+          video_question_count: number
         }[]
       }
       get_course_question_terms: {
         Args: {
+          in_course_id: string
+          in_end_at?: string
           in_limit?: number
           in_min_questions?: number
-          in_end_at?: string
           in_start_at?: string
-          in_course_id: string
         }
         Returns: {
-          word_count: number
+          question_count: number
+          student_count: number
           term: string
           term_key: string
-          student_count: number
-          question_count: number
+          word_count: number
         }[]
       }
       get_course_questions: {
         Args: {
+          in_category?: string
+          in_course_id: string
+          in_end_at?: string
+          in_limit?: number
           in_material_ids?: string[]
+          in_needs_attention?: boolean
+          in_offset?: number
+          in_places?: Json
+          in_source_kind?: string
+          in_start_at?: string
+          in_study_only?: boolean
           in_topic_places?: Json
           in_topic_text?: string
-          in_end_at?: string
-          in_start_at?: string
-          in_course_id: string
-          in_study_only?: boolean
-          in_needs_attention?: boolean
-          in_category?: string
-          in_source_kind?: string
-          in_places?: Json
-          in_offset?: number
-          in_limit?: number
         }
         Returns: Json
       }
@@ -1950,21 +2054,21 @@ export type Database = {
       }
       match_course_chunks_for_analytics: {
         Args: {
+          in_course_id: string
           match_count?: number
           match_threshold?: number
-          in_course_id: string
           query_embedding: string
         }
         Returns: {
+          chunk_id: string
+          end_ms: number
+          file_name: string
+          file_type: string
           material_id: string
           page_number: number
-          start_ms: number
-          end_ms: number
-          snippet: string
-          file_type: string
-          file_name: string
           similarity: number
-          chunk_id: string
+          snippet: string
+          start_ms: number
         }[]
       }
       org_has_active_subscription: {
@@ -2071,12 +2175,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2100,11 +2204,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2125,11 +2229,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2150,11 +2254,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2167,11 +2271,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
